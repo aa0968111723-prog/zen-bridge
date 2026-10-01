@@ -5,5 +5,9 @@ declare namespace Cloudflare {
     OPENAI_API_KEY?: string;
     OPENAI_TRANSLATION_MODEL?: string;
     OPENAI_TRANSCRIPTION_MODEL?: string;
+    DASHSCOPE_API_KEY?: string;
+    DASHSCOPE_REGION?: string;
+    QWEN_LIVE_MODEL?: string;
+    SPEECH_PROVIDER?: string;
   }
 }
