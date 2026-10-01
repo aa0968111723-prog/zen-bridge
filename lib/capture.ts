@@ -5,16 +5,20 @@ export function wav(samples:Float32Array,rate:number){
  for(let i=0;i<samples.length;i++)v.setInt16(44+i*2,Math.max(-1,Math.min(1,samples[i]))*32767,true);
  return new Blob([buffer],{type:'audio/wav'});
 }
-export type Capture={stop:()=>void;flush:()=>void};
-export async function capture(onChunk:(audio:Blob,offset:number)=>void,onLevel:(level:number)=>void):Promise<Capture>{
- const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,channelCount:1}});
+export type Capture={stop:()=>void;flush:()=>void;deviceName:string;deviceId:string};
+export type CaptureOptions={deviceId?:string;monitorOnly?:boolean;onEnded?:()=>void};
+export async function capture(onChunk:(audio:Blob,offset:number)=>void,onLevel:(level:number)=>void,options:CaptureOptions={}):Promise<Capture>{
+ const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,channelCount:1,...(options.deviceId&&options.deviceId!=='default'?{deviceId:{exact:options.deviceId}}:{})}});
  let ctx:AudioContext|undefined;
  try{
  ctx=new AudioContext();const context=ctx,source=context.createMediaStreamSource(stream),node=context.createScriptProcessor(4096,1,1),silence=context.createGain();silence.gain.value=0;
  let chunks:Float32Array[]=[],count=0,offset=0,stopped=false;
  const flush=()=>{if(count<context.sampleRate*.3)return;const joined=new Float32Array(count);let n=0;for(const c of chunks){joined.set(c,n);n+=c.length;}const start=offset;offset+=count/context.sampleRate;chunks=[];count=0;onChunk(wav(joined,context.sampleRate),start);};
- node.onaudioprocess=e=>{if(stopped)return;const data=new Float32Array(e.inputBuffer.getChannelData(0));chunks.push(data);count+=data.length;let energy=0;for(const x of data)energy+=x*x;onLevel(Math.min(1,Math.sqrt(energy/data.length)*8));if(count>=context.sampleRate*8)flush();};
+ node.onaudioprocess=e=>{if(stopped)return;const data=new Float32Array(e.inputBuffer.getChannelData(0));let energy=0;for(const x of data)energy+=x*x;onLevel(Math.min(1,Math.sqrt(energy/data.length)*8));if(options.monitorOnly)return;chunks.push(data);count+=data.length;if(count>=context.sampleRate*8)flush();};
  source.connect(node);node.connect(silence);silence.connect(context.destination);await context.resume();
- return {flush,stop:()=>{if(stopped)return;stopped=true;try{flush();}finally{node.disconnect();source.disconnect();silence.disconnect();stream.getTracks().forEach(t=>t.stop());void context.close().catch(()=>{});onLevel(0);}}};
+ const stop=()=>{if(stopped)return;stopped=true;try{flush();}finally{node.disconnect();source.disconnect();silence.disconnect();stream.getTracks().forEach(t=>t.stop());void context.close().catch(()=>{});onLevel(0);}};
+ const track=stream.getAudioTracks()[0];
+ track.addEventListener('ended',()=>{stop();options.onEnded?.();},{once:true});
+ return {flush,stop,deviceName:track.label||'目前的麥克風',deviceId:track.getSettings().deviceId||options.deviceId||'default'};
  }catch(e){stream.getTracks().forEach(t=>t.stop());if(ctx)void ctx.close().catch(()=>{});throw e;}
 }
