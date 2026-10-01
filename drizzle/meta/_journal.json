@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1790820036031,
+      "tag": "0000_naive_randall_flagg",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790820609049,
+      "tag": "0001_flawless_speedball",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790822765588,
+      "tag": "0002_early_songbird",
+      "breakpoints": true
+    }
+  ]
+}

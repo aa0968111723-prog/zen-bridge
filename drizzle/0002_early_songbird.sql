@@ -1,0 +1,1 @@
+ALTER TABLE `segments` ADD `direction` text DEFAULT 'zh-en' NOT NULL;
