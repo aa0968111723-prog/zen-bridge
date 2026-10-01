@@ -56,6 +56,8 @@ API 超時、額度、音量、口音與音檔格式仍需在真實課堂錄音�
 
 從同一個 GitHub main 部署，使用 Node 22。`zbpack.json` 建置命令是 `DEPLOY_TARGET=zeabur pnpm build`，start command 是 `pnpm start:zeabur`。Node 聽平台提供的 PORT，綁定 0.0.0.0。
 
+建置命令中的 DEPLOY_TARGET 不會自動保留到執行階段。`start:zeabur` 是明示的 Node 啟動入口；未設定 DEPLOY_TARGET 時會在該進程選用 zeabur，即使尚未設定 DATABASE_URL，頁面也能啟動，資料 API 回「資料庫尚未就緒」。明示 cloudflare 或不合法的 DEPLOY_TARGET 不會被這個入口覆蓋。一般 `npm start` 仍沿用未設定時的推斷規則。
+
 在 Zeabur Variables 設定 DEPLOY_TARGET=zeabur、DATABASE_URL（Postgres 連線），及需要的 DASHSCOPE_API_KEY／OPENAI_API_KEY。未明示 DEPLOY_TARGET 時，有 DATABASE_URL 就選 Zeabur。DEPLOY_TARGET 只接受 cloudflare 或 zeabur；其他值在啟動時報錯，訊息不回顯值。
 
 Postgres 使用 `db/schema.pg.ts` 對應既有 Drizzle schema，以 `pnpm db:generate:zeabur` 產生 `drizzle-pg/` migrations；首次資料存取會在交易鎖內套用待執行的 Postgres migrations，不執行 D1 SQL。沒有資料庫或連線尚未就緒時，API 回「資料庫尚未就緒」，頁面仍可啟動。
@@ -71,6 +73,8 @@ Postgres 使用 `db/schema.pg.ts` 對應既有 Drizzle schema，以 `pnpm db:gen
 平台初始化、依賴與建置命令見 [runtime notes](docs/RUNTIME.md)。SQL migrations 位於 `drizzle/`，本地及正式資料庫各自追蹤，不能重複執行已套用的 migration。
 
 完成 TypeScript 檢查、Worker 建置與既有本地 D1/R2 端點整合驗證。介面升級另外檢查桌面、390 px 手機與 768 px 平板的版面、字幕預覽、投影與頁籤操作。
+
+Zeabur 建置後可執行 `node tests/startup.mjs`，驗證未設定 DEPLOY_TARGET／DATABASE_URL 時的命名啟動入口、PORT、頁面可開啟、API 資料庫未就緒回應，以及明示部署目標的驗證。
 
 執行 `node tests/capture.mjs` 驗證麥克風選擇、試音不產生音檔、錄音分段及中斷／失敗後釋放裝置。這是模擬裝置測試；DJI 實機、正式語音 API 與 WebMCP 行為仍需實測。訊飛接入尚未實作。
 

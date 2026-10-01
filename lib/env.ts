@@ -34,6 +34,22 @@ export function getEnv(): AppEnv {
   // Worker bindings are request-scoped; never copy secrets into process.env.
   return parseEnv(context.getStore() ?? (process.env as RawEnv));
 }
+export function initializeNodeRuntime(requestedTarget?: DeployTarget): AppEnv {
+  const raw = process.env as RawEnv;
+  // Validate before applying the command's default: explicit invalid values
+  // must still fail, and an explicit Cloudflare target must not be overridden.
+  const config = parseEnv(raw);
+  if (requestedTarget && raw.DEPLOY_TARGET !== undefined && config.DEPLOY_TARGET !== requestedTarget) {
+    throw new Error('DEPLOY_TARGET 與啟動命令不一致。start:zeabur 必須使用 zeabur。');
+  }
+  if (requestedTarget && raw.DEPLOY_TARGET === undefined) {
+    // The build shell's environment does not persist into the deployed process.
+    // A named runtime entry point supplies this non-secret default for the
+    // entire Node process, including subsequent route and database reads.
+    process.env.DEPLOY_TARGET = requestedTarget;
+  }
+  return getEnv();
+}
 export function getBindings(): Cloudflare.Env {
   return context.getStore() ?? {};
 }

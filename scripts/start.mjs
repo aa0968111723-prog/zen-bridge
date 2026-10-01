@@ -1,11 +1,8 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { getEnv } from '../lib/env.ts';
+import { initializeNodeRuntime } from '../lib/env.ts';
 
-const target = getEnv().DEPLOY_TARGET;
-if (process.argv.includes('--zeabur') && target !== 'zeabur') {
-  throw new Error('DEPLOY_TARGET：start:zeabur 需要 zeabur，或設定 DATABASE_URL。');
-}
+const target = initializeNodeRuntime(process.argv.includes('--zeabur') ? 'zeabur' : undefined).DEPLOY_TARGET;
 const extra = process.argv.slice(2).filter(arg => arg !== '--zeabur');
 if (target === 'zeabur') {
   const port = Number(process.env.PORT || 3000);
