@@ -1,6 +1,6 @@
 # 禪譯 Zen Bridge
 
-> GitHub 保存版：此儲存庫保存目前 Sites／Cloudflare Workers 的程式及 UI 素材。尚未改成可直接部署於 Zeabur 的 Node.js 版本；上傳 GitHub 不代表已完成 Zeabur 部署。
+> GitHub 保存版：此儲存庫保存目前 Sites／Cloudflare Workers 的程式及 UI 素材。Zeabur 以 `pnpm start` 對外提供同一個 Wrangler 本機 Worker；在 Zeabur 上會綁定 `0.0.0.0:$PORT`。
 
 淡江禪學社的中英雙向翻譯工作台。以社團文宣的晴空、木色、奶油紙感與嫩芽龜龜客製介面。私人網站由 Sites 管理登入與存取，資料保存於 D1，音檔保存於 R2。
 
