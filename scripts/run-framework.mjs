@@ -1,12 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readExecutionProfile } from "./execution-profile.mjs";
+import { getEnv } from '../lib/env.ts';
 
 const [command, ...args] = process.argv.slice(2);
 if (!["dev", "build"].includes(command)) throw new Error("Expected dev or build.");
 const managedLinux = readExecutionProfile() === "managed-linux";
+const zeabur = getEnv().DEPLOY_TARGET === 'zeabur';
 
-if (managedLinux && command === "build") {
+if (managedLinux && !zeabur && command === "build") {
   const result = spawnSync("bash", [
     fileURLToPath(new URL("./build-verified.sh", import.meta.url)), ...args,
   ], { stdio: "inherit" });
@@ -15,7 +17,7 @@ if (managedLinux && command === "build") {
 }
 
 // Import in this process so the preview owner retains its PID and signals.
-const cli = new URL(managedLinux
+const cli = new URL(managedLinux && !zeabur
   ? "../node_modules/vite/bin/vite.js"
   : "../node_modules/vinext/dist/cli.js", import.meta.url);
 process.argv = [process.execPath, fileURLToPath(cli), command,

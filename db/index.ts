@@ -1,11 +1,13 @@
-import { env } from "cloudflare:workers";
+import { getBindings, getEnv } from "../lib/env";
 import { drizzle } from "drizzle-orm/d1";
 import * as schema from "./schema";
 
 export function getDb() {
+  const env = getBindings();
+  if (getEnv().DEPLOY_TARGET !== 'cloudflare') throw new Error('DEPLOY_TARGET：Postgres 請使用 lib/data.ts。');
   if (!env.DB) {
     throw new Error(
-      "Cloudflare D1 binding `DB` is unavailable. Set the `d1` field in .openai/hosting.json to `DB` or let your control plane inject the real binding values before using the database."
+      "資料庫尚未就緒"
     );
   }
 

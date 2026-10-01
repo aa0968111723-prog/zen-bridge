@@ -1,20 +1,19 @@
-import {env} from 'cloudflare:workers';
 import {z} from 'zod';
 import type {Person,Session,Segment,Memory,State,Direction} from './domain';
 import {interpretationInstructions} from './interpret';
-export const bindings=()=>env as Cloudflare.Env;
-export function db(){const d=bindings().DB;if(!d)throw new Error('資料庫尚未就緒，請稍後重試。');return d;}
+import {getEnv} from './env';
+import {db,rows,one,write} from './data';
+import {providerName} from './speech/resolve';
+export {db,rows,one,write} from './data';
 export const now=()=>new Date().toISOString();
 export const id=()=>crypto.randomUUID();
-export async function rows<T>(sql:string,...args:unknown[]){return (await db().prepare(sql).bind(...args).all<T>()).results;}
-export async function one<T>(sql:string,...args:unknown[]){return db().prepare(sql).bind(...args).first<T>();}
-export const write=(sql:string,...args:unknown[])=>db().prepare(sql).bind(...args).run();
 const field=z.string().trim().max(8000),short=z.string().trim().min(1).max(160),personId=z.string().uuid().nullable();
 export async function workspace(sessionId?:string|null):Promise<State>{
  const [people,sessions,memories]=await Promise.all([rows<Person>('SELECT * FROM people ORDER BY created_at'),rows<Session>('SELECT * FROM sessions ORDER BY created_at DESC'),rows<Memory>("SELECT * FROM memories WHERE status!='archived' ORDER BY updated_at DESC LIMIT 300")]);
  const selected=sessions.find(s=>s.id===sessionId)?.id??sessions[0]?.id??null;
- const segments=selected?(await rows<Segment>('SELECT * FROM segments WHERE session_id=? ORDER BY created_at DESC,offset DESC LIMIT 500',selected)).reverse():[];
- return {people,sessions,memories,segments,sessionId:selected,connection:{openai:!!bindings().OPENAI_API_KEY,asr:bindings().OPENAI_TRANSCRIPTION_MODEL??'gpt-transcribe',translation:bindings().OPENAI_TRANSLATION_MODEL??'gpt-4.1-mini',hermes:'等待連接'}};
+ const segments=selected?(await rows<Segment>('SELECT * FROM segments WHERE session_id=? ORDER BY created_at DESC,"offset" DESC LIMIT 500',selected)).reverse():[];
+ const env=getEnv(),openai=!!env.OPENAI_API_KEY,qwen=!!env.DASHSCOPE_API_KEY;
+ return {people,sessions,memories,segments,sessionId:selected,connection:{openai,qwen,speech:openai||qwen,provider:providerName(env),asr:qwen?env.QWEN_LIVE_MODEL:env.OPENAI_TRANSCRIPTION_MODEL,translation:qwen?'qwen3.8-livetranslate':env.OPENAI_TRANSLATION_MODEL,hermes:'等待連接',deployTarget:env.DEPLOY_TARGET}};
 }
 const mutations=z.discriminatedUnion('action',[
  z.object({action:z.literal('person'),id:z.string().uuid().optional(),name:short,role:short,notes:field.default('')}),
@@ -65,7 +64,7 @@ export async function mutate(payload:unknown){
  }
  if(p.action==='memory'){
   if(p.personId&&!await one('SELECT id FROM people WHERE id=?',p.personId))throw new Error('找不到講者。');
-  const dupe=await one('SELECT id FROM memories WHERE zh=? AND en=? AND person_id IS ? AND role=? AND context=? AND status!=?',p.zh,p.en,p.personId,p.role,p.context,'archived');if(dupe)return dupe;
+  const dupe=await one<{id:string}>('SELECT id FROM memories WHERE zh=? AND en=? AND person_id IS ? AND role=? AND context=? AND status!=?',p.zh,p.en,p.personId,p.role,p.context,'archived');if(dupe)return dupe;
   await write('INSERT INTO memories(id,person_id,role,zh,en,meaning,context,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',key,p.personId,p.role,p.zh,p.en,p.meaning,p.context,stamp,stamp);return {id:key};
  }
  if(p.action==='memoryState'){
@@ -75,14 +74,16 @@ export async function mutate(payload:unknown){
  }
 }
 export async function saveSegment(p:{sessionId:string;personId:string|null;label:string;role:string;direction?:Direction;zh:string;en:string;source:string;note?:string;audioKey?:string;offset?:number}){
- const key=id();await write('INSERT INTO segments(id,session_id,person_id,label,role,direction,zh,en,original_zh,original_en,note,audio_key,offset,source,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',key,p.sessionId,p.personId,p.label,p.role,p.direction??'zh-en',p.zh,p.en,p.zh,p.en,p.note??'',p.audioKey??null,p.offset??0,p.source,now());return key;
+ const key=id();await write('INSERT INTO segments(id,session_id,person_id,label,role,direction,zh,en,original_zh,original_en,note,audio_key,"offset",source,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',key,p.sessionId,p.personId,p.label,p.role,p.direction??'zh-en',p.zh,p.en,p.zh,p.en,p.note??'',p.audioKey??null,p.offset??0,p.source,now());return key;
 }
 export async function translateText(text:string,session:Session,person:Person|null,role:string,direction:Direction='zh-en'){
- const key=bindings().OPENAI_API_KEY;if(!key)throw new Error('OpenAI 尚未連接。安全設定完成後才能自動翻譯。');
+ const env=getEnv(),key=env.OPENAI_API_KEY;if(!key)throw new Error('OpenAI 尚未連接。請設定 OPENAI_API_KEY。');
  const [terms,previous]=await Promise.all([rows<Memory>("SELECT * FROM memories WHERE status='verified' AND (person_id IS NULL OR person_id=?) AND (role='通用' OR role=?) ORDER BY updated_at DESC LIMIT 30",person?.id??null,role),rows<Segment>('SELECT zh,en,label,role FROM segments WHERE session_id=? ORDER BY created_at DESC LIMIT 6',session.id)]);
- const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},signal:AbortSignal.timeout(45000),body:JSON.stringify({model:bindings().OPENAI_TRANSLATION_MODEL??'gpt-4.1-mini',instructions:interpretationInstructions(direction),input:JSON.stringify({currentUtterance:text,direction,activity:{topic:session.topic,notes:session.notes},speaker:person?{name:person.name,notes:person.notes}:null,role,confirmedExamples:terms,previousUtterances:previous.reverse()}),max_output_tokens:1800})});
+ let r:Response;
+ try{r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},signal:AbortSignal.timeout(45000),body:JSON.stringify({model:env.OPENAI_TRANSLATION_MODEL,instructions:interpretationInstructions(direction),input:JSON.stringify({currentUtterance:text,direction,activity:{topic:session.topic,notes:session.notes},speaker:person?{name:person.name,notes:person.notes}:null,role,confirmedExamples:terms,previousUtterances:previous.reverse()}),max_output_tokens:1800})});}catch{throw new Error('OpenAI 翻譯連線失敗，請檢查平台網路與 OPENAI_API_KEY。');}
  if(!r.ok)throw new Error(r.status===429?'AI 服務忙碌或額度不足，請稍後重試。':'翻譯服務連線失敗，請檢查服務設定。');
- const body=await r.json() as {output?:{content?:{type:string;text?:string}[]}[]};
+ let body:{output?:{content?:{type:string;text?:string}[]}[]};
+ try{body=await r.json() as typeof body;}catch{throw new Error('OpenAI 翻譯服務回傳格式不正確，請檢查 OPENAI_TRANSLATION_MODEL。');}
  const result=(body.output??[]).flatMap(o=>o.content??[]).filter(c=>c.type==='output_text').map(c=>c.text??'').join('').trim();if(!result)throw new Error('翻譯服務未回傳文字，請稍後重試。');return result;
 }
 export function failure(e:unknown){

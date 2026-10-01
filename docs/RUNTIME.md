@@ -4,7 +4,7 @@ A clean full-stack starter running on [vinext](https://github.com/cloudflare/vin
 
 ## Prerequisites
 
-- Node.js `>=22.13.0`
+- Node.js 22 (22.13 or newer within the 22 series)
 - Portable: Windows, macOS, or Linux; no Bash required
 - Managed Linux: managed Linux runtime with Bash, `flock`, `curl`, `sha256sum`, and GNU `timeout`
 - Git is required only for publishing
@@ -30,7 +30,7 @@ For browser QA on managed Linux, use `sites-preview start`. The project's dev sc
 
 The portable profile simulates ChatGPT sign-in only for loopback development requests. Visit `/signin-with-chatgpt?return_to=/` to sign in as `local_seedy` (`seedy@sites.test`, display name `Seedy`) and `/signout-with-chatgpt?return_to=/` to sign out. The development cookie preserves that identity across server restarts. Mock auth is disabled in the managed-linux profile and is not included in production builds; hosted authentication remains dispatch-owned.
 
-The Worker uses `vinext/server/fetch-handler`, including Vinext's config-aware image handling. After building, `npm start` runs that Worker locally through Wrangler, sharing `.wrangler/state` with dev preview and local D1 migrations; it does not deploy the site or simulate sign-in. Locally it binds `127.0.0.1:8787`. On Zeabur it binds `0.0.0.0` and `$PORT` (or `$WEB_PORT`). Pass `npm start -- --port <port>` or `--ip <host>` to override.
+The Cloudflare Worker uses `vinext/server/fetch-handler`. With DEPLOY_TARGET=cloudflare, `npm run build` builds the Worker and `npm start` launches Wrangler on 127.0.0.1:8787, sharing `.wrangler/state` with the D1 preview. Pass `--port` or `--ip` after `npm start --` for local overrides. With DEPLOY_TARGET=zeabur (or DATABASE_URL present and no explicit target), the same build command creates a Node production bundle. `pnpm start:zeabur` uses Node 22, binds 0.0.0.0, and reads PORT. Zeabur runs PostgreSQL migrations from `drizzle-pg/` on first database access; D1 SQL is never used there. See the deployment section in README.md for Variables and AUDIO_DIR.
 
 Local previews use Miniflare's placeholder `Request.cf` metadata without a network lookup. Set `CLOUDFLARE_CF_FETCH_ENABLED=true` to opt into fetching preview metadata; this setting does not change hosted request metadata.
 
@@ -42,8 +42,8 @@ Local tool usage metrics are disabled by default. Set `WRANGLER_SEND_METRICS=tru
 - `app/chatgpt-auth.ts` provides optional dispatch-owned ChatGPT sign-in helpers
 - `.openai/hosting.json` declares optional Sites D1 and R2 bindings
 - `vite.config.ts` simulates declared bindings for local development
-- `db/index.ts` reads the D1 binding from the Cloudflare Worker environment
-- `db/schema.ts` starts intentionally empty
+- `lib/env.ts` is the application environment entry point; `lib/data.ts` selects D1 or Postgres
+- `db/schema.ts` describes D1; `db/schema.pg.ts` is the equivalent PostgreSQL schema
 - `@cloudflare/workers-types` provides Worker types; `cloudflare-env.d.ts` declares optional `DB`/`BUCKET` bindings—update these declarations if binding names change
 - `examples/d1/` contains an optional D1 example surface
 - `drizzle.config.ts` supports local migration generation when needed

@@ -1,0 +1,4 @@
+{
+  "build_command": "DEPLOY_TARGET=zeabur pnpm build",
+  "start_command": "pnpm start:zeabur"
+}

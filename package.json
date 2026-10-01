@@ -3,15 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": "22.x"
   },
   "scripts": {
     "install:ci": "bash scripts/install-pnpm.sh",
-    "dev": "node scripts/run-framework.mjs dev",
-    "build": "node scripts/run-framework.mjs build",
-    "start": "node scripts/start.mjs",
+    "dev": "node --experimental-strip-types scripts/run-framework.mjs dev",
+    "build": "node --experimental-strip-types scripts/run-framework.mjs build",
+    "start": "node --experimental-strip-types scripts/start.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "start:zeabur": "node --experimental-strip-types scripts/start.mjs --zeabur",
+    "db:generate:zeabur": "drizzle-kit generate --config drizzle.postgres.config.ts",
+    "test:runtime": "node tests/runtime.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -27,6 +30,7 @@
     "lucide-react": "^1.31.0",
     "next": "16.3.4",
     "next-themes": "^0.4.6",
+    "postgres": "^3.4.9",
     "radix-ui": "^1.6.7",
     "react": "19.2.6",
     "react-day-picker": "^10.0.1",
@@ -37,6 +41,7 @@
     "sonner": "^2.0.8",
     "tailwind-merge": "3.6.0",
     "vaul": "^1.1.2",
+    "ws": "^8.21.3",
     "zod": "^3.25.76"
   },
   "devDependencies": {
@@ -46,6 +51,7 @@
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.10",
