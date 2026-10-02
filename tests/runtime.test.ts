@@ -44,7 +44,10 @@ assert.equal(postgresSql("SELECT '?' AS value, \"offset\" FROM memories WHERE zh
 assert.ok(qwenEndpoint().includes('dashscope-intl.aliyuncs.com'));
 assert.ok(qwenEndpoint('cn').includes('https://dashscope.aliyuncs.com/'));
 assert.ok(qwenEndpoint().endsWith(QWEN_MODEL));
-await assert.rejects(runWithEnv({ DEPLOY_TARGET: 'zeabur' }, () => rows('SELECT 1')), { message: '資料庫尚未就緒' });
+await assert.rejects(runWithEnv({ DEPLOY_TARGET: 'zeabur' }, () => rows('SELECT 1')), { message: '資料庫尚未就緒', code: 'DATABASE_URL_MISSING' });
+await assert.rejects(runWithEnv({ DEPLOY_TARGET: 'cloudflare' }, () => rows('SELECT 1')), { message: '資料庫尚未就緒', code: 'D1_BINDING_MISSING' });
+const brokenD1 = { prepare: () => { throw new Error(secret); } } as unknown as D1Database;
+await assert.rejects(runWithEnv({ DB: brokenD1 }, () => rows('SELECT 1')), { message: '資料庫尚未就緒', code: 'DATABASE_UNAVAILABLE' });
 assert.equal(await runWithEnv({ DEPLOY_TARGET: 'zeabur' }, () => putAudio('recordings/a/b', new Uint8Array([1]), 'audio/wav')), undefined);
 const volume = await mkdtemp(join(tmpdir(), 'zen-audio-'));
 try {

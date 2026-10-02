@@ -1,7 +1,11 @@
 import { getBindings, getEnv } from './env';
+import type { DatabaseIssue } from './domain';
 
 export type Command = { sql: string; args: unknown[] };
 const NOT_READY = '資料庫尚未就緒';
+export class DatabaseUnavailableError extends Error {
+  constructor(readonly code: DatabaseIssue) { super(NOT_READY); }
+}
 
 // Preserve quoted strings/identifiers while translating D1 placeholders. SQLite
 // `IS ?` is its null-safe equality operator, not PostgreSQL's boolean IS syntax.
@@ -18,15 +22,16 @@ async function execute<T>(sql: string, args: unknown[]): Promise<T[]> {
   try {
     if (config.DEPLOY_TARGET === 'cloudflare') {
       const d1 = getBindings().DB;
-      if (!d1) throw new Error(NOT_READY);
+      if (!d1) throw new DatabaseUnavailableError('D1_BINDING_MISSING');
       return (await d1.prepare(sql).bind(...args).all<T>()).results;
     }
-    if (!config.DATABASE_URL) throw new Error(NOT_READY);
+    if (!config.DATABASE_URL) throw new DatabaseUnavailableError('DATABASE_URL_MISSING');
     const { queryPostgres } = await import('@/lib/platform/node');
     return await queryPostgres<T>(config.DATABASE_URL, postgresSql(sql), args);
-  } catch {
+  } catch (error) {
     // Driver errors may contain connection strings or query values.
-    throw new Error(NOT_READY);
+    if (error instanceof DatabaseUnavailableError) throw error;
+    throw new DatabaseUnavailableError('DATABASE_UNAVAILABLE');
   }
 }
 export const rows = <T>(sql: string, ...args: unknown[]) => execute<T>(sql, args);
@@ -41,14 +46,17 @@ export async function batch(commands: Command[]) {
   try {
     if (config.DEPLOY_TARGET === 'cloudflare') {
       const d1 = getBindings().DB;
-      if (!d1) throw new Error(NOT_READY);
+      if (!d1) throw new DatabaseUnavailableError('D1_BINDING_MISSING');
       await d1.batch(commands.map(c => d1.prepare(c.sql).bind(...c.args)));
     } else {
-      if (!config.DATABASE_URL) throw new Error(NOT_READY);
+      if (!config.DATABASE_URL) throw new DatabaseUnavailableError('DATABASE_URL_MISSING');
       const { batchPostgres } = await import('@/lib/platform/node');
       await batchPostgres(config.DATABASE_URL, commands.map(c => ({ ...c, sql: postgresSql(c.sql) })));
     }
-  } catch { throw new Error(NOT_READY); }
+  } catch (error) {
+    if (error instanceof DatabaseUnavailableError) throw error;
+    throw new DatabaseUnavailableError('DATABASE_UNAVAILABLE');
+  }
 }
 // Compatibility for the existing revision transactions; statements remain data.
 export function db() {

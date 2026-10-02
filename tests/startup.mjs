@@ -53,7 +53,10 @@ async function verifyStartup(args, variables) {
     assert.ok(log.includes('0.0.0.0:' + port));
     const api = await fetch('http://127.0.0.1:' + port + '/api/workspace');
     assert.equal(api.status, 503);
-    assert.equal((await api.json()).error, '資料庫尚未就緒');
+    const problem = await api.json();
+    assert.equal(problem.error, '資料庫尚未就緒');
+    assert.equal(problem.code, 'DATABASE_URL_MISSING');
+    assert.equal(problem.deployTarget, 'zeabur');
     assert.equal(child.exitCode, null);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {

@@ -60,6 +60,8 @@ API 超時、額度、音量、口音與音檔格式仍需在真實課堂錄音�
 
 在 Zeabur Variables 設定 DEPLOY_TARGET=zeabur、DATABASE_URL（Postgres 連線），及需要的 DASHSCOPE_API_KEY／OPENAI_API_KEY。未明示 DEPLOY_TARGET 時，有 DATABASE_URL 就選 Zeabur。DEPLOY_TARGET 只接受 cloudflare 或 zeabur；其他值在啟動時報錯，訊息不回顯值。
 
+部署 GitHub 程式不會建立 PostgreSQL 服務。請先在禪譯所在的同一個 Zeabur 專案新增 PostgreSQL，再於禪譯 Variables 將 DATABASE_URL 引用 POSTGRES_CONNECTION_STRING（Zeabur 的內部連線參考變數），重新啟動並在「連線設定」按「檢查連線」。連線成功後，程式才會自動建立資料表。設定頁會區分缺少 DATABASE_URL 與資料庫目前無法讀取，API 診斷不回傳連線字串或金鑰。
+
 Postgres 使用 `db/schema.pg.ts` 對應既有 Drizzle schema，以 `pnpm db:generate:zeabur` 產生 `drizzle-pg/` migrations；首次資料存取會在交易鎖內套用待執行的 Postgres migrations，不執行 D1 SQL。沒有資料庫或連線尚未就緒時，API 回「資料庫尚未就緒」，頁面仍可啟動。
 
 需要重聽錄音／講者樣本時，掛載 Volume 並將 AUDIO_DIR 設為掛載目錄。沒有 AUDIO_DIR 時，字幕仍保存，audio_key 留空。不要把音檔保存到未掛載的容器目錄。

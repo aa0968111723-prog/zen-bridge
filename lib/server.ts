@@ -2,7 +2,7 @@ import {z} from 'zod';
 import type {Person,Session,Segment,Memory,State,Direction} from './domain';
 import {interpretationInstructions} from './interpret';
 import {getEnv} from './env';
-import {db,rows,one,write} from './data';
+import {db,rows,one,write,DatabaseUnavailableError} from './data';
 import {providerName} from './speech/resolve';
 export {db,rows,one,write} from './data';
 export const now=()=>new Date().toISOString();
@@ -87,6 +87,7 @@ export async function translateText(text:string,session:Session,person:Person|nu
  const result=(body.output??[]).flatMap(o=>o.content??[]).filter(c=>c.type==='output_text').map(c=>c.text??'').join('').trim();if(!result)throw new Error('翻譯服務未回傳文字，請稍後重試。');return result;
 }
 export function failure(e:unknown){
+ if(e instanceof DatabaseUnavailableError)return Response.json({error:e.message,code:e.code,deployTarget:getEnv().DEPLOY_TARGET},{status:503});
  if(e instanceof z.ZodError)return Response.json({error:'欄位格式不正確，請確認必填資料及長度。'},{status:400});
  const msg=e instanceof Error?e.message:'操作失敗，請稍後重試。';
  return Response.json({error:/(D1_|SQLITE_|no such table|binding)/i.test(msg)?'資料儲存尚未就緒，請稍後重試。':msg},{status:503});
