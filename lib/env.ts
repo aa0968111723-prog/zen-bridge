@@ -4,7 +4,8 @@ export type DeployTarget = 'cloudflare' | 'zeabur';
 type RawEnv = Partial<Record<
   'DASHSCOPE_API_KEY' | 'DASHSCOPE_REGION' | 'QWEN_LIVE_MODEL' | 'SPEECH_PROVIDER' |
   'HOTWORD_LIMIT' | 'OPENAI_API_KEY' | 'OPENAI_TRANSCRIPTION_MODEL' |
-  'OPENAI_TRANSLATION_MODEL' | 'DATABASE_URL' | 'DEPLOY_TARGET' | 'AUDIO_DIR', string>>;
+  'OPENAI_TRANSLATION_MODEL' | 'DATABASE_URL' | 'DEPLOY_TARGET' | 'AUDIO_DIR' |
+  'HERMES_API_URL' | 'HERMES_API_KEY' | 'HERMES_TRANSLATION_MODEL' | 'TRANSLATION_PROVIDER', string>>;
 const context = new AsyncLocalStorage<Cloudflare.Env>();
 export const QWEN_MODEL = 'qwen3.8-livetranslate-flash-realtime';
 
@@ -14,6 +15,19 @@ export function parseEnv(raw: RawEnv) {
     throw new Error('DEPLOY_TARGET 必須為 cloudflare 或 zeabur。');
   }
   const DEPLOY_TARGET: DeployTarget = raw.DEPLOY_TARGET ?? (raw.DATABASE_URL ? 'zeabur' : 'cloudflare');
+  if (raw.TRANSLATION_PROVIDER !== undefined && raw.TRANSLATION_PROVIDER !== 'hermes' && raw.TRANSLATION_PROVIDER !== 'openai') {
+    throw new Error('TRANSLATION_PROVIDER 必須為 hermes 或 openai。');
+  }
+  if (raw.HERMES_API_URL) {
+    try {
+      const url = new URL(raw.HERMES_API_URL);
+      const privateNode = DEPLOY_TARGET === 'zeabur' && url.hostname.endsWith('.zeabur.internal');
+      const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
+      if (url.username || url.password || url.search || url.hash ||
+        (url.protocol !== 'https:' && !(url.protocol === 'http:' && (privateNode || local)))) throw new Error();
+    } catch { throw new Error('HERMES_API_URL 格式不正確。'); }
+  }
+  if (raw.HERMES_API_KEY && /[\r\n]/.test(raw.HERMES_API_KEY)) throw new Error('HERMES_API_KEY 格式不正確。');
   const n = Number(raw.HOTWORD_LIMIT ?? 200);
   return {
     DASHSCOPE_API_KEY: raw.DASHSCOPE_API_KEY,
@@ -27,6 +41,10 @@ export function parseEnv(raw: RawEnv) {
     DATABASE_URL: raw.DATABASE_URL,
     DEPLOY_TARGET,
     AUDIO_DIR: raw.AUDIO_DIR,
+    HERMES_API_URL: raw.HERMES_API_URL,
+    HERMES_API_KEY: raw.HERMES_API_KEY,
+    HERMES_TRANSLATION_MODEL: raw.HERMES_TRANSLATION_MODEL || 'hermes-agent',
+    TRANSLATION_PROVIDER: raw.TRANSLATION_PROVIDER,
   };
 }
 export type AppEnv = ReturnType<typeof parseEnv>;

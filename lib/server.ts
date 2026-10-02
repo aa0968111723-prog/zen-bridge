@@ -4,6 +4,8 @@ import {interpretationInstructions} from './interpret';
 import {getEnv} from './env';
 import {db,rows,one,write,DatabaseUnavailableError} from './data';
 import {providerName} from './speech/resolve';
+import {hermesConfigured} from './hermes';
+import {textTranslationProvider,textTranslationModel,translateUtterance} from './translation';
 export {db,rows,one,write} from './data';
 export const now=()=>new Date().toISOString();
 export const id=()=>crypto.randomUUID();
@@ -13,7 +15,7 @@ export async function workspace(sessionId?:string|null):Promise<State>{
  const selected=sessions.find(s=>s.id===sessionId)?.id??sessions[0]?.id??null;
  const segments=selected?(await rows<Segment>('SELECT * FROM segments WHERE session_id=? ORDER BY created_at DESC,"offset" DESC LIMIT 500',selected)).reverse():[];
  const env=getEnv(),openai=!!env.OPENAI_API_KEY,qwen=!!env.DASHSCOPE_API_KEY;
- return {people,sessions,memories,segments,sessionId:selected,connection:{openai,qwen,speech:openai||qwen,provider:providerName(env),asr:qwen?env.QWEN_LIVE_MODEL:env.OPENAI_TRANSCRIPTION_MODEL,translation:qwen?'qwen3.8-livetranslate':env.OPENAI_TRANSLATION_MODEL,hermes:'等待連接',deployTarget:env.DEPLOY_TARGET}};
+ return {people,sessions,memories,segments,sessionId:selected,connection:{openai,qwen,speech:openai||qwen,provider:providerName(env),asr:qwen?env.QWEN_LIVE_MODEL:env.OPENAI_TRANSCRIPTION_MODEL,translation:qwen?'qwen3.8-livetranslate':env.OPENAI_TRANSLATION_MODEL,hermes:hermesConfigured(env)?'已設定':'等待連接',textTranslation:!!textTranslationProvider(env),translationProvider:textTranslationProvider(env),textModel:textTranslationModel(env),deployTarget:env.DEPLOY_TARGET}};
 }
 const mutations=z.discriminatedUnion('action',[
  z.object({action:z.literal('person'),id:z.string().uuid().optional(),name:short,role:short,notes:field.default('')}),
@@ -77,14 +79,9 @@ export async function saveSegment(p:{sessionId:string;personId:string|null;label
  const key=id();await write('INSERT INTO segments(id,session_id,person_id,label,role,direction,zh,en,original_zh,original_en,note,audio_key,"offset",source,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',key,p.sessionId,p.personId,p.label,p.role,p.direction??'zh-en',p.zh,p.en,p.zh,p.en,p.note??'',p.audioKey??null,p.offset??0,p.source,now());return key;
 }
 export async function translateText(text:string,session:Session,person:Person|null,role:string,direction:Direction='zh-en'){
- const env=getEnv(),key=env.OPENAI_API_KEY;if(!key)throw new Error('OpenAI 尚未連接。請設定 OPENAI_API_KEY。');
+ const env=getEnv();
  const [terms,previous]=await Promise.all([rows<Memory>("SELECT * FROM memories WHERE status='verified' AND (person_id IS NULL OR person_id=?) AND (role='通用' OR role=?) ORDER BY updated_at DESC LIMIT 30",person?.id??null,role),rows<Segment>('SELECT zh,en,label,role FROM segments WHERE session_id=? ORDER BY created_at DESC LIMIT 6',session.id)]);
- let r:Response;
- try{r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},signal:AbortSignal.timeout(45000),body:JSON.stringify({model:env.OPENAI_TRANSLATION_MODEL,instructions:interpretationInstructions(direction),input:JSON.stringify({currentUtterance:text,direction,activity:{topic:session.topic,notes:session.notes},speaker:person?{name:person.name,notes:person.notes}:null,role,confirmedExamples:terms,previousUtterances:previous.reverse()}),max_output_tokens:1800})});}catch{throw new Error('OpenAI 翻譯連線失敗，請檢查平台網路與 OPENAI_API_KEY。');}
- if(!r.ok)throw new Error(r.status===429?'AI 服務忙碌或額度不足，請稍後重試。':'翻譯服務連線失敗，請檢查服務設定。');
- let body:{output?:{content?:{type:string;text?:string}[]}[]};
- try{body=await r.json() as typeof body;}catch{throw new Error('OpenAI 翻譯服務回傳格式不正確，請檢查 OPENAI_TRANSLATION_MODEL。');}
- const result=(body.output??[]).flatMap(o=>o.content??[]).filter(c=>c.type==='output_text').map(c=>c.text??'').join('').trim();if(!result)throw new Error('翻譯服務未回傳文字，請稍後重試。');return result;
+ return translateUtterance(interpretationInstructions(direction),JSON.stringify({currentUtterance:text,direction,activity:{topic:session.topic,notes:session.notes},speaker:person?{name:person.name,notes:person.notes}:null,role,confirmedExamples:terms,previousUtterances:previous.reverse()}),env);
 }
 export function failure(e:unknown){
  if(e instanceof DatabaseUnavailableError)return Response.json({error:e.message,code:e.code,deployTarget:getEnv().DEPLOY_TARGET},{status:503});

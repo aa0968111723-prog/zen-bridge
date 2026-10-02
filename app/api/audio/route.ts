@@ -5,6 +5,7 @@ import { getEnv } from '@/lib/env';
 import { putAudio } from '@/lib/data';
 import { resolveSpeech } from '@/lib/speech/resolve';
 import { glossary } from '@/lib/speech/glossary';
+import { textTranslationProvider } from '@/lib/translation';
 import type { Memory, Person, Session } from '@/lib/domain';
 
 export async function POST(request: Request) {
@@ -37,9 +38,9 @@ export async function POST(request: Request) {
       const detected = part.speakerKey ? (part.speakerKey === person?.id ? person : await one<Person>('SELECT * FROM people WHERE id=?', part.speakerKey)) : null;
       const currentRole = auto ? roles[detected?.id ?? ''] ?? detected?.role ?? '待確認' : role;
       const notes = [part.note, terms.note].filter(Boolean);
-      if (source && !translation && env.OPENAI_API_KEY) {
+      if (source && !translation && textTranslationProvider(env)) {
         try { translation = await translateText(source, session, detected, currentRole, direction); }
-        catch { notes.push('補譯失敗，原文已保存；請檢查 OPENAI_API_KEY 與 OPENAI_TRANSLATION_MODEL。'); }
+        catch { notes.push(textTranslationProvider(env) === 'hermes' ? 'Hermes 補譯失敗，原文已保存；請檢查 Hermes 連線與模型設定。' : '補譯失敗，原文已保存；請檢查 OPENAI_API_KEY 與 OPENAI_TRANSLATION_MODEL。'); }
       }
       ids.push(await saveSegment({ sessionId, personId: detected?.id ?? null,
         label: detected?.name ?? (direction === 'en-zh' ? '英文發言者' : '待確認講者'), role: currentRole,

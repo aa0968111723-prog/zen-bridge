@@ -22,7 +22,7 @@
 - 麥克風錄音，每 8 秒送出完整 WAV 片段，依序辨識與翻譯。
 - OpenAI 自動辨識與手動接管。每場最多 4 位已上傳 2–10 秒聲音樣本的已知講者；無法配對的聲音標為待確認。
 - 有 DASHSCOPE_API_KEY 時預設 Qwen3.8-LiveTranslate 外部同傳 API；模型 ID 為 qwen3.8-livetranslate-flash-realtime。已確認例句提供熱詞，不是模型微調；Qwen 自動模式不套用講者聲紋。只有 OPENAI_API_KEY 時使用原本 OpenAI 路徑；SPEECH_PROVIDER=openai 可明示切換。
-- 中英雙向語意翻譯預設 gpt-4.1-mini，帶入本場講義、講者用語、前 6 段內容及最多 30 筆已確認例句。英文發言輸出臺灣繁體中文；問題只翻譯，不代為回答。
+- 中英雙向語意翻譯支援 Hermes 文字 API；未設定 Hermes 時沿用 OpenAI gpt-4.1-mini，帶入本場講義、講者用語、前 6 段內容及最多 30 筆已確認例句。英文發言輸出臺灣繁體中文；問題只翻譯，不代為回答。
 - 原始中英內容、音檔重聽、翻譯修正及版本保存。
 - 候選、確認與封存的例句流程。編輯後重新確認。
 - 全部例句、版本歷史及選定活動完整逐字稿 JSON 匯出。
@@ -32,7 +32,7 @@
 
 真實語音 API 與課堂麥克風辨識仍需使用平台 secret 完成實測。網站會顯示「尚未連接」，仍可管理人員、錄製講者聲音、保存雙向文字與人工例句。
 
-尚未操作使用者的 Hermes Agent 環境。MCP 工具及匯出格式已備妥，不代表 Hermes 已授權、連接或自動整理。這裡的改善是確認例句提供後續翻譯參考，不是重新訓練模型權重。
+Hermes 文字翻譯接入程式已備妥；實際啟用需要平台連線設定及 API 存取授權。「已設定」不代表連線成功；設定頁的檢查按鈕只驗證文字 API 的認證與模型清單。長期記憶依 Hermes profile 的設定運作，未新增自動寫入或模型微調。
 
 ## 服務設定
 
@@ -68,9 +68,21 @@ Postgres 使用 `db/schema.pg.ts` 對應既有 Drizzle schema，以 `pnpm db:gen
 
 兩個平台預設連新加坡 dashscope-intl；只有 DASHSCOPE_REGION=cn 才使用北京。Qwen3.8-LiveTranslate 只呼叫外部 API，不能微調或把權重放進部署平台。HOTWORD_LIMIT 預設 200，小於 1 回到 200，大於 1000 取 1000；只取已確認且符合長度的例句。
 
-語音未回傳譯文時，有 OPENAI_API_KEY 才補譯，補譯失敗只記在 note。手動文字「翻譯並保存」仍只呼叫 translateText，需要 OPENAI_API_KEY。
+語音未回傳譯文時，已設定文字翻譯服務才補譯，補譯失敗只記在 note。手動文字「翻譯並保存」仍只呼叫 translateText，不開同傳 WebSocket。
+
+### Hermes 文字翻譯
+
+在平台 secret／Variables 設定 HERMES_API_URL、HERMES_API_KEY；HERMES_API_KEY 必須對應目標 Hermes 服務的 API_SERVER_KEY。不要將其他模型、GitHub、Telegram 或 MCP 金鑰複製到禪譯。HERMES_TRANSLATION_MODEL 缺省為 hermes-agent；TRANSLATION_PROVIDER 只接受 hermes 或 openai。未明示時，完整設定 Hermes 就用 Hermes，否則沿用 OpenAI；明示的服務未設定時不會偷偷切換。
+
+Zeabur 同專案可使用 Hermes 的私有位址與 API_SERVER_PORT；Cloudflare 要使用可存取的 HTTPS API 位址。HERMES_API_URL 可帶 /v1，禁止嵌入帳號、密碼、查詢參數或片段。所有金鑰只存平台 secret，不輸出到前端、錯誤訊息或 Git。
+
+目前指定的 Hermes API 有文字接口，沒有 audio API。單獨設定 Hermes 不會啟用收音；錄音辨識仍用 Qwen 或 OpenAI。文字翻譯傳入本場背景、最近 6 段及最多 30 筆已確認例句，並要求只翻譯當前發言。未改動社課資料庫或插畫。
+
+Hermes 的 API 會在伺服器執行已設定的工具；並非每個版本都遵守 tool_choice。因此公開網站應使用獨立的翻譯 profile，限制工具與資料存取，不能只靠提示詞阻止工具操作。不要為連線開放未授權的代理能力。
 
 ## 開發與驗證
+
+`pnpm test:runtime` 包含 Hermes 的模擬 API 測試，涵蓋文字服務切換、認證失敗、回傳驗證、確認例句與前後文、原文保存及金鑰不回傳前端。此測試不代表正式 Hermes 連線或翻譯品質已驗證。
 
 平台初始化、依賴與建置命令見 [runtime notes](docs/RUNTIME.md)。SQL migrations 位於 `drizzle/`，本地及正式資料庫各自追蹤，不能重複執行已套用的 migration。
 

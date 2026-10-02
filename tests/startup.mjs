@@ -5,7 +5,7 @@ import { once } from 'node:events';
 
 // Run after DEPLOY_TARGET=zeabur pnpm build. No platform secrets are needed.
 const cleanEnv = { ...process.env };
-for (const name of ['DEPLOY_TARGET', 'DATABASE_URL', 'DASHSCOPE_API_KEY', 'OPENAI_API_KEY', 'AUDIO_DIR']) delete cleanEnv[name];
+for (const name of ['DEPLOY_TARGET', 'DATABASE_URL', 'DASHSCOPE_API_KEY', 'OPENAI_API_KEY', 'AUDIO_DIR', 'HERMES_API_URL', 'HERMES_API_KEY', 'HERMES_TRANSLATION_MODEL', 'TRANSLATION_PROVIDER']) delete cleanEnv[name];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function inferredTarget(variables, zeaburEntry = false) {
@@ -27,6 +27,15 @@ for (const target of ['', crypto.randomUUID(), 'cloudflare']) {
   assert.notEqual(result.status, 0);
   assert.ok(result.stderr.includes('DEPLOY_TARGET'));
   if (target && target !== 'cloudflare') assert.ok(!result.stderr.includes(target));
+}
+
+for (const name of ['TRANSLATION_PROVIDER', 'HERMES_API_URL']) {
+  const value = crypto.randomUUID();
+  const result = spawnSync(process.execPath, ['--experimental-strip-types', 'scripts/start.mjs', '--zeabur'],
+    { env: { ...cleanEnv, [name]: value }, encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.ok(result.stderr.includes(name));
+  assert.ok(!result.stderr.includes(value));
 }
 
 async function verifyStartup(args, variables) {

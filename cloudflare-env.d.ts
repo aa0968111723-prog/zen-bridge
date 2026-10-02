@@ -13,5 +13,9 @@ declare namespace Cloudflare {
     DATABASE_URL?: string;
     DEPLOY_TARGET?: string;
     AUDIO_DIR?: string;
+    HERMES_API_URL?: string;
+    HERMES_API_KEY?: string;
+    HERMES_TRANSLATION_MODEL?: string;
+    TRANSLATION_PROVIDER?: string;
   }
 }
