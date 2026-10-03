@@ -6,6 +6,7 @@ import {db,rows,one,write,DatabaseUnavailableError} from './data';
 import {providerName} from './speech/resolve';
 import {hermesConfigured} from './hermes';
 import {textTranslationProvider,textTranslationModel,translateUtterance} from './translation';
+import {publishFinal,roomUrl} from './rooms';
 export {db,rows,one,write} from './data';
 export const now=()=>new Date().toISOString();
 export const id=()=>crypto.randomUUID();
@@ -14,8 +15,13 @@ export async function workspace(sessionId?:string|null):Promise<State>{
  const [people,sessions,memories]=await Promise.all([rows<Person>('SELECT * FROM people ORDER BY created_at'),rows<Session>('SELECT * FROM sessions ORDER BY created_at DESC'),rows<Memory>("SELECT * FROM memories WHERE status!='archived' ORDER BY updated_at DESC LIMIT 300")]);
  const selected=sessions.find(s=>s.id===sessionId)?.id??sessions[0]?.id??null;
  const segments=selected?(await rows<Segment>('SELECT * FROM segments WHERE session_id=? ORDER BY created_at DESC,"offset" DESC LIMIT 500',selected)).reverse():[];
- const env=getEnv(),openai=!!env.OPENAI_API_KEY,qwen=!!env.DASHSCOPE_API_KEY;
- return {people,sessions,memories,segments,sessionId:selected,connection:{openai,qwen,speech:openai||qwen,provider:providerName(env),asr:qwen?env.QWEN_LIVE_MODEL:env.OPENAI_TRANSCRIPTION_MODEL,translation:qwen?'qwen3.8-livetranslate':env.OPENAI_TRANSLATION_MODEL,hermes:hermesConfigured(env)?'已設定':'等待連接',textTranslation:!!textTranslationProvider(env),translationProvider:textTranslationProvider(env),textModel:textTranslationModel(env),deployTarget:env.DEPLOY_TARGET}};
+ const env=getEnv(),openai=!!env.OPENAI_API_KEY,qwen=!!env.DASHSCOPE_API_KEY,breeze=!!env.BREEZE_ASR_URL;
+ const shareAvailable=env.SHARE==='room'&&!!env.PUBLIC_BASE_URL;
+ return {people,sessions,memories,segments,sessionId:selected,connection:{openai,qwen,breeze,speech:openai||qwen||breeze,provider:providerName(env),speechMode:env.SPEECH_MODE,speechOptions:[
+  {value:'breeze',available:breeze,reason:breeze?'':'未設定可用的本機 BREEZE_ASR_URL'},
+  {value:'qwen-live',available:qwen,reason:qwen?'':'未設定 DASHSCOPE_API_KEY'},
+  {value:'openai',available:openai,reason:openai?'':'未設定 OPENAI_API_KEY'},
+ ],asr:providerName(env)==='breeze'?'MediaTek-Research/Breeze-ASR-25':providerName(env)==='qwen-live'?env.QWEN_LIVE_MODEL:env.OPENAI_TRANSCRIPTION_MODEL,translation:qwen?'qwen3.8-livetranslate':env.OPENAI_TRANSLATION_MODEL,hermes:hermesConfigured(env)?'已設定':'等待連接',textTranslation:!!textTranslationProvider(env),translationProvider:textTranslationProvider(env),textModel:textTranslationModel(env),deployTarget:env.DEPLOY_TARGET,share:env.SHARE,shareAvailable,shareReason:env.SHARE==='off'?'分享已由 SHARE=off 關閉':shareAvailable?'':'未設定 PUBLIC_BASE_URL，禁止產生 localhost QR',qrUrl:selected&&shareAvailable?roomUrl(env.PUBLIC_BASE_URL,selected):''}};
 }
 const mutations=z.discriminatedUnion('action',[
  z.object({action:z.literal('person'),id:z.string().uuid().optional(),name:short,role:short,notes:field.default('')}),
@@ -76,7 +82,9 @@ export async function mutate(payload:unknown){
  }
 }
 export async function saveSegment(p:{sessionId:string;personId:string|null;label:string;role:string;direction?:Direction;zh:string;en:string;source:string;note?:string;audioKey?:string;offset?:number}){
- const key=id();await write('INSERT INTO segments(id,session_id,person_id,label,role,direction,zh,en,original_zh,original_en,note,audio_key,"offset",source,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',key,p.sessionId,p.personId,p.label,p.role,p.direction??'zh-en',p.zh,p.en,p.zh,p.en,p.note??'',p.audioKey??null,p.offset??0,p.source,now());return key;
+ const key=id(),direction=p.direction??'zh-en';await write('INSERT INTO segments(id,session_id,person_id,label,role,direction,zh,en,original_zh,original_en,note,audio_key,"offset",source,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',key,p.sessionId,p.personId,p.label,p.role,direction,p.zh,p.en,p.zh,p.en,p.note??'',p.audioKey??null,p.offset??0,p.source,now());
+ if(getEnv().SHARE==='room'&&getEnv().PUBLIC_BASE_URL)publishFinal(p.sessionId,{id:key,zh:p.zh,en:p.en,direction});
+ return key;
 }
 export async function translateText(text:string,session:Session,person:Person|null,role:string,direction:Direction='zh-en'){
  const env=getEnv();

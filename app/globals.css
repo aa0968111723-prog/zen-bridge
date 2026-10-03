@@ -2,6 +2,12 @@
 @import "tw-animate-css";
 @import "../vendor/shadcn-tailwind-4.13.0.css";
 
+.listener-page{min-height:100vh;max-width:920px;margin:auto;padding:2rem;background:#fffdf5;color:#23352e}
+.listener-page header{display:flex;align-items:center;justify-content:space-between;gap:1rem;border-bottom:1px solid #d8d1bc}
+.listener-page article{padding:1.5rem 0;border-bottom:1px solid #e8e2d2}
+.listener-source{font-size:1.15rem;color:#617067}
+.listener-target{font-size:clamp(1.5rem,5vw,2.5rem);font-weight:650;line-height:1.45}
+
 @utility scrollbar-thin {
   scrollbar-width: thin;
 }

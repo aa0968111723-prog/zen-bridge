@@ -19,9 +19,10 @@
 - 字級、間距、按鈕與狀態統一，保留晴空／木緣風格及龜龜插畫。投影可按 Esc 返回，未建立活動也可預覽字幕，不保存範例。
 - 文宣女孩加入共用頁首，與龜龜一起出現在字幕歡迎畫面；字幕顯示後保留完整閱讀區域。插畫使用依顯示尺寸產生的 WebP，頁首與女孩提供響應式尺寸，歡迎插畫延後載入，網站圖示另用小尺寸 PNG。
 - 指定麥克風與 10 秒試音；收音、講者樣本與試音共用選定裝置。試音只顯示本機音量，不保存音檔、不送出音訊。裝置中斷時停止收音並提示，不自動改用另一個麥克風。
-- 麥克風錄音，每 8 秒送出完整 WAV 片段，依序辨識與翻譯。
+- 麥克風持續收取單聲道 PCM。Breeze 使用 6 秒滑動窗、每 0.75 秒前移與 VAD；Qwen Live 可維持伺服器端長連線，8 秒 chunk 保留為備援。
 - OpenAI 自動辨識與手動接管。每場最多 4 位已上傳 2–10 秒聲音樣本的已知講者；無法配對的聲音標為待確認。
-- 有 DASHSCOPE_API_KEY 時預設 Qwen3.8-LiveTranslate 外部同傳 API；模型 ID 為 qwen3.8-livetranslate-flash-realtime。已確認例句提供熱詞，不是模型微調；Qwen 自動模式不套用講者聲紋。只有 OPENAI_API_KEY 時使用原本 OpenAI 路徑；SPEECH_PROVIDER=openai 可明示切換。
+- 預設 Breeze ASR 25，僅透過本機 `BREEZE_ASR_URL` sidecar；模型權重不進網站、Worker 或 Zeabur 映像。Qwen3.8-LiveTranslate 與 OpenAI 路徑仍可明示選用，不會在缺少設定時偷偷切換。
+- 每場活動有固定聽眾網址 `/r/{id}`；`/ws/listen` 優先 WebSocket，無法升級的 Node 路徑使用同端點 SSE。只廣播已落定並保存的中英譯文，重連補最近 40 句。
 - 中英雙向語意翻譯支援 Hermes 文字 API；未設定 Hermes 時沿用 OpenAI gpt-4.1-mini，帶入本場講義、講者用語、前 6 段內容及最多 30 筆已確認例句。英文發言輸出臺灣繁體中文；問題只翻譯，不代為回答。
 - 原始中英內容、音檔重聽、翻譯修正及版本保存。
 - 候選、確認與封存的例句流程。編輯後重新確認。
@@ -36,7 +37,16 @@ Hermes 文字翻譯接入程式已備妥；實際啟用需要平台連線設定�
 
 ## 服務設定
 
-DASHSCOPE_API_KEY 與 OPENAI_API_KEY 只存於 Cloudflare secret 或 Zeabur Variables。不要放在原始碼、瀏覽器、公開環境變數、zbpack.json 或 Git。
+DASHSCOPE_API_KEY 與 OPENAI_API_KEY 只存於 Cloudflare secret 或 Zeabur Variables。不要放在原始碼、瀏覽器、公開環境變數、zbpack.json 或 Git。`SPEECH_PROVIDER` 接受 `breeze`（預設）、`qwen-live`、`openai`；`SPEECH_MODE` 接受 `stream` 或 `chunk`，只有 Qwen 可用 stream。`SHARE` 接受 `room`（預設）或 `off`。
+
+分享房必須設定外部 `PUBLIC_BASE_URL`；未設定時設定頁明示停用，且不生成 localhost QR。Breeze sidecar 必須只聽本機，設定例如 `BREEZE_ASR_URL=http://127.0.0.1:8770/transcribe`。可在獨立 GPU/本機環境執行：
+
+```sh
+python -m pip install -r sidecar/requirements.txt
+BREEZE_MODEL_PATH=/models/Breeze-ASR-25-ct2 uvicorn sidecar.breeze_asr:app --host 127.0.0.1 --port 8770
+```
+
+先在 sidecar 主機把 `MediaTek-Research/Breeze-ASR-25`（Apache-2.0）的 Transformers 權重轉成 CTranslate2 目錄，並用 `BREEZE_MODEL_PATH` 指向該目錄；不要把轉換後權重放進本 repository 或網站映像。sidecar 啟動時只載入一次模型，接收 16-bit 單聲道 PCM WAV；模型快取與音檔都留在 sidecar 主機。
 
 伺服器可設定 `OPENAI_TRANSCRIPTION_MODEL` 與 `OPENAI_TRANSLATION_MODEL`。兩條 API 路徑分開實作，日後依你們的社課資料比較再替換。
 

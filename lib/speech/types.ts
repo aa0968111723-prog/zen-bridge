@@ -10,12 +10,14 @@ export type SpeechInput = {
   auto: boolean;
   speakerKey?: string | null;
   knownSpeakerIds?: string[];
+  mode?: 'stream' | 'chunk';
+  streamKey?: string;
 };
 export type SpeechPart = {
   source: string;
   translation: string;
   note: string;
-  provider: 'qwen-live' | 'openai';
+  provider: 'breeze' | 'qwen-live' | 'openai';
   speakerKey: string | null;
   offset: number;
 };

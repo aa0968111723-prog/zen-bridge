@@ -108,8 +108,9 @@ try {
   // ASR keeps its original provider. Hermes supplies only the missing translation.
   async function audioRequest() {
     const form = new FormData(); form.set('sessionId', sid);
+    form.set('speechProvider', 'openai'); form.set('speechMode', 'chunk');
     form.set('audio', new File([new Uint8Array([1, 2, 3])], 'speech.wav', { type: 'audio/wav' }));
-    return runWithEnv({ ...bindings, DB: db, OPENAI_API_KEY: secret }, () => audio(new Request('http://test/api/audio', { method: 'POST', body: form })));
+    return runWithEnv({ ...bindings, DB: db, OPENAI_API_KEY: secret, SPEECH_PROVIDER: 'openai' }, () => audio(new Request('http://test/api/audio', { method: 'POST', body: form })));
   }
   answer = { choices: [{ message: { role: 'assistant', content: 'Be aware of the present.' }, finish_reason: 'stop' }] };
   const audioResult = await audioRequest();
