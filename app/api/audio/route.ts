@@ -25,15 +25,18 @@ export async function POST(request: Request) {
     const env = getEnv();
     const requested = z.enum(['breeze', 'qwen-live', 'openai']).optional().parse(form.get('speechProvider') || undefined);
     const speechMode = z.enum(['stream', 'chunk']).parse(form.get('speechMode') || env.SPEECH_MODE);
+    const stable = form.get('stable') !== 'false';
     if (speechMode === 'stream' && requested !== 'qwen-live') throw new Error('只有 Qwen Live 可以使用 stream 送法。');
     const provider = resolveSpeech(env, requested);
     const audio = new Uint8Array(await file.arrayBuffer());
-    const audioKey = await putAudio('recordings/' + sessionId + '/' + id(), audio, file.type || 'audio/wav');
     const memories = await rows<Memory>("SELECT * FROM memories WHERE status='verified' ORDER BY updated_at DESC");
     const terms = glossary(memories, direction, env.HOTWORD_LIMIT);
     const parts = await provider.transcribe({ audio, filename: file.name, mime: file.type, direction,
       phrases: terms.phrases, topic: session.topic, speakerNote: person?.notes ?? '', auto,
-      speakerKey: person?.id ?? null, knownSpeakerIds: JSON.parse(session.speaker_ids) });
+      speakerKey: person?.id ?? null, knownSpeakerIds: JSON.parse(session.speaker_ids),
+      mode:speechMode,streamKey:sessionId+':'+direction });
+    if (!stable) return Response.json({ids:[],provider:provider.name,draft:parts.map(part=>part.source).join(' ').trim()});
+    const audioKey = await putAudio('recordings/' + sessionId + '/' + id(), audio, file.type || 'audio/wav');
     const ids: string[] = [], roles: Record<string, string> = JSON.parse(session.roles);
     for (const part of parts) {
       const source = part.source.trim();

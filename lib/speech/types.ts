@@ -10,6 +10,8 @@ export type SpeechInput = {
   auto: boolean;
   speakerKey?: string | null;
   knownSpeakerIds?: string[];
+  mode?: 'stream' | 'chunk';
+  streamKey?: string;
 };
 export type SpeechPart = {
   source: string;

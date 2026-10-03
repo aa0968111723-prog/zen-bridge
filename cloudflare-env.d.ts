@@ -9,6 +9,10 @@ declare namespace Cloudflare {
     DASHSCOPE_REGION?: string;
     QWEN_LIVE_MODEL?: string;
     SPEECH_PROVIDER?: string;
+    SPEECH_MODE?: string;
+    BREEZE_ASR_URL?: string;
+    PUBLIC_BASE_URL?: string;
+    SHARE?: string;
     HOTWORD_LIMIT?: string;
     DATABASE_URL?: string;
     DEPLOY_TARGET?: string;

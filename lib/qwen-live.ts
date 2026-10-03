@@ -13,7 +13,7 @@ export function qwenEndpoint(region?: string, model = QWEN_MODEL) {
   return `https://${host}/api-ws/v1/realtime?model=${encodeURIComponent(model)}`;
 }
 
-function wavToPcm16k(bytes: Uint8Array) {
+export function wavToPcm16k(bytes: Uint8Array) {
   if (bytes.length < 44 || String.fromCharCode(...bytes.slice(0, 4)) !== 'RIFF' || String.fromCharCode(...bytes.slice(8, 12)) !== 'WAVE') {
     throw new Error('請送出 16-bit PCM WAV，不能是壓縮音檔。');
   }
@@ -57,7 +57,7 @@ function wavToPcm16k(bytes: Uint8Array) {
   return out;
 }
 
-function pcmBase64(samples: Int16Array, start: number, end: number) {
+export function pcmBase64(samples: Int16Array, start: number, end: number) {
   const slice = samples.subarray(start, end);
   const bytes = new Uint8Array(slice.buffer, slice.byteOffset, slice.byteLength);
   let binary = '';
@@ -82,6 +82,52 @@ export async function qwenLiveTranslate(file: Uint8Array, options: {apiKey: stri
       if (!response.webSocket) throw connectionError();
       response.webSocket.accept();
       ws = response.webSocket;
+    }
+
+    type StreamOptions = {apiKey:string;region?:string;model?:string;platform:DeployTarget;direction:'zh-en'|'en-zh';phrases:Record<string,string>};
+    type Pending = {source:string;translation:string;resolve:(value:QwenLiveResult)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>};
+    type StreamSession = {socket:LiveSocket;created:number;pending:Pending|null;queue:Promise<QwenLiveResult>};
+    const streams=new Map<string,StreamSession>();
+
+    async function openStream(options:StreamOptions,key:string){
+     const endpoint=qwenEndpoint(options.region,options.model);
+     let socket:LiveSocket;
+     if(options.platform==='zeabur'){const {openNodeSocket}=await import('@/lib/platform/node');socket=await openNodeSocket(endpoint,options.apiKey);}
+     else{const response=await fetch(endpoint,{headers:{Upgrade:'websocket',Authorization:'Bearer '+options.apiKey},signal:AbortSignal.timeout(15000)});if(!response.webSocket)throw new Error('Cloudflare 無法連線至阿里雲。');response.webSocket.accept();socket=response.webSocket;}
+     const session:StreamSession={socket,created:Date.now(),pending:null,queue:Promise.resolve({source:'',translation:''})};
+     const fail=()=>{const error=new Error('Qwen Live 串流已中斷；請重送最後一個已確認句子。');if(session.pending){clearTimeout(session.pending.timer);session.pending.reject(error);session.pending=null;}streams.delete(key);};
+     socket.addEventListener('message',event=>{
+      if(!session.pending||typeof event.data!=='string')return;
+      let body:{type?:string;transcript?:string;text?:string;delta?:string};try{body=JSON.parse(event.data);}catch{return;}
+      if(body.type==='conversation.item.input_audio_transcription.completed')session.pending.source=body.transcript||session.pending.source;
+      if(body.type==='response.text.delta')session.pending.translation+=body.delta||'';
+      if(body.type==='response.text.done'){
+       session.pending.translation=body.text||session.pending.translation;
+       const pending=session.pending;session.pending=null;clearTimeout(pending.timer);pending.resolve({source:pending.source.trim(),translation:pending.translation.trim()});
+      }
+     });
+     socket.addEventListener('error',fail);socket.addEventListener('close',fail);
+     socket.send(JSON.stringify({type:'session.update',session:{output_modalities:['text'],translation:{language:options.direction==='zh-en'?'en':'zh',corpus:{phrases:options.phrases}}}}));
+     streams.set(key,session);return session;
+    }
+
+    export async function qwenStreamTranslate(key:string,file:Uint8Array,options:StreamOptions){
+     let session=streams.get(key);
+     if(session&&Date.now()-session.created>=2*60*60*1000){session.socket.close();streams.delete(key);session=undefined;}
+     session??=await openStream(options,key);
+     const active=session;
+     const previous=active.queue.catch(()=>({source:'',translation:''}));
+     active.queue=previous.then(()=>new Promise<QwenLiveResult>((resolve,reject)=>{
+      const timer=setTimeout(()=>{if(active.pending){active.pending=null;reject(new Error('Qwen Live 串流等待句尾超時。'));}},60000);
+      active.pending={source:'',translation:'',resolve,reject,timer};
+      try{
+       const pcm=wavToPcm16k(file),frame=1600;
+       for(let i=0;i<pcm.length;i+=frame)active.socket.send(JSON.stringify({type:'input_audio_buffer.append',audio:pcmBase64(pcm,i,Math.min(pcm.length,i+frame))}));
+       active.socket.send(JSON.stringify({type:'input_audio_buffer.commit'}));
+       active.socket.send(JSON.stringify({type:'response.create',response:{output_modalities:['text']}}));
+      }catch{clearTimeout(timer);active.pending=null;reject(new Error('Qwen Live 串流送出失敗。'));}
+     }));
+     return active.queue;
     }
   } catch { throw connectionError(); }
   const result = await new Promise<QwenLiveResult>((resolve, reject) => {
