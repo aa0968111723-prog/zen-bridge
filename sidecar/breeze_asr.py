@@ -5,7 +5,9 @@ import wave
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from faster_whisper import WhisperModel
 
-MODEL_ID = "MediaTek-Research/Breeze-ASR-25"
+MODEL_ID = os.getenv("BREEZE_MODEL_PATH", "")
+if not MODEL_ID:
+    raise RuntimeError("BREEZE_MODEL_PATH must point to a local CTranslate2 conversion of MediaTek-Research/Breeze-ASR-25")
 model = WhisperModel(
     MODEL_ID,
     device=os.getenv("BREEZE_DEVICE", "auto"),

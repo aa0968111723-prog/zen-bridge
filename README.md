@@ -43,10 +43,10 @@ DASHSCOPE_API_KEY 與 OPENAI_API_KEY 只存於 Cloudflare secret 或 Zeabur Vari
 
 ```sh
 python -m pip install -r sidecar/requirements.txt
-uvicorn sidecar.breeze_asr:app --host 127.0.0.1 --port 8770
+BREEZE_MODEL_PATH=/models/Breeze-ASR-25-ct2 uvicorn sidecar.breeze_asr:app --host 127.0.0.1 --port 8770
 ```
 
-sidecar 啟動時只載入一次 `MediaTek-Research/Breeze-ASR-25`（Apache-2.0），接收 16-bit 單聲道 PCM WAV；模型快取與音檔都留在 sidecar 主機，不納入網站映像或 Git。
+先在 sidecar 主機把 `MediaTek-Research/Breeze-ASR-25`（Apache-2.0）的 Transformers 權重轉成 CTranslate2 目錄，並用 `BREEZE_MODEL_PATH` 指向該目錄；不要把轉換後權重放進本 repository 或網站映像。sidecar 啟動時只載入一次模型，接收 16-bit 單聲道 PCM WAV；模型快取與音檔都留在 sidecar 主機。
 
 伺服器可設定 `OPENAI_TRANSCRIPTION_MODEL` 與 `OPENAI_TRANSLATION_MODEL`。兩條 API 路徑分開實作，日後依你們的社課資料比較再替換。
 

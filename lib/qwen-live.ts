@@ -77,6 +77,7 @@ async function openStream(options:Options,key:string){
   const socket=await connect(options),session:StreamSession={socket,created:Date.now(),pending:null,queue:Promise.resolve({source:'',translation:''})};
   const fail=()=>{const error=new Error('Qwen Live 串流已中斷；請重送最後一個已確認句子。');if(session.pending){clearTimeout(session.pending.timer);session.pending.reject(error);session.pending=null;}streams.delete(key);};
   socket.addEventListener('message',event=>{if(!session.pending||typeof event.data!=='string')return;let body:{type?:string;transcript?:string;text?:string;delta?:string};try{body=JSON.parse(event.data);}catch{return;}
+    if(body.type==='error'){fail();try{socket.close();}catch{}return;}
     if(body.type==='conversation.item.input_audio_transcription.completed')session.pending.source=body.transcript||session.pending.source;
     if(body.type==='response.text.delta')session.pending.translation+=body.delta||'';
     if(body.type==='response.text.done'){session.pending.translation=body.text||session.pending.translation;const pending=session.pending;session.pending=null;clearTimeout(pending.timer);pending.resolve({source:pending.source.trim(),translation:pending.translation.trim()});}
@@ -92,7 +93,7 @@ export async function qwenStreamTranslate(key:string,file:Uint8Array,options:Opt
   session??=await openStream(options,key);
   const active=session,previous=active.queue.catch(()=>({source:'',translation:''}));
   active.queue=previous.then(()=>new Promise<QwenLiveResult>((resolve,reject)=>{
-    const timer=setTimeout(()=>{if(active.pending){active.pending=null;reject(new Error('Qwen Live 串流等待句尾超時。'));}},60000);
+    const timer=setTimeout(()=>{if(active.pending){active.pending=null;streams.delete(key);try{active.socket.close();}catch{}reject(new Error('Qwen Live 串流等待句尾超時。'));}},60000);
     active.pending={source:'',translation:'',resolve,reject,timer};
     try{const pcm=wavToPcm16k(file);for(let i=0;i<pcm.length;i+=1600)active.socket.send(JSON.stringify({type:'input_audio_buffer.append',audio:pcmBase64(pcm,i,Math.min(pcm.length,i+1600))}));active.socket.send(JSON.stringify({type:'input_audio_buffer.commit'}));active.socket.send(JSON.stringify({type:'response.create',response:{output_modalities:['text']}}));}
     catch{clearTimeout(timer);active.pending=null;reject(new Error('Qwen Live 串流送出失敗。'));}

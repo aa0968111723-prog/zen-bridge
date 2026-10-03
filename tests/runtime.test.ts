@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WebSocketServer } from 'ws';
 import { parseEnv, runWithEnv, getEnv, QWEN_MODEL } from '../lib/env';
-import { providerName, resolveSpeech } from '../lib/speech/resolve';
+import { resolveSpeech } from '../lib/speech/resolve';
 import { glossary } from '../lib/speech/glossary';
 import { postgresSql, rows, write, db, putAudio, getAudio, deleteAudio } from '../lib/data';
 import { qwenEndpoint, qwenLiveTranslate } from '../lib/qwen-live';
