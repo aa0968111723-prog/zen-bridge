@@ -86,8 +86,7 @@ export default function Workspace(){
  useEffect(()=>{void refreshMicrophones();const devices=navigator.mediaDevices;devices?.addEventListener('devicechange',refreshMicrophones);return()=>devices?.removeEventListener('devicechange',refreshMicrophones);},[refreshMicrophones]);
  useEffect(()=>{if(!projected)return;const close=(e:KeyboardEvent)=>{if(e.key==='Escape')setProjected(false);};document.addEventListener('keydown',close);return()=>document.removeEventListener('keydown',close);},[projected]);
  useEffect(()=>{setReplyTo(null);},[sessionId]);
- useEffect(()=>{const selected=data.connection.speechOptions.find(x=>x.value===speechProvider);if(!selected?.available&&data.connection.provider)setSpeechProvider(data.connection.provider as typeof speechProvider);setSpeechMode(data.connection.speechMode);},[data.connection.provider,data.connection.speechMode,data.connection.speechOptions,speechProvider]);
- useEffect(()=>{if(!data.connection.qrUrl){setQrData('');return;}void QRCode.toDataURL(data.connection.qrUrl,{width:240,margin:1}).then(setQrData).catch(()=>setQrData(''));},[data.connection.qrUrl]);
+ useEffect(()=>{const generated=data.connection.qrUrl?QRCode.toDataURL(data.connection.qrUrl,{width:240,margin:1}):Promise.resolve('');void generated.then(setQrData).catch(()=>setQrData(''));},[data.connection.qrUrl]);
  useEffect(()=>{if(!recording)return;const timer=setInterval(()=>setElapsed((Date.now()-started.current)/1000),500);return ()=>clearInterval(timer);},[recording]);
  useEffect(()=>{if(recording&&speaking){window.speechSynthesis?.cancel();setSpeaking(false);}},[recording,speaking]);
  const post=async(payload:unknown)=>{const r=await fetch('/api/workspace',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});return response<{id:string}>(r);};

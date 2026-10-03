@@ -4,6 +4,7 @@ import { one, rows, id, saveSegment, translateText, failure } from '@/lib/server
 import { getEnv } from '@/lib/env';
 import { putAudio } from '@/lib/data';
 import { resolveSpeech } from '@/lib/speech/resolve';
+import { providerName } from '@/lib/speech/resolve';
 import { glossary } from '@/lib/speech/glossary';
 import { textTranslationProvider } from '@/lib/translation';
 import type { Memory, Person, Session } from '@/lib/domain';
@@ -26,7 +27,8 @@ export async function POST(request: Request) {
     const requested = z.enum(['breeze', 'qwen-live', 'openai']).optional().parse(form.get('speechProvider') || undefined);
     const speechMode = z.enum(['stream', 'chunk']).parse(form.get('speechMode') || env.SPEECH_MODE);
     const stable = form.get('stable') !== 'false';
-    if (speechMode === 'stream' && requested !== 'qwen-live') throw new Error('只有 Qwen Live 可以使用 stream 送法。');
+    const selected=requested||providerName(env);
+    if (speechMode === 'stream' && selected !== 'qwen-live') throw new Error('只有 Qwen Live 可以使用 stream 送法。');
     const provider = resolveSpeech(env, requested);
     const audio = new Uint8Array(await file.arrayBuffer());
     const memories = await rows<Memory>("SELECT * FROM memories WHERE status='verified' ORDER BY updated_at DESC");

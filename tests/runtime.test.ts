@@ -21,14 +21,13 @@ for (const invalid of ['', 'invalid-' + secret]) {
 }
 for (const [value, expected] of [[undefined, 200], ['0', 200], ['-1', 200], ['1001', 1000], ['12.9', 12], ['bad', 200]] as const) assert.equal(parseEnv({ HOTWORD_LIMIT: value }).HOTWORD_LIMIT, expected);
 for (const [settings, expected] of [
-  [{ DASHSCOPE_API_KEY: secret }, 'qwen-live'],
-  [{ OPENAI_API_KEY: secret }, 'openai'],
-  [{ DASHSCOPE_API_KEY: secret, OPENAI_API_KEY: secret }, 'qwen-live'],
+  [{ DASHSCOPE_API_KEY: secret, SPEECH_PROVIDER: 'qwen-live' }, 'qwen-live'],
+  [{ OPENAI_API_KEY: secret, SPEECH_PROVIDER: 'openai' }, 'openai'],
+  [{ BREEZE_ASR_URL: 'http://127.0.0.1:8770/transcribe' }, 'breeze'],
   [{ DASHSCOPE_API_KEY: secret, OPENAI_API_KEY: secret, SPEECH_PROVIDER: 'openai' }, 'openai'],
-  [{ OPENAI_API_KEY: secret, SPEECH_PROVIDER: 'qwen' }, 'openai'],
 ] as const) assert.equal(resolveSpeech(parseEnv(settings)).name, expected);
-assert.throws(() => resolveSpeech(parseEnv({})), { message: '語音服務尚未連接。請設定 DASHSCOPE_API_KEY 或 OPENAI_API_KEY。' });
-assert.throws(() => providerName(parseEnv({ SPEECH_PROVIDER: 'invalid-' + secret, OPENAI_API_KEY: secret })), { message: '不支援的 SPEECH_PROVIDER。目前可用：qwen、openai。' });
+assert.throws(() => resolveSpeech(parseEnv({})), { message: '語音服務尚未連接。請設定所選服務需要的連線資訊。' });
+assert.throws(() => parseEnv({ SPEECH_PROVIDER: 'invalid-' + secret }), /SPEECH_PROVIDER/);
 const examples = [
   { status: 'candidate' as const, zh: '候選', en: 'candidate' },
   { status: 'archived' as const, zh: '封存', en: 'archived' },
@@ -108,9 +107,9 @@ try {
   assert.equal(live.source, source); assert.equal(live.translation, translation);
   const bad = wav(); new DataView(bad.buffer).setUint32(40, bad.length, true);
   await assert.rejects(qwenLiveTranslate(bad, { apiKey: secret, platform: 'cloudflare', direction: 'zh-en', phrases: {} }), /WAV/);
-  const qwen = await resolveSpeech(parseEnv({ DASHSCOPE_API_KEY: secret })).transcribe({ audio: wav(), filename: 'speech.wav', mime: 'audio/wav', direction: 'zh-en', phrases: {}, topic: '', speakerNote: '', auto: true, speakerKey: crypto.randomUUID() });
+  const qwen = await resolveSpeech(parseEnv({ DASHSCOPE_API_KEY: secret, SPEECH_PROVIDER: 'qwen-live' })).transcribe({ audio: wav(), filename: 'speech.wav', mime: 'audio/wav', direction: 'zh-en', phrases: {}, topic: '', speakerNote: '', auto: true, speakerKey: crypto.randomUUID() });
   assert.equal(qwen[0].speakerKey, null); assert.match(qwen[0].note, /不套用講者聲紋/);
-  const openai = await resolveSpeech(parseEnv({ OPENAI_API_KEY: secret })).transcribe({ audio: wav(), filename: 'speech.wav', mime: 'audio/wav', direction: 'zh-en', phrases: {}, topic: '', speakerNote: '', auto: false });
+  const openai = await resolveSpeech(parseEnv({ OPENAI_API_KEY: secret, SPEECH_PROVIDER: 'openai' })).transcribe({ audio: wav(), filename: 'speech.wav', mime: 'audio/wav', direction: 'zh-en', phrases: {}, topic: '', speakerNote: '', auto: false });
   assert.equal(openai[0].translation, '');
 
   const sid = crypto.randomUUID(), saved: unknown[][] = [];
@@ -121,23 +120,24 @@ try {
   } }; } }; } } as unknown as D1Database;
   async function audioRequest(bindings: Cloudflare.Env) {
     const form = new FormData(); form.set('sessionId', sid); form.set('auto', 'true');
+    form.set('speechMode', 'chunk');
     form.set('audio', new File([wav()], 'speech.wav', { type: 'audio/wav' }));
     return runWithEnv({ ...bindings, DB: d1, DEPLOY_TARGET: 'cloudflare' }, () => POST(new Request('http://test/api/audio', { method: 'POST', body: form })));
   }
-  assert.equal((await runWithEnv({ DB: d1, DASHSCOPE_API_KEY: secret }, () => workspace())).connection.speech, true);
-  const state = await runWithEnv({ DB: d1, DASHSCOPE_API_KEY: secret }, () => workspace());
+  assert.equal((await runWithEnv({ DB: d1, DASHSCOPE_API_KEY: secret, SPEECH_PROVIDER: 'qwen-live' }, () => workspace())).connection.speech, true);
+  const state = await runWithEnv({ DB: d1, DASHSCOPE_API_KEY: secret, SPEECH_PROVIDER: 'qwen-live' }, () => workspace());
   assert.equal(state.connection.provider, 'qwen-live'); assert.equal(state.connection.asr, QWEN_MODEL);
   assert.ok(!JSON.stringify(state).includes(secret));
-  assert.equal((await (await audioRequest({ DASHSCOPE_API_KEY: secret })).json() as {provider:string}).provider, 'qwen-live');
+  assert.equal((await (await audioRequest({ DASHSCOPE_API_KEY: secret, SPEECH_PROVIDER: 'qwen-live' })).json() as {provider:string}).provider, 'qwen-live');
   assert.equal(saved.at(-1)![2], null); assert.equal(saved.at(-1)![11], null); // no voiceprint, no R2 => empty audio key
   translation = '';
-  await audioRequest({ DASHSCOPE_API_KEY: secret }); assert.equal(translateCalls, 0);
-  await audioRequest({ DASHSCOPE_API_KEY: secret, OPENAI_API_KEY: secret }); assert.equal(saved.at(-1)![7], 'Fallback English');
+  await audioRequest({ DASHSCOPE_API_KEY: secret, SPEECH_PROVIDER: 'qwen-live' }); assert.equal(translateCalls, 0);
+  await audioRequest({ DASHSCOPE_API_KEY: secret, OPENAI_API_KEY: secret, SPEECH_PROVIDER: 'qwen-live' }); assert.equal(saved.at(-1)![7], 'Fallback English');
   fallbackFails = true;
-  assert.equal((await audioRequest({ DASHSCOPE_API_KEY: secret, OPENAI_API_KEY: secret })).status, 200);
+  assert.equal((await audioRequest({ DASHSCOPE_API_KEY: secret, OPENAI_API_KEY: secret, SPEECH_PROVIDER: 'qwen-live' })).status, 200);
   assert.match(saved.at(-1)![10] as string, /補譯失敗/);
   source = '';
-  assert.equal((await (await audioRequest({ DASHSCOPE_API_KEY: secret })).json() as {error:string}).error, '這一段沒有辨識出文字');
+  assert.equal((await (await audioRequest({ DASHSCOPE_API_KEY: secret, SPEECH_PROVIDER: 'qwen-live' })).json() as {error:string}).error, '這一段沒有辨識出文字');
   // Manual translation goes over HTTP and never starts a Qwen socket.
   fallbackFails = false;
   const before = upgradeCount;
