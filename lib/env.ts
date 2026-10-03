@@ -2,10 +2,11 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 export type DeployTarget = 'cloudflare' | 'zeabur';
 type RawEnv = Partial<Record<
-  'DASHSCOPE_API_KEY' | 'DASHSCOPE_REGION' | 'QWEN_LIVE_MODEL' | 'SPEECH_PROVIDER' |
+  'DASHSCOPE_API_KEY' | 'DASHSCOPE_REGION' | 'QWEN_LIVE_MODEL' | 'SPEECH_PROVIDER' | 'SPEECH_MODE' |
   'HOTWORD_LIMIT' | 'OPENAI_API_KEY' | 'OPENAI_TRANSCRIPTION_MODEL' |
   'OPENAI_TRANSLATION_MODEL' | 'DATABASE_URL' | 'DEPLOY_TARGET' | 'AUDIO_DIR' |
-  'HERMES_API_URL' | 'HERMES_API_KEY' | 'HERMES_TRANSLATION_MODEL' | 'TRANSLATION_PROVIDER', string>>;
+  'HERMES_API_URL' | 'HERMES_API_KEY' | 'HERMES_TRANSLATION_MODEL' | 'TRANSLATION_PROVIDER' |
+  'BREEZE_ASR_URL' | 'PUBLIC_BASE_URL' | 'SHARE', string>>;
 const context = new AsyncLocalStorage<Cloudflare.Env>();
 export const QWEN_MODEL = 'qwen3.8-livetranslate-flash-realtime';
 
@@ -18,6 +19,24 @@ export function parseEnv(raw: RawEnv) {
   if (raw.TRANSLATION_PROVIDER !== undefined && raw.TRANSLATION_PROVIDER !== 'hermes' && raw.TRANSLATION_PROVIDER !== 'openai') {
     throw new Error('TRANSLATION_PROVIDER 必須為 hermes 或 openai。');
   }
+  if (raw.SPEECH_PROVIDER !== undefined && !['breeze', 'qwen-live', 'openai'].includes(raw.SPEECH_PROVIDER)) {
+    throw new Error('SPEECH_PROVIDER 必須為 breeze、qwen-live 或 openai。');
+  }
+  if (raw.SPEECH_MODE !== undefined && raw.SPEECH_MODE !== 'stream' && raw.SPEECH_MODE !== 'chunk') {
+    throw new Error('SPEECH_MODE 必須為 stream 或 chunk。');
+  }
+  if (raw.SHARE !== undefined && raw.SHARE !== 'off' && raw.SHARE !== 'room') {
+    throw new Error('SHARE 必須為 off 或 room。');
+  }
+  const validateUrl = (value: string | undefined, name: string, localOnly = false) => {
+    if (!value) return undefined;
+    try {
+      const url = new URL(value);
+      const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+      if (url.username || url.password || url.search || url.hash || !['http:', 'https:'].includes(url.protocol) || (localOnly && !local)) throw new Error();
+      return url.toString().replace(/\/$/, '');
+    } catch { throw new Error(`${name} 格式不正確。`); }
+  };
   if (raw.HERMES_API_URL) {
     try {
       const url = new URL(raw.HERMES_API_URL);
@@ -33,7 +52,8 @@ export function parseEnv(raw: RawEnv) {
     DASHSCOPE_API_KEY: raw.DASHSCOPE_API_KEY,
     DASHSCOPE_REGION: raw.DASHSCOPE_REGION ?? 'intl',
     QWEN_LIVE_MODEL: raw.QWEN_LIVE_MODEL || QWEN_MODEL,
-    SPEECH_PROVIDER: raw.SPEECH_PROVIDER,
+    SPEECH_PROVIDER: raw.SPEECH_PROVIDER ?? 'breeze',
+    SPEECH_MODE: raw.SPEECH_MODE ?? (raw.SPEECH_PROVIDER === 'qwen-live' ? 'stream' : 'chunk'),
     HOTWORD_LIMIT: !Number.isFinite(n) || n < 1 ? 200 : Math.min(1000, Math.floor(n)),
     OPENAI_API_KEY: raw.OPENAI_API_KEY,
     OPENAI_TRANSCRIPTION_MODEL: raw.OPENAI_TRANSCRIPTION_MODEL || 'gpt-transcribe',
@@ -45,6 +65,9 @@ export function parseEnv(raw: RawEnv) {
     HERMES_API_KEY: raw.HERMES_API_KEY,
     HERMES_TRANSLATION_MODEL: raw.HERMES_TRANSLATION_MODEL || 'hermes-agent',
     TRANSLATION_PROVIDER: raw.TRANSLATION_PROVIDER,
+    BREEZE_ASR_URL: validateUrl(raw.BREEZE_ASR_URL, 'BREEZE_ASR_URL', true),
+    PUBLIC_BASE_URL: validateUrl(raw.PUBLIC_BASE_URL, 'PUBLIC_BASE_URL'),
+    SHARE: raw.SHARE ?? 'room',
   };
 }
 export type AppEnv = ReturnType<typeof parseEnv>;

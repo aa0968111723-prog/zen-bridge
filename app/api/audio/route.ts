@@ -22,7 +22,11 @@ export async function POST(request: Request) {
     if (!session) throw new Error('找不到活動。');
     const person = personId ? await one<Person>('SELECT * FROM people WHERE id=?', personId) : null;
     if (personId && !person) throw new Error('找不到講者。');
-    const env = getEnv(), provider = resolveSpeech(env);
+    const env = getEnv();
+    const requested = z.enum(['breeze', 'qwen-live', 'openai']).optional().parse(form.get('speechProvider') || undefined);
+    const speechMode = z.enum(['stream', 'chunk']).parse(form.get('speechMode') || env.SPEECH_MODE);
+    if (speechMode === 'stream' && requested !== 'qwen-live') throw new Error('只有 Qwen Live 可以使用 stream 送法。');
+    const provider = resolveSpeech(env, requested);
     const audio = new Uint8Array(await file.arrayBuffer());
     const audioKey = await putAudio('recordings/' + sessionId + '/' + id(), audio, file.type || 'audio/wav');
     const memories = await rows<Memory>("SELECT * FROM memories WHERE status='verified' ORDER BY updated_at DESC");
