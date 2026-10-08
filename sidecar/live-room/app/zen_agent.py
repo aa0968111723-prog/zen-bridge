@@ -52,6 +52,9 @@ async def run_agent(asr):
                     except (ValueError, OSError, wave.Error, KeyError):
                         response['error'] = 'Invalid local audio request'
                     await socket.send(json.dumps(response, ensure_ascii=True))
+                    if not asr.health():
+                        await socket.close(code=1011, reason='Local model needs restart')
+                        break
         except asyncio.CancelledError:
             raise
         except Exception:

@@ -47,8 +47,8 @@ internal sealed class BreezeWindow : Form {
         if (File.Exists(icon)) Icon = new Icon(icon);
         menu.Items.Add("檢查更新", null, async delegate { await CheckUpdates(); });
         menu.Items.Add("本機設定", null, delegate { Process.Start("explorer.exe", "\"" + root + "\""); });
-        menu.Items.Add("怎麼用", null, delegate { MessageBox.Show("1. 按「開始聽」，並允許麥克風。\n2. 對著電腦說話，下面會出現中文字幕。\n3. 聽眾用手機掃描畫面上的 QR。\n\n關閉此視窗會停止字幕。", "怎麼用"); });
-        menu.Items.Add("關於", null, delegate { MessageBox.Show("禪譯 Zen Bridge " + File.ReadAllText(Path.Combine(root,"VERSION")).Trim() + "\n本機中文字幕 · 同一個 Wi-Fi 的手機可看\n關閉此視窗會停止字幕服務。", "關於"); });
+        menu.Items.Add("怎麼用", null, delegate { MessageBox.Show("1. 在主介面建立或選擇社課。\n2. 選擇麥克風與發言語言，再開始收音。\n3. 聽眾用手機掃描 QR 看保存的譯文。\n\n關閉此視窗會停止字幕。", "怎麼用"); });
+        menu.Items.Add("關於", null, delegate { MessageBox.Show("禪譯 Zen Bridge " + File.ReadAllText(Path.Combine(root,"VERSION")).Trim() + "\n本機中文字幕 · 手機掃 QR 可看保存的譯文\n關閉此視窗會停止字幕服務。", "關於"); });
         Controls.Add(browser); Controls.Add(status); Controls.Add(menu);
         MainMenuStrip = menu;
         Shown += async delegate { await StartApp(); };

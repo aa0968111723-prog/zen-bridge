@@ -43,13 +43,15 @@ jobs:
           name: zen-tencent-runtime
       - name: Publish the checked release
         env:
-          HOST: ${{ secrets.ZEN_SSH_HOST }}
-          USER: ${{ secrets.ZEN_SSH_USER }}
+          DEPLOY_HOST: ${{ secrets.ZEN_SSH_HOST }}
+          DEPLOY_USER: ${{ secrets.ZEN_SSH_USER }}
           PRIVATE_KEY: ${{ secrets.ZEN_SSH_PRIVATE_KEY }}
           HOST_KEY: ${{ secrets.ZEN_SSH_HOST_KEY }}
         run: |
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "$HOST_KEY" > ~/.ssh/known_hosts
-          cat zen-runtime.tgz | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" publish "$GITHUB_SHA"
+          printf '%s\n' "$HOST_KEY" | tr -d '\r' > ~/.ssh/known_hosts
+          deploy_host=$(printf '%s' "$DEPLOY_HOST" | tr -d '\r\n')
+          deploy_user=$(printf '%s' "$DEPLOY_USER" | tr -d '\r\n')
+          cat zen-runtime.tgz | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$deploy_user@$deploy_host" publish "$GITHUB_SHA"
