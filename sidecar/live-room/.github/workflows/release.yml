@@ -1,0 +1,106 @@
+name: Windows release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements-lock.txt -r requirements-dev.txt
+      - run: python -m pytest tests
+      - run: node tests/recorder_machine.test.mjs
+      - run: node tests/room_client.test.mjs
+      - name: Verify clean one-click installation and real inference
+        shell: pwsh
+        env:
+          BREEZE_NONINTERACTIVE: '1'
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'Breeze release 測試'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Get-ChildItem -Force | Where-Object { $_.Name -ne '.git' } | Copy-Item -Destination $target -Recurse
+          Push-Location $target
+          try {
+            cmd /c install.bat
+            if ($LASTEXITCODE) { throw 'Installation failed' }
+            cmd /c verify.bat
+            if ($LASTEXITCODE) { throw 'Inference failed' }
+          } finally { Pop-Location }
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -ne ('v' + (Get-Content VERSION -Raw).Trim())) { throw 'Tag and VERSION differ' }
+      - name: Install pinned Inno Setup compiler
+        shell: pwsh
+        run: |
+          $asset = (Get-Content desktop/desktop-manifest.json -Raw | ConvertFrom-Json).inno_setup
+          $installer = Join-Path $env:RUNNER_TEMP 'inno-setup.exe'
+          Invoke-WebRequest $asset.url -OutFile $installer
+          if ((Get-FileHash $installer -Algorithm SHA256).Hash.ToLower() -ne $asset.sha256) { throw 'Compiler checksum mismatch' }
+          $directory = Join-Path $env:RUNNER_TEMP 'InnoSetup'
+          $arguments = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/CURRENTUSER',('/DIR="'+$directory+'"'))
+          $process = Start-Process $installer -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Compiler installation failed' }
+          "INNO_SETUP=$directory\ISCC.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Build offline App setup
+        run: python scripts/build_setup.py --payload build/app-payload --output dist --assets "${{ runner.temp }}/Breeze release 測試"
+      - name: Test Setup, App startup, shutdown and reinstall preservation
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'Breeze app 測試'
+          $setup = (Resolve-Path 'dist/Breeze-Live-Room-Setup.exe').Path
+          $arguments = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',('/DIR="'+$target+'"'))
+          $process = Start-Process $setup -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'App setup failed' }
+          $before = (Get-FileHash (Join-Path $target '.env')).Hash
+          Set-Content (Join-Path $target 'data/preservation-check.txt') 'keep-user-data'
+          $app = Start-Process (Join-Path $target 'Breeze.exe') -ArgumentList '--smoke-test' -PassThru
+          if (-not $app.WaitForExit(240000)) { Stop-Process -Id $app.Id; throw 'App startup timeout' }
+          if ($app.ExitCode -ne 0 -or -not (Test-Path (Join-Path $target 'data/desktop-smoke.json'))) { throw 'WebView App smoke test failed' }
+          $leftovers = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.ExecutablePath -like ($target+'*') }
+          if ($leftovers) { throw 'App left backend processes running' }
+          $process = Start-Process $setup -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Reinstall failed' }
+          if ((Get-FileHash (Join-Path $target '.env')).Hash -ne $before) { throw 'Setup overwrote user settings' }
+          if ((Get-Content (Join-Path $target 'data/preservation-check.txt')).Trim() -ne 'keep-user-data') { throw 'Setup removed user data' }
+      - run: python scripts/package_release.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Breeze-Windows-installer
+          path: |
+            dist/Breeze-Live-Room-Setup.exe
+            dist/Breeze-Live-Room-Setup.exe.sha256
+            dist/Breeze-Live-Room-Windows.zip
+            dist/Breeze-Live-Room-Windows.zip.sha256
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: Windows-inference-report
+          path: ${{ runner.temp }}/Breeze release 測試/data/runtime-check.json
+          if-no-files-found: ignore
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: Breeze-Windows-installer
+          path: dist
+      - name: Publish verified installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "Breeze Live Room $GITHUB_REF_NAME" --generate-notes

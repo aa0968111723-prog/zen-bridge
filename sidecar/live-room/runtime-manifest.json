@@ -1,0 +1,26 @@
+{
+  "verified_at": "2026-10-05",
+  "assets": {
+    "model": {
+      "name": "ggml-breeze-asr-25-q5_0.bin",
+      "version": "36c726093efe1760d1dd39c3cfe8b6a7282437d1",
+      "url": "https://huggingface.co/shdennlin/breeze-asr-25-ggml/resolve/36c726093efe1760d1dd39c3cfe8b6a7282437d1/ggml-breeze-asr-25-q5_0.bin",
+      "sha256": "f51573bd6ef9b1fac0bd09a1652eda58a1a638d824a08771ccdee1102fe5990a",
+      "size": 1080732091
+    },
+    "whisper": {
+      "name": "whisper-bin-x64.zip",
+      "version": "v1.9.2",
+      "url": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip",
+      "sha256": "49dcc16de826f20bd53d44f947a1ae49dfa81f86cad67a64d80820cb192d674a",
+      "size": 8194445
+    },
+    "ffmpeg": {
+      "name": "ffmpeg-9.0.2-essentials_build.zip",
+      "version": "9.0.2",
+      "url": "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip",
+      "sha256": "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba",
+      "size": 114768076
+    }
+  }
+}
