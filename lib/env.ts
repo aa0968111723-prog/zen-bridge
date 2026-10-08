@@ -6,7 +6,7 @@ type RawEnv = Partial<Record<
   'HOTWORD_LIMIT' | 'OPENAI_API_KEY' | 'OPENAI_TRANSCRIPTION_MODEL' |
   'OPENAI_TRANSLATION_MODEL' | 'DATABASE_URL' | 'DEPLOY_TARGET' | 'AUDIO_DIR' |
   'HERMES_API_URL' | 'HERMES_API_KEY' | 'HERMES_TRANSLATION_MODEL' | 'TRANSLATION_PROVIDER' |
-  'BREEZE_ASR_URL' | 'PUBLIC_BASE_URL' | 'SHARE', string>>;
+  'BREEZE_ASR_URL' | 'BREEZE_AGENT_TOKEN' | 'PUBLIC_BASE_URL' | 'SHARE', string>>;
 const context = new AsyncLocalStorage<Cloudflare.Env>();
 export const QWEN_MODEL = 'qwen3.8-livetranslate-flash-realtime';
 
@@ -47,13 +47,14 @@ export function parseEnv(raw: RawEnv) {
     } catch { throw new Error('HERMES_API_URL 格式不正確。'); }
   }
   if (raw.HERMES_API_KEY && /[\r\n]/.test(raw.HERMES_API_KEY)) throw new Error('HERMES_API_KEY 格式不正確。');
+  if (raw.BREEZE_AGENT_TOKEN && (raw.BREEZE_AGENT_TOKEN.length < 32 || /[\r\n]/.test(raw.BREEZE_AGENT_TOKEN))) throw new Error('BREEZE_AGENT_TOKEN 格式不正確。');
   const n = Number(raw.HOTWORD_LIMIT ?? 200);
   return {
     DASHSCOPE_API_KEY: raw.DASHSCOPE_API_KEY,
     DASHSCOPE_REGION: raw.DASHSCOPE_REGION ?? 'intl',
     QWEN_LIVE_MODEL: raw.QWEN_LIVE_MODEL || QWEN_MODEL,
     SPEECH_PROVIDER: raw.SPEECH_PROVIDER ?? 'breeze',
-    SPEECH_MODE: raw.SPEECH_MODE ?? (raw.SPEECH_PROVIDER === 'qwen-live' ? 'stream' : 'chunk'),
+    SPEECH_MODE: (raw.SPEECH_MODE ?? (raw.SPEECH_PROVIDER === 'qwen-live' ? 'stream' : 'chunk')) as 'stream' | 'chunk',
     HOTWORD_LIMIT: !Number.isFinite(n) || n < 1 ? 200 : Math.min(1000, Math.floor(n)),
     OPENAI_API_KEY: raw.OPENAI_API_KEY,
     OPENAI_TRANSCRIPTION_MODEL: raw.OPENAI_TRANSCRIPTION_MODEL || 'gpt-transcribe',
@@ -66,8 +67,9 @@ export function parseEnv(raw: RawEnv) {
     HERMES_TRANSLATION_MODEL: raw.HERMES_TRANSLATION_MODEL || 'hermes-agent',
     TRANSLATION_PROVIDER: raw.TRANSLATION_PROVIDER,
     BREEZE_ASR_URL: validateUrl(raw.BREEZE_ASR_URL, 'BREEZE_ASR_URL', true),
+    BREEZE_AGENT_TOKEN: raw.BREEZE_AGENT_TOKEN,
     PUBLIC_BASE_URL: validateUrl(raw.PUBLIC_BASE_URL, 'PUBLIC_BASE_URL'),
-    SHARE: raw.SHARE ?? 'room',
+    SHARE: (raw.SHARE ?? 'room') as 'off' | 'room',
   };
 }
 export type AppEnv = ReturnType<typeof parseEnv>;

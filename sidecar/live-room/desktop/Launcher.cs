@@ -25,7 +25,7 @@ internal sealed class BreezeWindow : Form {
     Process service;
     IntPtr job;
     bool closing, stopped, ready, jobAssigned;
-    string url, rememberedError;
+    string url, rememberedError, uiUrl, hostToken;
     int port;
     readonly bool smoke = Array.IndexOf(Environment.GetCommandLineArgs(), "--smoke-test") >= 0;
 
@@ -40,15 +40,15 @@ internal sealed class BreezeWindow : Form {
     }
 
     BreezeWindow() {
-        Text = "禪譯聽眾房";
+        Text = "禪譯 Zen Bridge";
         Width = 1260; Height = 840; MinimumSize = new Size(880, 600);
         StartPosition = FormStartPosition.CenterScreen;
         string icon = Path.Combine(root, "desktop", "breeze.ico");
         if (File.Exists(icon)) Icon = new Icon(icon);
         menu.Items.Add("檢查更新", null, async delegate { await CheckUpdates(); });
-        menu.Items.Add("字幕資料", null, delegate { Process.Start("explorer.exe", "\"" + Path.Combine(root, "data") + "\""); });
-        menu.Items.Add("怎麼用", null, delegate { MessageBox.Show("1. 按「開始聽」，並允許麥克風。\n2. 對著電腦說話，下面會出現中文字幕。\n3. 手機連同一個 Wi-Fi，掃描畫面上的 QR。\n\n關閉此視窗會停止字幕。", "怎麼用"); });
-        menu.Items.Add("關於", null, delegate { MessageBox.Show("禪譯聽眾房 " + File.ReadAllText(Path.Combine(root,"VERSION")).Trim() + "\n本機中文字幕 · 同一個 Wi-Fi 的手機可看\n關閉此視窗會停止字幕服務。", "關於"); });
+        menu.Items.Add("本機設定", null, delegate { Process.Start("explorer.exe", "\"" + root + "\""); });
+        menu.Items.Add("怎麼用", null, delegate { MessageBox.Show("1. 按「開始聽」，並允許麥克風。\n2. 對著電腦說話，下面會出現中文字幕。\n3. 聽眾用手機掃描畫面上的 QR。\n\n關閉此視窗會停止字幕。", "怎麼用"); });
+        menu.Items.Add("關於", null, delegate { MessageBox.Show("禪譯 Zen Bridge " + File.ReadAllText(Path.Combine(root,"VERSION")).Trim() + "\n本機中文字幕 · 同一個 Wi-Fi 的手機可看\n關閉此視窗會停止字幕服務。", "關於"); });
         Controls.Add(browser); Controls.Add(status); Controls.Add(menu);
         MainMenuStrip = menu;
         Shown += async delegate { await StartApp(); };
@@ -70,9 +70,29 @@ internal sealed class BreezeWindow : Form {
             Directory.CreateDirectory(Path.Combine(root,"logs"));
             port = 8780;
             var envFile = Path.Combine(root,".env");
+            var pairing = new Dictionary<string,string>();
             if (File.Exists(envFile)) foreach (var raw in File.ReadAllLines(envFile, Encoding.UTF8)) {
                 var line = raw.Trim();
                 if (line.StartsWith("BREEZE_PORT=")) port = int.Parse(line.Substring(12).Trim().Trim('"','\''));
+                int equals = line.IndexOf('=');
+                if (equals > 0 && !line.StartsWith("#")) pairing[line.Substring(0,equals).Trim()] = line.Substring(equals+1).Trim().Trim('"','\'');
+            }
+            uiUrl = pairing.ContainsKey("ZEN_BRIDGE_UI_URL") ? pairing["ZEN_BRIDGE_UI_URL"] : "https://vexlark.co";
+            var ui = new Uri(uiUrl);
+            if (ui.Scheme != "https" || !String.IsNullOrEmpty(ui.UserInfo) || !String.IsNullOrEmpty(ui.Query) || !String.IsNullOrEmpty(ui.Fragment)) throw new Exception("禪譯主介面必須使用有效的 HTTPS 網址。");
+            uiUrl = ui.GetLeftPart(UriPartial.Authority);
+            hostToken = pairing.ContainsKey("ZEN_BRIDGE_AGENT_TOKEN") ? pairing["ZEN_BRIDGE_AGENT_TOKEN"] : "";
+            if (hostToken.Length < 32) {
+                using (var prompt = new Form { Text="連接主持電腦", Width=460, Height=190, StartPosition=FormStartPosition.CenterParent, FormBorderStyle=FormBorderStyle.FixedDialog, MinimizeBox=false, MaximizeBox=false }) {
+                    var label = new Label { Text="請貼上管理員提供的主持連線碼。\n連線碼只保存於這台電腦。", Left=18,Top=14,Width=410,Height=42 };
+                    var input = new TextBox { Left=18,Top=64,Width=410,UseSystemPasswordChar=true };
+                    var accept = new Button { Text="連接",Left=330,Top=100,Width=98,DialogResult=DialogResult.OK };
+                    prompt.Controls.Add(label); prompt.Controls.Add(input); prompt.Controls.Add(accept); prompt.AcceptButton=accept;
+                    if (prompt.ShowDialog(this) != DialogResult.OK) throw new Exception("主持連線尚未設定。");
+                    hostToken=input.Text.Trim();
+                }
+                if (hostToken.Length < 32 || hostToken.Contains("\n") || hostToken.Contains("\r")) throw new Exception("主持連線碼格式不正確。");
+                File.AppendAllText(envFile,Environment.NewLine+"ZEN_BRIDGE_AGENT_TOKEN="+hostToken+Environment.NewLine,Encoding.UTF8);
             }
             var portEnvironment = Environment.GetEnvironmentVariable("BREEZE_PORT");
             if (!String.IsNullOrWhiteSpace(portEnvironment)) port = int.Parse(portEnvironment);
@@ -90,6 +110,9 @@ internal sealed class BreezeWindow : Form {
             info.EnvironmentVariables["BREEZE_OPEN_BROWSER"] = "0";
             info.EnvironmentVariables["BREEZE_ASR"] = "native";
             info.EnvironmentVariables["BREEZE_DESKTOP_INSTANCE"] = instance;
+            info.EnvironmentVariables["ZEN_BRIDGE_UI_URL"] = uiUrl;
+            info.EnvironmentVariables["ZEN_BRIDGE_AGENT_URL"] = pairing.ContainsKey("ZEN_BRIDGE_AGENT_URL") ? pairing["ZEN_BRIDGE_AGENT_URL"] : "wss://"+ui.Authority+"/asr-agent";
+            info.EnvironmentVariables["ZEN_BRIDGE_AGENT_TOKEN"] = hostToken;
             info.EnvironmentVariables["PYTHONNOUSERSITE"] = "1";
             info.EnvironmentVariables.Remove("SSLKEYLOGFILE");
             info.EnvironmentVariables.Remove("PYTHONPATH");
@@ -129,11 +152,16 @@ internal sealed class BreezeWindow : Form {
             await browser.EnsureCoreWebView2Async(environment);
             browser.CoreWebView2.Settings.AreDevToolsEnabled = false;
             browser.CoreWebView2.Settings.IsStatusBarEnabled = false;
+            browser.CoreWebView2.AddWebResourceRequestedFilter(uiUrl+"/api/*",CoreWebView2WebResourceContext.All);
+            browser.CoreWebView2.WebResourceRequested += (s,e) => {
+                Uri request;
+                if (Uri.TryCreate(e.Request.Uri,UriKind.Absolute,out request) && request.GetLeftPart(UriPartial.Authority)==uiUrl) e.Request.Headers.SetHeader("X-Zen-Host",hostToken);
+            };
             browser.CoreWebView2.NavigationStarting += (s,e) => {
-                Uri target; if (Uri.TryCreate(e.Uri,UriKind.Absolute,out target) && target.GetLeftPart(UriPartial.Authority) != url) e.Cancel = true;
+                Uri target; if (Uri.TryCreate(e.Uri,UriKind.Absolute,out target) && target.GetLeftPart(UriPartial.Authority) != uiUrl) e.Cancel = true;
             };
             browser.CoreWebView2.NewWindowRequested += (s,e) => { e.Handled = true; Uri target; if (Uri.TryCreate(e.Uri,UriKind.Absolute,out target) && (target.Scheme=="http" || target.Scheme=="https")) OpenWeb(e.Uri); };
-            browser.CoreWebView2.PermissionRequested += (s,e) => { if (!e.Uri.StartsWith(url+"/") || e.PermissionKind != CoreWebView2PermissionKind.Microphone) e.State = CoreWebView2PermissionState.Deny; };
+            browser.CoreWebView2.PermissionRequested += (s,e) => { if (!e.Uri.StartsWith(uiUrl+"/") || e.PermissionKind != CoreWebView2PermissionKind.Microphone) e.State = CoreWebView2PermissionState.Deny; };
             browser.CoreWebView2.NavigationCompleted += async (s,e) => {
                 if (!e.IsSuccess) { Log("WebView navigation failed: " + e.WebErrorStatus); return; }
                 if (smoke) {
@@ -142,7 +170,7 @@ internal sealed class BreezeWindow : Form {
                     await Task.Delay(1000); Close();
                 }
             };
-            status.Visible = false; browser.Visible = true; browser.CoreWebView2.Navigate(url + "/");
+            status.Visible = false; browser.Visible = true; browser.CoreWebView2.Navigate(uiUrl + "/");
         } catch (Exception ex) {
             Log(ex.ToString());
             status.Text = "啟動沒有完成\n\n" + ex.Message + "\n\n可以關閉視窗後再開一次，或重新執行安裝程式。";
@@ -217,7 +245,7 @@ internal sealed class BreezeWindow : Form {
             state = Convert.ToString(parsed["status"]);
             if (state != "ready") throw new Exception(parsed.ContainsKey("message") ? Convert.ToString(parsed["message"]) : "下載未完成。");
             string path = Convert.ToString(parsed["path"]);
-            if (!File.Exists(path) || Path.GetFileName(path) != "Breeze-Live-Room-Setup.exe") throw new Exception("更新檔無效。");
+            if (!File.Exists(path) || Path.GetFileName(path) != "Zen-Bridge-Setup.exe") throw new Exception("更新檔無效。");
             await StopService();
             stopped = true;
             Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });

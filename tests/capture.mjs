@@ -17,3 +17,15 @@ let interrupted=0;const recording=await sandbox.exports.capture(()=>chunks++,()=
 for(let i=0;i<35;i++)node.onaudioprocess(frame);assert.equal(chunks,1,'normal recording should still emit 8-second chunks');ended();assert.equal(interrupted,1);assert.equal(trackStopped,2);recording.stop();assert.equal(trackStopped,2);
 failContext=true;await assert.rejects(sandbox.exports.capture(()=>{},()=>{}));assert.equal(trackStopped,3,'setup failures must release microphone');
 console.log('PASS: selected USB device, level meter, no test audio emitted, recording chunks, interruption cleanup, idempotent stop, setup failure cleanup');
+const converted=await sandbox.exports.wav(new Float32Array(48000).fill(.1),48000,16000).arrayBuffer();
+assert.equal(new DataView(converted).getUint32(24,true),16000);
+assert.equal(converted.byteLength,44+16000*2);
+failContext=false;
+let pause=true,emitted=[];
+const backpressure=await sandbox.exports.capture((audio,offset)=>emitted.push(offset),()=>{},{windowSeconds:1,isPaused:()=>pause});
+for(let i=0;i<5;i++)node.onaudioprocess(frame);
+assert.equal(emitted.length,0);
+pause=false;for(let i=0;i<4;i++)node.onaudioprocess(frame);
+assert.equal(emitted.length,1);assert.ok(emitted[0]>=1,'waiting time must remain on the caption timeline');
+backpressure.stop();
+console.log('PASS: 48kHz to PCM16/16kHz conversion and bounded pause timeline');

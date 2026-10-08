@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 from scripts.install_runtime import sha256
 from scripts.prepare_desktop import prepare
 
-SETUP_NAME = "Breeze-Live-Room-Setup.exe"
+SETUP_NAME = "Zen-Bridge-Setup.exe"
 
 
 def find_iscc() -> Path:

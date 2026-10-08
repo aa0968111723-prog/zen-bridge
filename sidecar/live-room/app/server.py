@@ -797,6 +797,9 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if os.getenv('ZEN_BRIDGE_AGENT_URL'):
+            from app.zen_agent import run_agent
+            tasks.append(asyncio.create_task(run_agent(asr)))
         pipeline.ensure_workers()
         tasks.append(asyncio.create_task(sweep_loop()))
         # After create_app returns the bus is still empty (tests depend on that).

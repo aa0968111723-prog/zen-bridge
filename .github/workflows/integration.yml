@@ -1,0 +1,55 @@
+name: Zen Bridge integration
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - run: node tests/runtime.mjs
+      - run: node tests/capture.mjs
+      - run: node tests/breeze-gateway.mjs
+      - run: pnpm build
+        env:
+          DEPLOY_TARGET: zeabur
+      - run: node tests/startup.mjs
+      - run: node scripts/pack-tencent.mjs work/tencent-release
+      - run: tar -czf zen-runtime.tgz -C work/tencent-release .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zen-tencent-runtime
+          path: zen-runtime.tgz
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: zen-tencent-runtime
+      - name: Publish the checked release
+        env:
+          HOST: ${{ secrets.ZEN_SSH_HOST }}
+          USER: ${{ secrets.ZEN_SSH_USER }}
+          PRIVATE_KEY: ${{ secrets.ZEN_SSH_PRIVATE_KEY }}
+          HOST_KEY: ${{ secrets.ZEN_SSH_HOST_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$HOST_KEY" > ~/.ssh/known_hosts
+          cat zen-runtime.tgz | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" publish "$GITHUB_SHA"

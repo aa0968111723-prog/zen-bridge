@@ -59,7 +59,10 @@ def main():
                 if (audio.getnchannels(), audio.getsampwidth(), audio.getframerate()) != (1, 2, 16000):
                     raise ValueError('Expected 16 kHz mono PCM16 audio')
                 pcm = np.frombuffer(audio.readframes(audio.getnframes()), dtype='<i2').astype(np.float32) / 32768.0
-            segments = engine.transcribe(pcm, initial_prompt=request.get('prompt', ''))
+            language = request.get('language', 'zh')
+            if language not in ('zh', 'en'):
+                raise ValueError('Unsupported language')
+            segments = engine.transcribe(pcm, initial_prompt=request.get('prompt', ''), language=language)
             emit({'ok': True, 'text': ' '.join(s.text for s in segments).strip()})
         except Exception as exc:
             emit({'ok': False, 'error': type(exc).__name__ + ': local inference failed'})

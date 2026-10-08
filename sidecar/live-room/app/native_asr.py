@@ -79,13 +79,13 @@ class NativeResidentAsr(ResidentAsr):
     def health(self):
         return bool(self.ready and self.proc is not None and self.proc.poll() is None)
 
-    def transcribe(self, wav, prompt):
+    def transcribe(self, wav, prompt, language='zh'):
         with self.request_lock:
             if not self.health():
                 return AsrResult(ok=False, error=self.last_error or '本機模型未就緒，請重新啟動 App。')
             self.calls += 1
             try:
-                self.proc.stdin.write(json.dumps({'path': str(Path(wav).resolve()), 'prompt': prompt}, ensure_ascii=True) + '\n')
+                self.proc.stdin.write(json.dumps({'path': str(Path(wav).resolve()), 'prompt': prompt, 'language': language}, ensure_ascii=True) + '\n')
                 self.proc.stdin.flush()
                 response = self._receive(self.inference_timeout_s)
                 return AsrResult(ok=response.get('ok', False), text=response.get('text', ''),

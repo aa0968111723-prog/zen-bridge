@@ -14,9 +14,9 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
-REPOSITORY = "aa0968111723-prog/breeze-live-room"
-SETUP_NAME = "Breeze-Live-Room-Setup.exe"
-SHA_NAME = "Breeze-Live-Room-Setup.exe.sha256"
+REPOSITORY = "aa0968111723-prog/zen-bridge"
+SETUP_NAME = "Zen-Bridge-Setup.exe"
+SHA_NAME = "Zen-Bridge-Setup.exe.sha256"
 MAX_BYTES = 2 * 1024 * 1024 * 1024
 ALLOWED_HOSTS = {
     "github.com",

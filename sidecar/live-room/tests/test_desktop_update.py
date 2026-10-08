@@ -22,7 +22,7 @@ def test_cleanup_removes_only_old_app_downloads(tmp_path, monkeypatch):
         folder = tmp_path / name
         folder.mkdir()
         (folder / SETUP_NAME).write_bytes(b'installer')
-        (folder / 'breeze-update.json').write_text(json.dumps({'repository': 'aa0968111723-prog/breeze-live-room', 'filename': SETUP_NAME, 'created_at': time.time() - (7200 if old else 0)}))
+        (folder / 'breeze-update.json').write_text(json.dumps({'repository': 'aa0968111723-prog/zen-bridge', 'filename': SETUP_NAME, 'created_at': time.time() - (7200 if old else 0)}))
     unrelated = tmp_path / 'BreezeUpdate-unrelated'
     unrelated.mkdir()
     (unrelated / 'notes.txt').write_text('user file')
@@ -35,12 +35,12 @@ def test_cleanup_removes_only_old_app_downloads(tmp_path, monkeypatch):
 def release(tag="v0.4.0", **extra):
     setup = {
         "name": SETUP_NAME,
-        "browser_download_url": "https://github.com/aa0968111723-prog/breeze-live-room/releases/download/v0.4.0/" + SETUP_NAME,
+        "browser_download_url": "https://github.com/aa0968111723-prog/zen-bridge/releases/download/v0.4.0/" + SETUP_NAME,
         "size": 1200,
     }
     digest = {
         "name": SETUP_NAME + ".sha256",
-        "browser_download_url": "https://github.com/aa0968111723-prog/breeze-live-room/releases/download/v0.4.0/" + SETUP_NAME + ".sha256",
+        "browser_download_url": "https://github.com/aa0968111723-prog/zen-bridge/releases/download/v0.4.0/" + SETUP_NAME + ".sha256",
         "size": 80,
     }
     body = {"tag_name": tag, "draft": False, "prerelease": False, "assets": [setup, digest]}
@@ -81,7 +81,7 @@ def test_plan_rejects_non_https_and_foreign_hosts():
 
 
 def test_update_cannot_use_another_repository_or_release_tag():
-    for replacement in ('another-owner/another-repo/releases/download/v0.4.0', 'aa0968111723-prog/breeze-live-room/releases/download/v9.9.9'):
+    for replacement in ('another-owner/another-repo/releases/download/v0.4.0', 'aa0968111723-prog/zen-bridge/releases/download/v9.9.9'):
         bad = release()
         bad['assets'][0]['browser_download_url'] = 'https://github.com/' + replacement + '/' + SETUP_NAME
         with pytest.raises(ValueError):

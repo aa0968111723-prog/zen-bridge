@@ -1,4 +1,4 @@
-﻿#ifndef PayloadDir
+#ifndef PayloadDir
   #error PayloadDir must point to the prepared offline App
 #endif
 #ifndef AppVersion
@@ -12,18 +12,18 @@
 #endif
 [Setup]
 AppId={{68770E3F-50EE-493F-8A23-6A82C5FFDA69}
-AppName=禪譯聽眾房
+AppName=禪譯 Zen Bridge
 AppVersion={#AppVersion}
 AppPublisher=Breeze Live Room
 AppPublisherURL=https://github.com/aa0968111723-prog/breeze-live-room
 DefaultDirName={localappdata}\Programs\Breeze Live Room
-DefaultGroupName=禪譯聽眾房
+DefaultGroupName=禪譯 Zen Bridge
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
 OutputDir={#OutputDir}
-OutputBaseFilename=Breeze-Live-Room-Setup
+OutputBaseFilename=Zen-Bridge-Setup
 ; The model and wheels are already compressed. zip keeps the one-click build practical.
 Compression=zip
 SolidCompression=no
@@ -46,9 +46,9 @@ Name: "chinesetraditional"; MessagesFile: "Chinese.isl"
 
 [Messages]
 SetupAppTitle=安裝
-SetupWindowTitle=安裝禪譯聽眾房
-WelcomeLabel1=安裝禪譯聽眾房
-WelcomeLabel2=這會在這台電腦裝上本機中文字幕。%n%n不用另外裝 Python，也不用系統管理員。你不用選資料夾。%n%n完成後，桌面會出現「禪譯聽眾房」。已經裝過的設定與字幕會留著。
+SetupWindowTitle=安裝禪譯 Zen Bridge
+WelcomeLabel1=安裝禪譯 Zen Bridge
+WelcomeLabel2=這會在這台電腦裝上本機中文字幕。%n%n不用另外裝 Python；若缺少 Microsoft 元件，Windows 可能要求管理員協助。你不用選資料夾。%n%n完成後，桌面會出現「禪譯 Zen Bridge」。已經裝過的設定與字幕會留著。
 ClickNext=按「下一步」繼續。
 ButtonNext=下一步(&N) >
 ButtonInstall=安裝(&I)
@@ -58,17 +58,17 @@ ButtonBack=< 上一步(&B)
 ReadyLabel1=可以開始安裝了。
 ReadyLabel2a=按「安裝」。大約要一分鐘，請不要關閉這個視窗。%n%n會裝在你的個人程式資料夾。已有的設定與字幕不會被清掉。
 WizardInstalling=正在安裝
-InstallingLabel=正在安裝禪譯聽眾房，請稍候。
+InstallingLabel=正在安裝禪譯 Zen Bridge，請稍候。
 StatusCreateDirs=正在準備資料夾...
 StatusExtractFiles=正在複製程式與辨識模型...
 StatusCreateIcons=正在建立桌面捷徑...
 StatusRunProgram=即將完成...
 FinishedHeadingLabel=安裝完成
-FinishedLabel=桌面已有「禪譯聽眾房」。%n%n按「完成」就會開啟。第一次準備辨識大約要半分鐘，請先不要關閉程式視窗。
-FinishedLabelNoIcons=安裝完成。可以從開始功能表開啟「禪譯聽眾房」。
+FinishedLabel=桌面已有「禪譯 Zen Bridge」。%n%n按「完成」就會開啟。第一次準備辨識大約要半分鐘，請先不要關閉程式視窗。
+FinishedLabelNoIcons=安裝完成。可以從開始功能表開啟「禪譯 Zen Bridge」。
 ClickFinish=按「完成」開啟。
-LaunchProgram=立刻開啟禪譯聽眾房
-ConfirmUninstall=確定要移除禪譯聽眾房嗎？設定與字幕會留在電腦上。
+LaunchProgram=立刻開啟禪譯 Zen Bridge
+ConfirmUninstall=確定要移除禪譯 Zen Bridge嗎？設定與字幕會留在電腦上。
 ExitSetupMessage=安裝還沒完成。確定要離開嗎？
 SetupAborted=安裝未完成。可以稍後再執行一次安裝程式。
 
@@ -93,12 +93,12 @@ Type: files; Name: "{userprograms}\Breeze Live Room\Uninstall Breeze Live Room.l
 Type: dirifempty; Name: "{userprograms}\Breeze Live Room"
 
 [Icons]
-Name: "{autodesktop}\禪譯聽眾房"; Filename: "{app}\Breeze.exe"; WorkingDir: "{app}"
-Name: "{group}\禪譯聽眾房"; Filename: "{app}\Breeze.exe"; WorkingDir: "{app}"
-Name: "{group}\移除禪譯聽眾房"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\禪譯 Zen Bridge"; Filename: "{app}\Breeze.exe"; WorkingDir: "{app}"
+Name: "{group}\禪譯 Zen Bridge"; Filename: "{app}\Breeze.exe"; WorkingDir: "{app}"
+Name: "{group}\移除禪譯 Zen Bridge"; Filename: "{uninstallexe}"
 
 [Run]
-Filename: "{app}\Breeze.exe"; Description: "立刻開啟禪譯聽眾房"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Breeze.exe"; Description: "立刻開啟禪譯 Zen Bridge"; Flags: nowait postinstall skipifsilent
 
 [Code]
 function WebView2Present: Boolean;

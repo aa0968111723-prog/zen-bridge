@@ -2,8 +2,9 @@ import { createRequire } from 'node:module';
 import { mkdir, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 const require = createRequire(import.meta.url);
-const { build } = await import(createRequire(require.resolve('drizzle-kit')).resolve('esbuild'));
+const { build } = await import(pathToFileURL(createRequire(require.resolve('drizzle-kit')).resolve('esbuild')).href);
 await mkdir('work', { recursive: true });
 for (const suite of ['runtime', 'hermes']) {
   const output = resolve('work/' + suite + '-test.mjs');

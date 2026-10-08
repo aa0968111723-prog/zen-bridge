@@ -1,0 +1,50 @@
+name: Zen Bridge desktop App
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare pinned installer compiler
+        shell: pwsh
+        run: |
+          $root = 'sidecar/live-room'
+          $spec = (Get-Content "$root/desktop/desktop-manifest.json" -Raw | ConvertFrom-Json).inno_setup
+          $installer = Join-Path $env:RUNNER_TEMP 'inno.exe'
+          Invoke-WebRequest $spec.url -OutFile $installer
+          if ((Get-FileHash $installer).Hash.ToLower() -ne $spec.sha256) { throw 'Compiler checksum mismatch' }
+          $directory = Join-Path $env:RUNNER_TEMP 'InnoSetup'
+          $process = Start-Process $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/CURRENTUSER',('/DIR="'+$directory+'"') -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode) { throw 'Compiler setup failed' }
+          "INNO_SETUP=$directory\ISCC.exe" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Build installer without host credentials
+        run: python sidecar/live-room/scripts/build_setup.py --payload build/desktop --output dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zen-bridge-desktop
+          path: |
+            dist/Zen-Bridge-Setup.exe
+            dist/Zen-Bridge-Setup.exe.sha256
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: zen-bridge-desktop
+          path: dist
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "禪譯 Zen Bridge $GITHUB_REF_NAME" --generate-notes
