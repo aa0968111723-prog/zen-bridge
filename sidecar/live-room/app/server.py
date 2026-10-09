@@ -1875,6 +1875,9 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                 raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
             except PipelineError as exc:
                 raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+            # Publishing and serializing a large caption are separate CPU turns;
+            # allow ready listeners and timers to run between them.
+            await asyncio.sleep(0)
             return _public_result(done)
         finally:
             if reserved:
