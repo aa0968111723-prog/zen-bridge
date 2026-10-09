@@ -22,7 +22,7 @@ export async function dictionaryReferences(input:string,privateAllowed=false){
  const normalized=dictionaryKey(input).slice(0,600),keys=new Set<string>();
  for(const word of normalized.match(/[a-z][a-z'-]{1,39}/g)??[])if(keys.size<80)keys.add(word);
  for(const phrase of normalized.match(/[\p{Script=Han}]+/gu)??[]){
-  for(let length=Math.min(8,phrase.length);length>=2;length--)for(let i=0;i+length<=phrase.length&&keys.size<96;i++)keys.add(phrase.slice(i,i+length));
+  for(let length=Math.min(8,phrase.length);length>=1;length--)for(let i=0;i+length<=phrase.length&&keys.size<96;i++)keys.add(phrase.slice(i,i+length));
  }
  if(!keys.size)return [];
  try {

@@ -10,6 +10,15 @@ def test_upload_timeout_rejects_nonfinite_and_nonpositive(value):
     with pytest.raises(ValueError,match='BREEZE_UPLOAD_READ_TIMEOUT'):
         Settings(upload_read_timeout_s=value)
 
+@pytest.mark.parametrize('name',['resident_startup_s','decode_timeout_s','asr_timeout_s','translate_timeout_s','idle_timeout_s','heartbeat_s','max_audio_seconds','gap_wait_s','room_idle_s','stop_flush_s','shutdown_flush_s'])
+@pytest.mark.parametrize('value',[float('inf'),float('-inf'),float('nan')])
+def test_processing_and_shutdown_limits_remain_finite(name,value):
+    with pytest.raises(ValueError):
+        Settings(**{name:value})
+
+def test_zero_wait_and_flush_settings_keep_supported_semantics():
+    Settings(gap_wait_s=0,room_idle_s=0,stop_flush_s=0,shutdown_flush_s=0)
+
 @pytest.mark.parametrize('ok,text,blank',[(True,'',True),(True,'  ',True),(True,'hello',False),(False,'',False)])
 def test_native_blank_does_not_enter_rtf_sample(tmp_path,monkeypatch,ok,text,blank):
     engine=NativeResidentAsr(tmp_path/'model.bin')

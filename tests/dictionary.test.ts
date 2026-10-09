@@ -33,8 +33,14 @@ try {
   assert.deepEqual(await lookupDictionary("' OR 1=1--"),[]);
   assert.equal((await dictionaryReferences('meditation')).length,1);
   assert.equal((await dictionaryReferences('meditation',true)).length,2);
+  insert.run('han','open','new','禪','','Zen');
+  sql.prepare('INSERT INTO dictionary_keys VALUES(?,?)').run('han','禪');
+  assert.equal((await dictionaryReferences('禪')).length,1);
   const publicResult=await GET(new Request('http://test/api/dictionaries?q=meditation'));
   assert.equal((await publicResult.json() as {privateAllowed:boolean}).privateAllowed,false);
+  const hostResult=await GET(new Request('http://test/api/dictionaries?q=meditation',{headers:{'x-zen-host':token}}));
+  const hostBody=await hostResult.json() as {privateAllowed:boolean;entries:unknown[];sources:unknown[]};
+  assert.equal(hostBody.privateAllowed,true);assert.equal(hostBody.entries.length,2);assert.equal(hostBody.sources.length,2);
   const req=(body:BodyInit,authorized=true)=>new Request('http://test/api/dictionaries',{method:'POST',headers:authorized?{'x-zen-host':token}:{},body});
   assert.equal((await POST(req('{}',false))).status,403);
   assert.equal((await POST(req('{'))).status,400);

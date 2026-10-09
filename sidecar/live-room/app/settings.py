@@ -165,6 +165,15 @@ class Settings:
             raise ValueError("BREEZE_ASR 只接受 cli、resident 或 native")
         if self.resident_startup_s <= 0 or self.asr_timeout_s <= 0:
             raise ValueError("辨識啟動及推論逾時必須大於零")
+        for name in ('resident_startup_s', 'decode_timeout_s', 'asr_timeout_s',
+                     'translate_timeout_s', 'idle_timeout_s', 'heartbeat_s', 'max_audio_seconds'):
+            value = getattr(self, name)
+            if not (math.isfinite(value) and value > 0):
+                raise ValueError(f"{name} 必須為大於零的有限數值")
+        for name in ('gap_wait_s', 'room_idle_s', 'stop_flush_s', 'shutdown_flush_s'):
+            value = getattr(self, name)
+            if not (math.isfinite(value) and value >= 0):
+                raise ValueError(f"{name} 必須為非負的有限數值")
         if self.asr_audio_context != 0 and not 128 <= self.asr_audio_context <= 1500:
             raise ValueError("BREEZE_ASR_AUDIO_CONTEXT 必須是 0 或 128 到 1500")
         if not 0 <= self.asr_beam_size <= 8 or not 0 <= self.asr_best_of <= 8:
