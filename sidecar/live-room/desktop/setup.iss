@@ -83,7 +83,19 @@ SetupAborted=安裝未完成。可以稍後再執行一次安裝程式。
 
 [Files]
 #ifdef CompactSetup
-Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pyc,__pycache__\*,.env,data\*,logs\*,tmp\*,.venv\*,.updates\*,models\*,.python\*,tools\*,desktop\WebView2Bootstrapper.exe,desktop\vc_redist.x64.exe"
+Source: "{#PayloadDir}\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pyc,__pycache__\*"
+Source: "{#PayloadDir}\scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pyc,__pycache__\*"
+Source: "{#PayloadDir}\docs\*"; DestDir: "{app}\docs"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PayloadDir}\desktop\*"; DestDir: "{app}\desktop"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "WebView2Bootstrapper.exe,vc_redist.x64.exe"
+Source: "{#PayloadDir}\Breeze.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\VERSION"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\requirements*.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\runtime-manifest.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\bootstrap-manifest.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\*.bat"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\*.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\scripts\update_runtime.py"; DestName: "ZenUpdateCheck.py"; Flags: dontcopy
 Source: "{#PayloadDir}\desktop\update-runtime.json"; DestName: "ZenUpdateRuntime.json"; Flags: dontcopy
 #else
