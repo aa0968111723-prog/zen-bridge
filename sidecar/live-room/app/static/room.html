@@ -5,68 +5,281 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>禪譯聽眾</title>
 <style>
-:root { --bg: #fbf6ee; --fg: #2a2118; --muted: #6b5644; --line: rgba(90, 60, 30, .2); --size: 40px; }
+[hidden] { display: none !important; }
+:root { --bg: #fbf6ee; --fg: #2a2118; --muted: #6b5644; --line: rgba(90, 60, 30, .2); --size: clamp(1.5rem, 7vw, 2.125rem); }
+html { background: var(--bg); }
+html.dark, html.project { background: #16130f; }
 body { margin: 0; min-height: 100dvh; display: flex; flex-direction: column; background: var(--bg); color: var(--fg); font-family: "Segoe UI", "PingFang TC", sans-serif; }
-body.dark { --bg: #16130f; --fg: #f6f1e7; --muted: #d9d0c3; --line: rgba(255, 255, 255, .16); }
-body.zh-only .en, body.en-only .zh { display: none; }
-header { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px calc(10px + env(safe-area-inset-top)); background: color-mix(in srgb, var(--bg) 92%, transparent); }
+html.dark body, body.dark, html.project body, body.project { --bg: #16130f; --fg: #f6f1e7; --muted: #d9d0c3; --line: rgba(255, 255, 255, .16); }
+html.size-28, body.size-28 { --size: clamp(1.15rem, 5.5vw, 1.75rem); }
+html.size-34, body.size-34 { --size: clamp(1.5rem, 7vw, 2.125rem); }
+html.size-46, body.size-46 { --size: clamp(1.75rem, 8.5vw, 2.875rem); }
+html.size-64, body.size-64 { --size: clamp(2rem, 11vw, 4rem); }
+html.zh-only .en, body.zh-only .en, html.en-only .zh, body.en-only .zh { display: none; }
+html.zh-only .zh, body.zh-only .zh, html.en-only .en, body.en-only .en { font-size: var(--size); color: var(--fg); font-weight: 700; }
+html.project body, body.project { --project-scale: 1.8; --project-vw: 7vw; --project-vh: 10vh; height: 100dvh; max-height: 100dvh; overflow: hidden; }
+html.project.size-28, body.project.size-28 { --project-vw: 5.5vw; --project-vh: 9vh; }
+html.project.size-46, body.project.size-46 { --project-vw: 7.5vw; --project-vh: 8.57vh; }
+html.project.size-64, body.project.size-64 { --project-vw: 9vw; --project-vh: 9.444vh; }
+body.project .stage { flex: 1 1 auto; flex-direction: row; flex-wrap: wrap; align-items: flex-end; align-content: flex-end; justify-content: flex-start; min-height: 0; overflow: hidden; }
+body.project .stage-note { flex: 0 0 auto; background: var(--bg); }
+html.project .en, body.project .en, html.project .zh, body.project .zh { flex: 1 1 18rem; color: var(--fg); font-weight: 700; }
+html.project .en, body.project .en { font-size: max(var(--size), min(calc(var(--size) * var(--project-scale)), var(--project-vw), var(--project-vh))); overflow-wrap: anywhere; min-width: 0; }
+html.project .zh, body.project .zh { font-size: max(var(--size), min(calc(var(--size) * var(--project-scale)), var(--project-vw), var(--project-vh))); overflow-wrap: anywhere; min-width: 0; }
+@media (max-width: 671px) {
+  html.project .en, body.project .en, html.project .zh, body.project .zh { max-height: 48%; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+}
+body.project #history, body.project #hist-label { display: none; }
+#leave-project { display: none; }
+html.project #leave-project, body.project #leave-project { display: inline-block; }
+header { position: sticky; top: 0; z-index: 4; display: flex; flex-wrap: nowrap; flex-shrink: 0; gap: 8px; align-items: center; min-height: 44px; padding: calc(8px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 8px calc(12px + env(safe-area-inset-left)); background: var(--bg); background: color-mix(in srgb, var(--bg) 92%, transparent); }
 button, select { font-size: 16px; min-height: 44px; padding: 8px 12px; border-radius: 10px; border: 0; background: #8a5424; color: white; }
+html.dark button, html.dark select, html.project button, html.project select, body.dark button, body.dark select, body.project button, body.project select { background: #c9843f; color: #16130f; }
 button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid #c47a32; outline-offset: 2px; }
-#state { color: var(--fg); font-weight: 750; }
+#state { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 750; }
+@media (max-width: 390px) {
+  html.project header, body.project header { flex-wrap: wrap; }
+  html.project #state, body.project #state { flex: 1 0 100%; min-width: 100%; overflow: visible; text-overflow: unset; white-space: normal; overflow-wrap: anywhere; }
+}
+#settings { margin-left: auto; flex: none; }
+.sub { margin: 0; padding: 0 16px 8px; color: var(--muted); font-size: 16px; flex-shrink: 0; }
+.banner { margin: 0; padding: 10px 16px; background: #8a5424; color: #fff; font-size: 16px; flex-shrink: 0; }
+#drawer { display: flex; flex-wrap: wrap; flex-shrink: 0; gap: 8px; align-items: center; padding: 8px calc(16px + env(safe-area-inset-right)) 12px calc(16px + env(safe-area-inset-left)); }
+#drawer label { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; }
+#drawer input[type="checkbox"] { width: 24px; height: 24px; margin: 0; }
+#wake-help { flex: 1 1 100%; margin: 0; color: var(--muted); font-size: 16px; }
 .stage { flex: 1; display: flex; flex-direction: column; justify-content: center; min-height: 42vh; padding: 8px 8px 12px; }
-.en { font-size: var(--size); font-weight: 700; padding: 12px 20px 8px; line-height: 1.35; }
-.zh { font-size: calc(var(--size) * .62); color: var(--muted); padding: 0 20px 20px; line-height: 1.45; }
+.stage-note { margin: 0; padding: 0 20px; min-height: 24px; color: var(--muted); font-size: 16px; }
+.stage.idle .en, .stage.idle .zh, .stage.stale .en, .stage.stale .zh { color: var(--muted); font-weight: 650; }
+html:not(.project) body { height: 100dvh; max-height: 100dvh; overflow: hidden; }
+html:not(.project) .stage { min-height: 0; overflow: hidden; justify-content: flex-end; }
+html:not(.project) .en, html:not(.project) .zh { overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; }
+html:not(.project) .en { max-height: 60%; }
+html:not(.project) .zh { max-height: 40%; }
+html:not(.project) #history { min-height: 0; }
+html:not(.project) #drawer { position: absolute; left: 0; right: 0; top: calc(60px + env(safe-area-inset-top)); z-index: 3; max-height: min(136px, 46vh); overflow: auto; background: var(--bg); }
+html.project #drawer-close, body.project #drawer-close { display: none; }
+@media (max-height: 400px) {
+  html:not(.project) #history, html:not(.project) #hist-label, html:not(.project) .stage-note { display: none; }
+  html:not(.project) .en { padding-top: 4px; padding-bottom: 2px; }
+  html:not(.project) .zh { padding-bottom: 6px; }
+  html:not(.project) #drawer { max-height: 48px; }
+}
+.en { font-size: var(--size); font-weight: 700; padding: 12px 20px 8px; line-height: 1.35; overflow-wrap: anywhere; min-width: 0; }
+.zh { font-size: calc(var(--size) * .62); color: var(--muted); padding: 0 20px 20px; line-height: 1.45; overflow-wrap: anywhere; min-width: 0; }
 ul { list-style: none; margin: 0; padding: 0 16px calc(24px + env(safe-area-inset-bottom)); max-height: 28vh; overflow: auto; }
-li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 16px; }
+li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 16px; overflow-wrap: anywhere; }
+li.gap { color: var(--muted); text-align: center; font-size: 14px; border-top-style: dashed; }
 #hist-label { margin: 0 16px; color: var(--muted); font-size: 14px; }
+#toast { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); padding: 12px 16px; border-radius: 12px; background: var(--fg); color: var(--bg); font-size: 16px; min-height: 44px; }
+#live { position: fixed; right: 12px; bottom: calc(64px + env(safe-area-inset-bottom)); }
+@media (prefers-reduced-motion: no-preference) {
+  .en, .zh, #toast { transition: opacity .2s; }
+}
 </style>
+<script>
+/* Saved size, dark, and projection apply before first paint.
+   There is no Content-Security-Policy on this page today.
+   A future script-src that uses hashes must include this block's hash. */
+(function () {
+  try {
+    var raw = localStorage.getItem("breeze.audience.prefs");
+    var prefs = raw ? JSON.parse(raw) : null;
+    if (!prefs || typeof prefs !== "object") return;
+    var list = document.documentElement.classList;
+    if (prefs.size === "28" || prefs.size === "34" || prefs.size === "46" || prefs.size === "64") list.add("size-" + prefs.size);
+    if (prefs.mode === "zh") list.add("zh-only");
+    else if (prefs.mode === "en") list.add("en-only");
+    else if (prefs.mode === "project") list.add("project");
+    var dark = prefs.theme === "dark";
+    if (prefs.theme !== "light" && prefs.theme !== "dark") {
+      try { dark = window.matchMedia("(prefers-color-scheme: dark)").matches; } catch (err) { dark = false; }
+    }
+    if (dark) list.add("dark");
+  } catch (err) { /* storage blocked: keep the default light page */ }
+})();
+</script>
 </head>
 <body>
 <header>
-<span id="state">連線中…</span>
-<button id="retry" type="button">重新連線</button>
-<button id="theme" type="button">暗色</button>
-<button id="full" type="button">全螢幕</button>
-<label>顯示 <select id="mode"><option value="both">中英</option><option value="zh">中文</option><option value="en">英文</option></select></label>
-<label>字級 <select id="size"><option value="28">小</option><option value="34" selected>中</option><option value="46">大</option></select></label>
-<label><input id="pause" type="checkbox"> 暫停跟隨</label>
-<button id="live" type="button">回到即時</button>
+<span id="state" role="status" aria-live="polite">連線中</span>
+<button id="retry" type="button" hidden>再試一次</button>
+<button id="leave-project" type="button">離開投影</button>
+<button id="settings" type="button" aria-expanded="false">⚙ 設定</button>
 </header>
-<div class="stage">
-<div class="en" id="en">等待主持端</div>
+<p id="sub" class="sub"></p>
+<p id="offline" class="banner" hidden>手機沒網路。恢復網路後會自動接回。</p>
+<p id="expiry" class="sub" hidden>較早的字幕已超過保存時間，已從畫面上拿掉</p>
+<div id="drawer" hidden>
+<button id="drawer-close" type="button" aria-label="關閉設定">關閉</button>
+<label>顯示 <select id="mode"><option value="both">中英</option><option value="zh">中文</option><option value="en">只看譯文</option><option value="project">投影</option></select></label>
+<label>字級 <select id="size"><option value="28">小</option><option value="34" selected>中</option><option value="46">大</option><option value="64">特大</option></select></label>
+<label>主題 <select id="theme"><option value="system" selected>跟隨系統</option><option value="light">亮色</option><option value="dark">暗色</option></select></label>
+<label id="wake-label"><input id="wake" type="checkbox" checked> 保持螢幕亮著</label>
+<p id="wake-help" hidden>這個瀏覽器不能保持螢幕亮著，請把自動鎖定改長一點。</p>
+<button id="full" type="button">全螢幕</button>
+<label><input id="pause" type="checkbox"> 暫停跟隨</label>
+</div>
+<p id="stage-note" class="stage-note">等待主持人開始</p>
+<div class="stage" id="stage">
+<div class="en" id="en" lang="en"></div>
 <div class="zh" id="zh"></div>
 </div>
 <p id="hist-label">最近字幕</p>
 <ul id="history"></ul>
+<button id="live" type="button" hidden>回到最新</button>
+<div id="toast" role="status" aria-live="polite" hidden></div>
 <script type="module">
-import { connectRoom, createCaptionView, liveTail, orderedCaptions } from "/static/room_client.js";
+import { audienceClientId, connectRoom, createCaptionView, liveTail, orderedCaptions, retryCountdown } from "/static/room_client.js";
+import { GAP_TOAST_MS, HISTORY_DIVIDER, expiryNotice, gapCopy, historyStick, stageMode, stageNoteFor } from "/static/room_view.js";
+import { appearance, focusAfterProjection, fullscreenAvailable, leaveProjection, readPrefs, refreshWakeLock, releaseWakeLock, safeStorage, themeIsDark, wakeLockSupported, writePrefs } from "/static/room_prefs.js";
 const room = location.pathname.split("/").filter(Boolean).pop();
 const listenKey = new URLSearchParams(location.search).get("k") || "";
+const clientId = audienceClientId(safeStorage(() => window.sessionStorage));
 const view = createCaptionView(80);
 const items = view.items;
 const state = { follow: true, pinned: null };
+let prefs = readPrefs(safeStorage(() => window.localStorage));
+let projectionOpener = null;
+let wakeSentinel = null;
+const LOOK = ["zh-only", "en-only", "project", "dark", "size-28", "size-34", "size-46", "size-64"];
+function prefersDark() {
+  return themeIsDark("system", (query) => window.matchMedia(query));
+}
+function applyAppearance() {
+  const classes = appearance(prefs, prefersDark());
+  for (const name of LOOK) {
+    const on = classes.includes(name);
+    document.body.classList.toggle(name, on);
+    document.documentElement.classList.toggle(name, on);
+  }
+  const mode = document.querySelector("#mode");
+  const size = document.querySelector("#size");
+  const theme = document.querySelector("#theme");
+  const wake = document.querySelector("#wake");
+  if (mode) mode.value = prefs.mode;
+  if (size) size.value = prefs.size;
+  if (theme) theme.value = prefs.theme;
+  if (wake) wake.checked = prefs.wake !== false;
+  const supported = wakeLockSupported(navigator);
+  const wakeLabel = document.querySelector("#wake-label");
+  const wakeHelp = document.querySelector("#wake-help");
+  if (wakeLabel) wakeLabel.hidden = !supported;
+  if (wakeHelp) wakeHelp.hidden = supported;
+  if (prefs.mode === "project") {
+    const drawer = document.querySelector("#drawer");
+    if (drawer) drawer.hidden = true;
+    const settings = document.querySelector("#settings");
+    if (settings) settings.setAttribute("aria-expanded", "false");
+  }
+}
+function remember(next) {
+  if (next && next.mode === "project" && prefs.mode !== "project") {
+    projectionOpener = document.querySelector("#settings");
+  }
+  prefs = writePrefs(safeStorage(() => window.localStorage), next);
+  applyAppearance();
+}
+function restoreProjectionFocus() {
+  const back = projectionOpener || document.querySelector("#settings");
+  projectionOpener = null;
+  focusAfterProjection(back);
+}
+async function syncWake(visibility) {
+  const state = visibility || (document.visibilityState || "visible");
+  if (prefs.wake === false || state !== "visible") {
+    await releaseWakeLock(wakeSentinel);
+    wakeSentinel = null;
+    return;
+  }
+  const next = await refreshWakeLock(navigator, prefs, "visible");
+  if (!next) return;
+  if (wakeSentinel && wakeSentinel !== next) await releaseWakeLock(wakeSentinel);
+  wakeSentinel = next;
+}
+applyAppearance();
+let hostLive = false;
+let kind = "connecting";
+let lastCaptionAt = 0;
+let gapDivider = false;
+let pendingReset = false;
+let toastTimer = 0;
 const en = document.querySelector("#en");
 const zh = document.querySelector("#zh");
 const history = document.querySelector("#history");
+const stage = document.querySelector("#stage");
+const stageNoteEl = document.querySelector("#stage-note");
+function failed(item) {
+  return item && (item.status === "missing" || item.status === "error" || item.status === "timeout" || item.status === "cancelled");
+}
+function paintChrome() {
+  const item = liveTail(items, state.follow, state.pinned);
+  const hasCaption = items.size > 0;
+  const age = lastCaptionAt ? Date.now() - lastCaptionAt : 0;
+  const raw = stageMode({ kind, ageMs: age, hasCaption });
+  const mode = !hasCaption && raw === "live" ? "empty" : raw;
+  stage.classList.toggle("idle", mode === "idle");
+  stage.classList.toggle("stale", mode === "stale" || mode === "ended");
+  stageNoteEl.textContent = failed(item) ? "這段沒有字幕" : stageNoteFor(kind, mode, hostLive);
+}
 function render() {
   const item = liveTail(items, state.follow, state.pinned);
-  const failed = item && (item.status === "missing" || item.status === "error" || item.status === "timeout" || item.status === "cancelled");
-  en.textContent = !item ? "等待主持端" : (failed ? (item.error || "這段沒有字幕") : (item.en || ""));
-  zh.textContent = item ? (item.zh || "") : "";
+  en.textContent = !item || failed(item) ? "" : (item.en || "");
+  zh.textContent = !item || failed(item) ? "" : (item.zh || "");
+  const placed = historyStick(history.scrollTop, history.scrollHeight, history.clientHeight, state.follow);
   history.textContent = "";
+  if (gapDivider) {
+    const mark = document.createElement("li");
+    mark.className = "gap";
+    mark.textContent = HISTORY_DIVIDER;
+    history.appendChild(mark);
+  }
   const rows = orderedCaptions(items).slice(-12);
   for (const row of rows) {
     const li = document.createElement("li");
-    const zh = row.zh || row.error || "";
-    li.textContent = row.en ? zh + "　" + row.en : zh;
+    if (failed(row)) {
+      li.textContent = "這段沒有字幕";
+    } else if (row.en) {
+      li.append(document.createTextNode((row.zh || "") + "　"));
+      const english = document.createElement("span");
+      english.lang = "en";
+      english.textContent = row.en;
+      li.append(english);
+    } else {
+      li.textContent = row.zh || "";
+    }
     history.appendChild(li);
   }
+  if (placed.stick) history.scrollTop = history.scrollHeight;
+  else history.scrollTop = placed.restore;
+  document.querySelector("#live").hidden = !!state.follow;
+  paintChrome();
 }
 function show(item) {
   view.apply(item);
+  if (!item || (item.type !== "captions_expired" && item.type !== "caption_deleted" && item.type !== "captions_cleared")) {
+    const note = document.querySelector("#expiry");
+    if (note) note.hidden = true;
+  }
   render();
 }
-let conn = connect();
+function showToast(text) {
+  const toast = document.querySelector("#toast");
+  toast.hidden = false;
+  toast.textContent = text;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, GAP_TOAST_MS);
+}
+let connDetail = null;
+function paintSubtitle(now) {
+  const sub = document.querySelector("#sub");
+  if (!sub || !connDetail) return;
+  if (connDetail.kind === "unreachable" && connDetail.nextRetryAt) {
+    sub.textContent = retryCountdown(connDetail.nextRetryAt, now || Date.now());
+    return;
+  }
+  sub.textContent = connDetail.subtitle || "";
+}
 function connect() {
   return connectRoom({
     room,
@@ -74,32 +287,111 @@ function connect() {
       const proto = location.protocol === "https:" ? "wss" : "ws";
       let address = proto + "://" + location.host + "/ws/listen?room_id=" + encodeURIComponent(room);
       if (listenKey) address += "&k=" + encodeURIComponent(listenKey);
+      if (clientId) address += "&cid=" + encodeURIComponent(clientId);
       return address;
     },
-    onState: (text) => { document.querySelector("#state").textContent = text; },
-    onEvent: show,
+    onState: (detail) => {
+      const text = detail && typeof detail === "object" ? (detail.text || "") : String(detail || "");
+      kind = detail && typeof detail === "object" ? (detail.kind || "") : "";
+      connDetail = detail && typeof detail === "object" ? detail : { text, subtitle: "", kind };
+      document.querySelector("#state").textContent = text;
+      paintSubtitle();
+      const offline = document.querySelector("#offline");
+      if (offline) offline.hidden = kind !== "device_offline";
+      const retry = document.querySelector("#retry");
+      if (retry) {
+        const showRetry = !!(detail && typeof detail === "object" && (
+          detail.manual || kind === "link_invalid" || kind === "unreachable" ||
+          kind === "room_full" || kind === "ended" || kind === "rejected"
+        ));
+        retry.hidden = !showRetry;
+      }
+      paintChrome();
+    },
+    onEvent: (item) => { lastCaptionAt = Date.now(); show(item); },
     onDelete: show,
+    onExpire: (data) => {
+      const note = document.querySelector("#expiry");
+      if (!note) return;
+      const text = expiryNotice(data && data.ids, items);
+      if (!text) return;
+      note.hidden = false;
+      note.textContent = text;
+    },
     onClear: (data) => { view.apply(data && data.type ? data : { type: "captions_cleared" }); render(); },
-    onBackfill: (rows) => { view.replace(rows); render(); },
-    onReset: () => { view.reset(); render(); },
-    onGap: () => { document.querySelector("#state").textContent = "補償窗口不足，只補到伺服器還留著的字幕"; },
+    onBackfill: (rows) => { view.replace(rows); lastCaptionAt = Date.now(); render(); },
+    onReset: () => {
+      view.reset();
+      pendingReset = true;
+      gapDivider = false;
+      queueMicrotask(() => {
+        if (!pendingReset) return;
+        pendingReset = false;
+        showToast(gapCopy(true));
+        render();
+      });
+    },
+    onGap: () => {
+      gapDivider = true;
+      const reset = pendingReset;
+      pendingReset = false;
+      showToast(gapCopy(reset));
+      render();
+    },
+    onHost: (detail) => {
+      hostLive = !!(detail && detail.live);
+      paintChrome();
+    },
   });
 }
-document.querySelector("#retry").onclick = () => { conn.stop(); conn = connect(); conn.nudge(); };
-document.querySelector("#theme").onclick = () => {
-  document.body.classList.toggle("dark");
-  document.querySelector("#theme").textContent = document.body.classList.contains("dark") ? "亮色" : "暗色";
+let conn = connect();
+document.querySelector("#retry").onclick = () => { conn.restart(); };
+function setDrawer(open) {
+  const drawer = document.querySelector("#drawer");
+  if (!drawer) return;
+  drawer.hidden = !open;
+  const settings = document.querySelector("#settings");
+  if (settings) settings.setAttribute("aria-expanded", open ? "true" : "false");
+}
+document.querySelector("#settings").onclick = () => {
+  const drawer = document.querySelector("#drawer");
+  setDrawer(!!(drawer && drawer.hidden));
 };
-document.querySelector("#full").onclick = () => {
-  if (!document.fullscreenElement) document.documentElement.requestFullscreen();
-  else document.exitFullscreen();
+document.querySelector("#drawer-close").onclick = () => setDrawer(false);
+document.querySelector("#theme").onchange = (ev) => { remember({ ...prefs, theme: ev.target.value }); };
+const full = document.querySelector("#full");
+if (!fullscreenAvailable(document)) full.hidden = true;
+full.onclick = () => {
+  const request = !document.fullscreenElement
+    ? document.documentElement.requestFullscreen()
+    : document.exitFullscreen();
+  if (request && typeof request.catch === "function") request.catch(() => {});
 };
-document.querySelector("#mode").onchange = (ev) => {
-  document.body.classList.remove("zh-only", "en-only");
-  if (ev.target.value === "zh") document.body.classList.add("zh-only");
-  if (ev.target.value === "en") document.body.classList.add("en-only");
+document.querySelector("#leave-project").onclick = () => {
+  remember({ ...prefs, mode: "both" });
+  restoreProjectionFocus();
 };
-document.querySelector("#size").onchange = (ev) => { document.documentElement.style.setProperty("--size", ev.target.value + "px"); };
+document.querySelector("#mode").onchange = (ev) => { remember({ ...prefs, mode: ev.target.value }); };
+document.querySelector("#size").onchange = (ev) => { remember({ ...prefs, size: ev.target.value }); };
+document.querySelector("#wake").onchange = (ev) => {
+  remember({ ...prefs, wake: ev.target.checked });
+  syncWake("visible");
+};
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") {
+    const drawer = document.querySelector("#drawer");
+    if (drawer && !drawer.hidden) {
+      setDrawer(false);
+      const settings = document.querySelector("#settings");
+      if (settings && typeof settings.focus === "function") settings.focus();
+      return;
+    }
+  }
+  const next = leaveProjection(prefs, ev.key);
+  if (!next) return;
+  remember(next);
+  restoreProjectionFocus();
+});
 document.querySelector("#pause").onchange = (ev) => {
   state.follow = !ev.target.checked;
   if (!state.follow) state.pinned = liveTail(items, true) && liveTail(items, true).id;
@@ -111,7 +403,30 @@ document.querySelector("#live").onclick = () => {
   document.querySelector("#pause").checked = false;
   render();
 };
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") conn.nudge(); });
+document.querySelector("#toast").onclick = () => { document.querySelector("#toast").hidden = true; };
+history.addEventListener("scroll", () => {
+  const distance = history.scrollHeight - history.scrollTop - history.clientHeight;
+  if (distance > 48 && state.follow) {
+    state.follow = false;
+    const pause = document.querySelector("#pause");
+    if (pause) pause.checked = true;
+    document.querySelector("#live").hidden = false;
+  }
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") conn.nudge();
+  syncWake(document.visibilityState);
+});
+document.addEventListener("pointerdown", () => { syncWake("visible"); }, { once: true });
+if (window.matchMedia) {
+  const scheme = window.matchMedia("(prefers-color-scheme: dark)");
+  const onScheme = () => { if (prefs.theme === "system") applyAppearance(); };
+  if (scheme.addEventListener) scheme.addEventListener("change", onScheme);
+  else if (scheme.addListener) scheme.addListener(onScheme);
+}
+setInterval(() => { paintChrome(); paintSubtitle(); }, 1000);
+paintChrome();
+syncWake("visible");
 </script>
 </body>
 </html>

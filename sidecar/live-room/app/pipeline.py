@@ -15,14 +15,34 @@ from functools import partial
 from pathlib import Path
 
 from app.aio import cancellation_pending, wait_bounded
-from app.asr import AsrResult
-from app.audio import AudioError, wav_duration_seconds, wav_rms
+from app.audio import AudioError, riff_duration_seconds, wav_duration_seconds, wav_rms
+from app.glossary import guarded_flags, missing_locked, normalize
+from app.rtf import RtfMeter
 from app.settings import Settings
 from app.textutil import annotate_question
 from app.translate import TranslateResult, Translator
 
 FAILURES = {"error", "missing", "timeout", "cancelled"}
 TERMINAL = FAILURES | {"ready", "translate_failed", "silent", "zh_ready"}
+_READY_TRANSLATION = {"ok", "off", "no_key"}
+
+
+def _copy_terms(terms) -> list[dict]:
+    copied = []
+    for item in terms or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        aliases = row.get("aliases") or []
+        row["aliases"] = [alias for alias in aliases if isinstance(alias, str)] if isinstance(aliases, list) else []
+        copied.append(row)
+    return copied
+
+
+def _copy_flags(flags) -> list[dict]:
+    if not isinstance(flags, list):
+        return []
+    return [dict(item) for item in flags if isinstance(item, dict)]
 
 
 class PipelineError(Exception):
@@ -51,6 +71,9 @@ class Segment:
     cursor: int = 0
     translate_queued: bool = False
     room_gen: int = 0
+    term_flags: list = field(default_factory=list)
+    glossary_version: int = 0
+    glossary_snapshot: list = field(default_factory=list)
 
     @property
     def key(self) -> tuple[str, str, int]:
@@ -61,7 +84,7 @@ class Segment:
         return f"{self.room_id}:{self.session_id}:{self.seq}"
 
     def public(self) -> dict:
-        return {
+        payload = {
             "type": "final" if self.status in {"ready", "silent"} else "update",
             "id": self.id,
             "room_id": self.room_id,
@@ -79,6 +102,11 @@ class Segment:
             "t0_ms": self.t0_ms,
             "t1_ms": self.t1_ms,
         }
+        if self.glossary_version:
+            payload["glossary_version"] = self.glossary_version
+        if self.term_flags:
+            payload["term_flags"] = _copy_flags(self.term_flags)
+        return payload
 
 
 class Pipeline:
@@ -125,21 +153,100 @@ class Pipeline:
         self.missing_count = 0
         self.oldest_wait_started: float | None = None
         self.last_process_s: float | None = None
+        self.process_s: float | None = None
+        self._rtf = RtfMeter()
         self._translate_q: asyncio.Queue | None = None
         self._translate_pool: ThreadPoolExecutor | None = None
         self._tr_epoch: dict[tuple[str, str, int], int] = {}
+        # Per-room clock. Epochs only increase, so dropping a key cannot
+        # make a later upload reuse a number an in-flight worker still holds.
+        self._tr_clock: dict[str, int] = {}
         self._version_floor: dict[tuple[str, str, int], int] = {}
         self._seeded: set[str] = set()
         self._flushing: set[tuple[str, str]] = set()
         self.translate_skipped = 0
+        self.translate_timeouts = 0
+        self.translate_stale = 0
+        self.translate_errors = 0
+        self.translate_waiter_timeouts = 0
         self._translate_busy = 0
         self._recent_zh: dict[tuple[str, str], deque] = {}
         self._tasks: list[asyncio.Task] = []
         self._workers = False
-        self.glossary: dict[tuple[str, str], list[dict]] = {}
+        # One glossary per room. It outlives sessions, room close, and the caption TTL.
+        self.room_glossaries: dict[str, dict] = {}
 
     def get(self, room_id: str, session_id: str, seq: int) -> Segment | None:
         return self.results.get((room_id, session_id, seq))
+
+    def room_glossary_view(self, room_id: str) -> dict:
+        current = self.room_glossaries.get(room_id)
+        if current is None:
+            return {"room_id": room_id, "version": 0, "terms": [], "updated_at": 0.0}
+        return {
+            "room_id": room_id,
+            "version": int(current["version"]),
+            "terms": _copy_terms(current["terms"]),
+            "updated_at": float(current.get("updated_at") or 0),
+        }
+
+    def room_glossary_version(self, room_id: str) -> int:
+        current = self.room_glossaries.get(room_id)
+        return int(current["version"]) if current else 0
+
+    def terms_for(self, room_id: str) -> list[dict]:
+        current = self.room_glossaries.get(room_id)
+        if not current:
+            return []
+        return _copy_terms(current["terms"])
+
+    def export_room_glossary(self, room_id: str) -> dict | None:
+        current = self.room_glossaries.get(room_id)
+        if current is None:
+            return None
+        return {
+            "room_id": room_id,
+            "version": int(current["version"]),
+            "terms": _copy_terms(current["terms"]),
+            "updated_at": float(current.get("updated_at") or 0),
+        }
+
+    def replace_room_glossary(self, room_id: str, terms: list[dict]) -> dict:
+        current = self.room_glossaries.get(room_id)
+        record = {
+            "room_id": room_id,
+            "version": (int(current["version"]) + 1) if current else 1,
+            "terms": _copy_terms(terms),
+            "updated_at": time.time(),
+        }
+        self.room_glossaries[room_id] = record
+        return record
+
+    def install_room_glossary(self, row: dict) -> None:
+        room_id = str(row.get("room_id") or "")
+        terms = row.get("terms")
+        if not room_id or not isinstance(terms, list):
+            return
+        try:
+            version = int(row.get("version") or 0)
+            updated_at = float(row.get("updated_at") or 0)
+        except (TypeError, ValueError):
+            return
+        self.room_glossaries[room_id] = {
+            "room_id": room_id,
+            "version": version,
+            "terms": _copy_terms(terms),
+            "updated_at": updated_at,
+        }
+
+    def restore_room_glossary(self, room_id: str, previous: dict | None) -> None:
+        if previous is None:
+            self.room_glossaries.pop(room_id, None)
+            return
+        self.room_glossaries[room_id] = previous
+
+    def clear_room_glossary(self, room_id: str) -> None:
+        self.room_glossaries.pop(room_id, None)
 
     def try_admit(self, limit: int | None = None) -> bool:
         return self.try_admit_count() if limit is None else self._admit_with_limit(limit)
@@ -194,18 +301,28 @@ class Pipeline:
         oldest = 0
         if self._slots and self.oldest_wait_started is not None:
             oldest = int((time.monotonic() - self.oldest_wait_started) * 1000)
-        return {
+        payload = {
             "pending": self._slots,
             "inflight": len(self._active),
             "oldest_wait_ms": oldest,
+            # Wall time from the start of the slice until ASR returns, including
+            # the wait for a recognizer. Not the RTF numerator.
             "last_process_ms": None if self.last_process_s is None else int(self.last_process_s * 1000),
+            # Decode plus recognition only. Slot wait and the silence scan are not included.
+            "process_ms": None if self.process_s is None else int(round(self.process_s * 1000)),
             "rejected": self.rejected,
             "missing": self.missing_count,
             "held": sum(len(rows) for rows in self._held.values()),
             "results": len(self.results),
             "translate_queued": 0 if self._translate_q is None else self._translate_q.qsize(),
             "translate_skipped": self.translate_skipped,
+            "translate_timeouts": self.translate_timeouts,
+            "translate_stale": self.translate_stale,
+            "translate_errors": self.translate_errors,
+            "translate_waiter_timeouts": self.translate_waiter_timeouts,
         }
+        payload.update(self._rtf.snapshot())
+        return payload
 
     def ensure_workers(self) -> None:
         if self._workers:
@@ -258,7 +375,10 @@ class Pipeline:
         self._flight.clear()
 
     def drop_room(self, room_id: str) -> None:
-        """Forget one ended room. A later host open uses a new generation, so late jobs cannot refill it."""
+        """Forget one ended room. The glossary stays; only a room delete clears it.
+
+        A later host open uses a new generation, so late jobs cannot refill captions.
+        """
         self._room_gen[room_id] = self._room_gen.get(room_id, 1) + 1
         keys = {key for key in self.results if key[0] == room_id}
         keys.update(key for key in self._flight if key[0] == room_id)
@@ -290,19 +410,19 @@ class Pipeline:
         groups.update(group for group in self._max_seq if group[0] == room_id)
         groups.update(group for group in self._closed if group[0] == room_id)
         groups.update(group for group in self._session_ord if group[0] == room_id)
-        groups.update(group for group in self.glossary if group[0] == room_id)
         for group in groups:
             self._held.pop(group, None)
             self._next.pop(group, None)
             self._max_seq.pop(group, None)
             self._closed.discard(group)
             self._session_ord.pop(group, None)
-            self.glossary.pop(group, None)
+        # room_glossaries stays. Close and idle drop captions, not the room's terms.
         self._room_sessions.pop(room_id, None)
         for stamp in [stamp for stamp in self._gap_since if stamp[0] == room_id]:
             self._gap_since.pop(stamp, None)
         for key in [key for key in self._tr_epoch if key[0] == room_id]:
             self._tr_epoch.pop(key, None)
+        self._tr_clock.pop(room_id, None)
         self._flushing = {group for group in self._flushing if group[0] != room_id}
         for group in [group for group in self._recent_zh if group[0] == room_id]:
             self._recent_zh.pop(group, None)
@@ -315,6 +435,7 @@ class Pipeline:
         prefix = room_id + ":"
         for ident in [ident for ident in self._braced_dropped if ident.startswith(prefix)]:
             self._braced_dropped.pop(ident, None)
+        self._rtf.drop_room(room_id)
 
     def note_retained_order(self, room_id: str, rows: list[dict]) -> None:
         """Reseed session ordinals after a close that kept the room's captions.
@@ -418,6 +539,7 @@ class Pipeline:
         segment.zh = ""
         segment.en = ""
         segment.zh_raw = ""
+        segment.term_flags = []
         segment.translate_queued = False
         segment.status = "cancelled"
         segment.translate_status = ""
@@ -434,6 +556,7 @@ class Pipeline:
             "zh": segment.zh,
             "zh_raw": segment.zh_raw,
             "en": segment.en,
+            "term_flags": _copy_flags(segment.term_flags),
             "t0_ms": segment.t0_ms,
             "t1_ms": segment.t1_ms,
             "session_ord": segment.session_ord,
@@ -455,6 +578,7 @@ class Pipeline:
             # Same cap as the compact index. The set used to live until drop_room,
             # so a long class kept one tuple per segment forever.
             self._emitted_segs.discard(key)
+        self._trim_epochs(room_id)
 
     def _rehydrate(self, key: tuple[str, str, int]) -> Segment | None:
         row = self._index.get(key)
@@ -467,6 +591,7 @@ class Pipeline:
             zh=row.get("zh") or "",
             zh_raw=row.get("zh_raw") or "",
             en=row.get("en") or "",
+            term_flags=_copy_flags(row.get("term_flags")),
             status=row.get("status") or "ready",
             translate_status=row.get("translate_status") or "",
             error=row.get("error") or "",
@@ -482,7 +607,8 @@ class Pipeline:
         return segment
 
     def invalidate_room(self, room_id: str) -> None:
-        """Drop this room's captions. The live session keeps its seq counter and can continue."""
+        """Drop this room's captions and its glossary. The live session keeps its seq counter."""
+        self.clear_room_glossary(room_id)
         self._room_gen[room_id] = self._room_gen.get(room_id, 1) + 1
         sealed = self._sealed.setdefault(room_id, set())
         for (rid, sid), max_seq in list(self._max_seq.items()):
@@ -520,8 +646,7 @@ class Pipeline:
             self._wake(key, blank)
         for group in [group for group in self._held if group[0] == room_id]:
             self._held.pop(group, None)
-        for key in [key for key in self._tr_epoch if key[0] == room_id]:
-            self._tr_epoch[key] = self._tr_epoch.get(key, 0) + 1
+        self._drop_room_epochs(room_id)
         # A single-caption delete still in flight must not unseal what this room delete sealed.
         self._braced.pop(room_id, None)
         self._mute_backlog.pop(room_id, None)
@@ -553,7 +678,7 @@ class Pipeline:
         flight = self._flight.get(key)
         if flight is not None and not flight.done():
             return
-        self._tr_epoch[key] = self._tr_epoch.get(key, 0) + 1
+        self._drop_epoch(key)
         self.results.pop(key, None)
         self._index.pop(key, None)
         self._hashes.pop(key, None)
@@ -648,7 +773,7 @@ class Pipeline:
             braced.discard(ident)
         self._sealed.setdefault(room_id, set()).add(ident)
         self._braced_dropped.pop(ident, None)
-        self._tr_epoch[key] = self._tr_epoch.get(key, 0) + 1
+        self._drop_epoch(key)
         self._index.pop(key, None)
         self._hashes.pop(key, None)
         self._emitted_segs.discard(key)
@@ -706,6 +831,9 @@ class Pipeline:
             "t0_ms": segment.t0_ms,
             "t1_ms": segment.t1_ms,
         }
+        flags = _copy_flags(segment.term_flags)
+        if flags:
+            event["term_flags"] = flags
         self.events.append(dict(event))
         if len(self.events) > self.settings.history_limit * 2:
             del self.events[: len(self.events) - self.settings.history_limit * 2]
@@ -1049,6 +1177,9 @@ class Pipeline:
         self._flight[segment.key] = fut
         holder = {"held": slot_held, "bytes": len(audio), "wait_translation": wait_translation}
         try:
+            # From upload, before decode. Unknown length uses segment_ms until the WAVE header is known.
+            estimate_s = max(int(self.settings.segment_ms), 1) / 1000.0
+            self._rtf.note_waiting(segment.key, estimate_s, estimated=True)
             result = await self._process(segment, audio, decoder, holder)
             if not fut.done():
                 fut.set_result(result)
@@ -1065,6 +1196,9 @@ class Pipeline:
                     fut.exception()
             raise
         finally:
+            self._rtf.clear_waiting(segment.key)
+            self._rtf.clear_decoded(segment.key)
+            self._rtf.clear_asr_active(segment.key)
             if self._flight.get(segment.key) is fut:
                 self._flight.pop(segment.key, None)
 
@@ -1154,8 +1288,12 @@ class Pipeline:
         self._reserved.discard(segment.key)
         work = self.tmp / uuid.uuid4().hex
         started = time.monotonic()
+        decode_s = 0.0
+        slot_wait_s = 0.0
         try:
             segment.status = "decoding"
+            # perf_counter: monotonic steps by ~15.6 ms on Windows Python <= 3.12.
+            decode_mark = time.perf_counter()
             try:
                 wav = await wait_bounded(
                     asyncio.to_thread(self._decode_sync, work, audio, decoder),
@@ -1170,51 +1308,93 @@ class Pipeline:
             except Exception as exc:
                 self.fail_received(segment, str(exc)[:180] or "解碼失敗", status="error")
                 return segment
+            decode_s = time.perf_counter() - decode_mark
             if segment.key in self._cancel:
                 self.fail_received(segment, "主持端取消這段", status="cancelled")
                 return segment
-            seconds = wav_duration_seconds(wav)
+            known = riff_duration_seconds(wav)
+            seconds = known if known is not None else wav_duration_seconds(wav)
             if seconds is not None and seconds > self.settings.max_audio_seconds:
                 self.fail_received(segment, f"音訊長於 {self.settings.max_audio_seconds} 秒，已拒絕")
                 raise AudioError(413, segment.error)
-            rms = wav_rms(wav)
-            if (
-                self.settings.silence_rms > 0
-                and rms is not None
-                and rms < self.settings.silence_rms
-                and (seconds or 0) >= 0.3
-            ):
-                segment.status = "silent"
-                segment.error = "這段太安靜，沒有送去辨識"
-                segment.zh = ""
-                self._release(segment)
-                return segment
+            # First recognition and a retry both come through _process. The scan is
+            # the whole file; skip it when the gate is off, and never run it on the loop.
+            if self.settings.silence_rms > 0:
+                rms = await asyncio.to_thread(wav_rms, wav)
+                if rms is not None and rms < self.settings.silence_rms and (seconds or 0) >= 0.3:
+                    segment.status = "silent"
+                    segment.error = "這段太安靜，沒有送去辨識"
+                    segment.zh = ""
+                    self._rtf.clear_waiting(segment.key)
+                    self._rtf.note_silent_skip((segment.room_id, segment.session_id))
+                    self._release(segment)
+                    return segment
             segment.status = "transcribing"
+            # Real WAVE length replaces the upload estimate. Non-WAVE stays estimated until ASR starts.
+            # backlog_audio_s keeps that real length until recognition finishes (original definition).
+            audio_s = float(known) if known else 0.0
+            if audio_s > 0:
+                self._rtf.note_waiting(segment.key, audio_s, estimated=False)
+                self._rtf.note_decoded(segment.key, audio_s)
+            record_s: float | None = None
+            asr_ok = False
+            blank = False
             try:
+                slot_mark = time.perf_counter()
                 async with self._asr_slots:
-                    asr: AsrResult = await wait_bounded(
-                        asyncio.to_thread(self.asr.transcribe, wav, self.prompt),
-                        timeout=self.settings.asr_timeout_s,
-                    )
-            except asyncio.TimeoutError:
-                self.fail_received(segment, "辨識逾時", status="timeout")
-                return segment
+                    slot_wait_s = time.perf_counter() - slot_mark
+                    # backlog_s ends when recognition starts. backlog_audio_s stays until it returns.
+                    self._rtf.clear_waiting(segment.key)
+                    self._rtf.note_asr_active(segment.key, segment.room_id)
+                    asr_started = time.monotonic()
+                    try:
+                        asr = await wait_bounded(
+                            asyncio.to_thread(self.asr.transcribe, wav, self.prompt),
+                            timeout=self.settings.asr_timeout_s,
+                        )
+                    except asyncio.TimeoutError:
+                        # A timeout is not a speed sample. ~120s of asr_ms would own p95.
+                        self._rtf.note_timeout((segment.room_id, segment.session_id))
+                        self.fail_received(segment, "辨識逾時", status="timeout")
+                        return segment
+                    record_s = time.monotonic() - asr_started
+                    blank = bool(getattr(asr, "blank", False))
+                    asr_ok = bool(asr.ok) and not blank
             except Exception as exc:
+                self._rtf.note_error((segment.room_id, segment.session_id))
                 self.fail_received(segment, str(exc)[:180] or "辨識失敗", status="error")
                 return segment
+            finally:
+                self._rtf.clear_waiting(segment.key)
+                self._rtf.clear_decoded(segment.key)
+                self._rtf.clear_asr_active(segment.key)
+                # ok=False and a resident blank are not speed samples. An empty ok result still is.
+                if record_s is not None and asr_ok:
+                    self._rtf.record(
+                        record_s,
+                        audio_s,
+                        (segment.room_id, segment.session_id),
+                        decode_s,
+                        slot_wait_s,
+                    )
+            # Original last_process_ms: start of _process through ASR return, including slot wait.
+            # process_s uses the two explicit spans so the silence scan and the queue stay out.
             self.last_process_s = time.monotonic() - started
+            self.process_s = max(0.0, decode_s + (record_s or 0.0))
             if segment.key in self._cancel:
                 self.fail_received(segment, "主持端取消這段", status="cancelled")
                 return segment
             text = (asr.text or "").strip()
             if not asr.ok or not text:
                 if asr.ok or not asr.error:
+                    self._rtf.note_empty((segment.room_id, segment.session_id))
                     segment.status = "silent"
                     segment.error = asr.error or "這段沒聽到話"
                     segment.zh_raw = text
                     segment.zh = ""
                     self._release(segment)
                     return segment
+                self._rtf.note_error((segment.room_id, segment.session_id))
                 segment.status = "error"
                 segment.error = asr.error or "辨識失敗"
                 segment.zh_raw = text
@@ -1222,7 +1402,7 @@ class Pipeline:
                 self._release(segment)
                 return segment
             segment.zh_raw = text
-            segment.zh = annotate_question(text)
+            segment.zh = annotate_question(normalize(text, self.terms_for(segment.room_id)))
             segment.status = "zh_ready"
             # Retry sets version to max(existing + 1, 1). Keep it; do not hard-reset to 1.
             segment.version = max(segment.version, 1)
@@ -1296,6 +1476,34 @@ class Pipeline:
             return self._abandon(segment)
         return self.results.get(segment.key, segment)
 
+    def _next_epoch(self, key: tuple[str, str, int]) -> int:
+        room = key[0]
+        clock = self._tr_clock.get(room, 0) + 1
+        self._tr_clock[room] = clock
+        self._tr_epoch[key] = clock
+        return clock
+
+    def _drop_epoch(self, key: tuple[str, str, int]) -> None:
+        """Invalidate in-flight work for this seq and forget the entry.
+
+        The room clock only moves forward, so a later upload of the same seq
+        cannot reuse an epoch an in-flight worker still holds.
+        """
+        room = key[0]
+        self._tr_clock[room] = self._tr_clock.get(room, 0) + 1
+        self._tr_epoch.pop(key, None)
+
+    def _drop_room_epochs(self, room_id: str) -> None:
+        self._tr_clock[room_id] = self._tr_clock.get(room_id, 0) + 1
+        for key in [key for key in self._tr_epoch if key[0] == room_id]:
+            self._tr_epoch.pop(key, None)
+
+    def _trim_epochs(self, room_id: str) -> None:
+        """Keep translation epochs inside the caption cap. One int per live row."""
+        live = {key for key in self._index if key[0] == room_id}
+        for key in [key for key in self._tr_epoch if key[0] == room_id and key not in live]:
+            self._tr_epoch.pop(key, None)
+
     def _epoch_current(self, segment: Segment, epoch: int) -> bool:
         return (
             not self._stale(segment)
@@ -1324,8 +1532,7 @@ class Pipeline:
     def _put_translation(self, segment: Segment) -> None:
         assert self._translate_q is not None
         self._drop_queued(segment.key)
-        epoch = self._tr_epoch.get(segment.key, 0) + 1
-        self._tr_epoch[segment.key] = epoch
+        epoch = self._next_epoch(segment.key)
         item = (epoch, time.monotonic(), segment)
         # Epoch travels with the queue item. The segment object is shared, so a
         # later retranslate must not change which attempt a worker already holds.
@@ -1354,16 +1561,13 @@ class Pipeline:
         try:
             old_epoch, _old_at, old = self._translate_q.get_nowait()
         except asyncio.QueueEmpty:
-            self.translate_skipped += 1
             loop.call_soon(self._skip_backlog, segment, epoch)
             return
         self._translate_q.task_done()
-        self.translate_skipped += 1
         loop.call_soon(self._skip_backlog, old, old_epoch)
         try:
             self._translate_q.put_nowait(item)
         except asyncio.QueueFull:
-            self.translate_skipped += 1
             loop.call_soon(self._skip_backlog, segment, epoch)
 
     def _skip_backlog(self, segment: Segment, epoch: int) -> None:
@@ -1380,17 +1584,35 @@ class Pipeline:
         self._fail_translation(segment, "skipped_backlog", "英譯積壓，略過較舊的段落，中文仍保留")
         self._wake(segment.key, segment)
 
+    def _account_translate_failure(self, translate_status: str) -> None:
+        """Count one published failure. A skip that never lands is not counted."""
+        if translate_status == "skipped_backlog":
+            self.translate_skipped += 1
+            return
+        bucket = {
+            "timeout": "translate_timeouts",
+            # Queued longer than the translate budget. The row status stays "skipped".
+            "skipped": "translate_stale",
+            "error": "translate_errors",
+            "waiter_timeout": "translate_waiter_timeouts",
+        }.get(translate_status)
+        if bucket is None:
+            return
+        setattr(self, bucket, getattr(self, bucket) + 1)
+
     def _fail_translation(self, segment: Segment, translate_status: str, error: str) -> None:
         if self._stale(segment) or segment.key not in self._emitted_segs:
             segment.translate_queued = False
             return
         segment.translate_queued = False
         segment.en = ""
+        segment.term_flags = []
         segment.translate_status = translate_status
         segment.error = error
         segment.status = "translate_failed"
         segment.version += 1
         self.results[segment.key] = segment
+        self._account_translate_failure(translate_status)
         self._emit(segment)
 
     def _queue_translate(self, segment: Segment) -> None:
@@ -1421,7 +1643,7 @@ class Pipeline:
             self._discard_waiter(segment.key, fut)
             if segment.translate_queued and segment.status == "zh_ready":
                 segment.translate_queued = False
-                self._fail_translation(segment, "timeout", "英譯逾時，不假設沒有計費。中文仍保留")
+                self._fail_translation(segment, "waiter_timeout", "英譯逾時，不假設沒有計費。中文仍保留")
                 self._wake(segment.key, segment)
 
     async def _translate_loop(self) -> None:
@@ -1490,20 +1712,32 @@ class Pipeline:
             return False
         if zh_snapshot is not None and segment.zh != zh_snapshot:
             segment.translate_queued = False
+            segment.term_flags = []
             return False
-        segment.en = translated.text or ""
+        # Only a successful translation may fill `en`. off/no_key stay ready with an empty line.
+        # Anything else, including a failure that echoed Chinese, publishes blank English.
+        segment.en = (translated.text or "") if translated.status == "ok" else ""
         segment.translate_status = translated.status
         segment.error = translated.detail
-        segment.status = "ready" if translated.status in {"ok", "off", "no_key"} else "translate_failed"
+        segment.status = "ready" if translated.status in _READY_TRANSLATION else "translate_failed"
         segment.translate_queued = False
         segment.version = segment.version + 1
         if epoch is not None and not self._epoch_current(segment, epoch):
             segment.en = ""
+            segment.term_flags = []
             return False
         if zh_snapshot is not None and segment.zh != zh_snapshot:
             segment.en = ""
+            segment.term_flags = []
             segment.translate_queued = False
             return False
+        zh_for_flags = zh_snapshot if zh_snapshot is not None else segment.zh
+        snapshot = segment.glossary_snapshot
+        flags: list = []
+        if translated.status == "ok" and segment.en:
+            flags.extend(missing_locked(zh_for_flags, snapshot, segment.en))
+        flags.extend(guarded_flags(zh_for_flags, snapshot))
+        segment.term_flags = flags
         self.results[segment.key] = segment
         self._emit(segment)
         return True
@@ -1520,12 +1754,14 @@ class Pipeline:
             self._fail_translation(segment, "skipped", "英譯排隊太久，中文仍保留")
             return
         zh_snapshot = segment.zh
-        glossary = self.glossary.get((segment.room_id, segment.session_id), [])
+        terms = self.terms_for(segment.room_id)
+        segment.glossary_snapshot = terms
+        segment.glossary_version = self.room_glossary_version(segment.room_id)
         context = self._context(segment)
         kwargs = {}
         params = inspect.signature(self.translator.translate).parameters
         if "glossary" in params:
-            kwargs["glossary"] = glossary
+            kwargs["glossary"] = terms
         if "context" in params:
             kwargs["context"] = context
         if "deadline" in params:
@@ -1644,6 +1880,7 @@ class Pipeline:
                 zh=row.get("zh") or "",
                 zh_raw=row.get("zh_raw") or "",
                 en=row.get("en") or "",
+                term_flags=_copy_flags(row.get("term_flags")),
                 status=row.get("status") or "ready",
                 translate_status=row.get("translate_status") or "",
                 error=row.get("error") or "",
@@ -1691,7 +1928,7 @@ class Pipeline:
             raise PipelineError(409, "這段已取消或缺少，不能重譯")
         if zh is not None:
             segment.zh_raw = segment.zh_raw or segment.zh
-            segment.zh = annotate_question(zh.strip())
+            segment.zh = annotate_question(normalize(zh.strip(), self.terms_for(room_id)))
             self._remember_zh(segment)
         # A second retranslate replaces the queued attempt instead of stacking one.
         segment.status = "zh_ready"

@@ -16,3 +16,6 @@ Zen Bridge 是唯一主要 UI。活動、人員、講義、例句與中英譯文
 
 
 部署管理以根目錄 GitHub Actions 為主。已在 Zeabur 服務設定保存 BREEZE_AGENT_TOKEN、BREEZE_AGENT_PORT、BREEZE_ASR_URL、SPEECH_PROVIDER 和 PUBLIC_BASE_URL，並停用此環境的重複 Git trigger，避免 Zeabur 重建覆蓋 CI 掛載／配對設定。調整平台設定前保存 private backup；以 CI／受限 deploy 命令發布，不另啟兩條自動部署流程。若要變更 Node 鎖定依賴，先建立相符 image，再通過部署脚本的 lock 檢查。
+
+
+Breeze 上游同步至已合併 main `36fe197fefc9242e44cf2c30b704ba47c66c00f2`（PR22–31）。以匯入原生 App 分支與 main 的共同祖先 `db46a1c5beccaf05526fa3d546a2a7679337cb46` 取得上游差異，再於 `sidecar/live-room` 做三方套用，保留 Zen 原生 App、配對與小型更新改動。PR32 仍在複審，不包含在此同步中。後續上游同步請從這個 main SHA 比較，並保留 Zen 主 UI。

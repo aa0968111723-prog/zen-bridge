@@ -158,28 +158,56 @@ async def test_default_window_exceeded_reports_gap():
 
 @pytest.mark.anyio
 async def test_room_close_closes_listener_socket():
-    """B-e4."""
+    """B-e4. Notice within 1 virtual second; socket closed within 2.
+
+    The clock starts immediately before client.post, which is the close request.
+    A full collection of the suite heap is paid before that, and GC stays off
+    for the window, so a collector pause is not the close notice. vlimit and
+    SCALE are unchanged. This branch has no watch_full_gc helper; the callback
+    below is the same check (zero generation-2 collections inside the window).
+    """
+    import gc
     import time
-    from tests.sim import SCALE
+
+    from tests.sim import SCALE, vlimit
 
     async with serving(asr=TextAsr(0), settings=sim_settings(translate=False)) as (app, client, token):
         await open_room(client, token, "class")
         async with Listener(app, "class") as listener:
             assert await listener.wait_for(lambda: any(m.get("type") == "hello" for m in listener.messages), 5)
-            started = time.monotonic()
-            resp = await client.post(
-                "/api/rooms/close",
-                json={"room_id": "class"},
-                headers={**auth(token), "content-type": "application/json"},
-            )
-            assert resp.status_code == 200, resp.text
-            assert await listener.wait_for(lambda: any(m.get("type") == "room_unavailable" for m in listener.messages), 5)
-            note = next(m for m in listener.messages if m.get("type") == "room_unavailable")
-            assert note["reason"] == "ended"
-            assert (note["_recv_mono"] - started) / SCALE <= __import__("tests.sim", fromlist=["vlimit"]).vlimit(1)
-            assert await listener.wait_for(lambda: listener.closed, 5)
-            close = next(m for m in listener.messages if m.get("type") == "websocket.close")
-            assert (close["_recv_mono"] - started) / SCALE <= __import__("tests.sim", fromlist=["vlimit"]).vlimit(2)
+            gc.collect()
+            full_gc = {"n": 0}
+            watching = False
+
+            def _count_full(phase, info):
+                if watching and phase == "stop" and int(info.get("generation", -1)) >= 2:
+                    full_gc["n"] += 1
+
+            gc.callbacks.append(_count_full)
+            was_gc = gc.isenabled()
+            gc.disable()
+            watching = True
+            try:
+                started = time.monotonic()
+                resp = await client.post(
+                    "/api/rooms/close",
+                    json={"room_id": "class"},
+                    headers={**auth(token), "content-type": "application/json"},
+                )
+                assert resp.status_code == 200, resp.text
+                assert await listener.wait_for(lambda: any(m.get("type") == "room_unavailable" for m in listener.messages), 5)
+                note = next(m for m in listener.messages if m.get("type") == "room_unavailable")
+                assert note["reason"] == "ended"
+                assert (note["_recv_mono"] - started) / SCALE <= vlimit(1)
+                assert await listener.wait_for(lambda: listener.closed, 5)
+                close = next(m for m in listener.messages if m.get("type") == "websocket.close")
+                assert (close["_recv_mono"] - started) / SCALE <= vlimit(2)
+                assert full_gc["n"] == 0
+            finally:
+                watching = False
+                gc.callbacks.remove(_count_full)
+                if was_gc:
+                    gc.enable()
 
 
 @pytest.mark.anyio

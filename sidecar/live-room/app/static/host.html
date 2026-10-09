@@ -12,7 +12,7 @@ h1 { font-size: 30px; margin: 0 0 6px; }
 p { line-height: 1.5; }
 button, input, select, textarea { font-size: 18px; }
 button { min-height: 44px; padding: 10px 16px; margin: 8px 8px 0 0; border: 0; border-radius: 12px; background: #8a5424; color: #fff; }
-button:disabled { opacity: .45; }
+button:disabled, button[aria-disabled="true"] { opacity: .45; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #c47a32; outline-offset: 2px; }
 .lead { color: #6b5644; margin-top: 0; }
 #go { min-height: 56px; padding: 14px 28px; font-size: 22px; font-weight: 750; }
@@ -25,9 +25,17 @@ button.secondary { background: #5d6b4a; }
 .card { background: #fffaf3; border-radius: 18px; padding: 16px; margin-top: 16px; box-shadow: 0 10px 28px rgba(80, 48, 16, .08); }
 label { display: block; margin-top: 8px; }
 .warn { color: #8a2b12; font-weight: 650; }
+#glossary-note:empty { display: none; }
+textarea[readonly] { background: #f3eadb; color: #6b5644; }
 .meter { height: 12px; background: #eadfce; border-radius: 99px; overflow: hidden; margin-top: 8px; }
 .meter span { display: block; height: 100%; width: 0; background: #c47a32; }
 #phase { font-weight: 700; }
+#rtf-speed { margin: 8px 0 0; padding: 8px 12px; border-radius: 12px; font-size: 18px; font-weight: 700; }
+#rtf-speed.speed-empty { color: #2a2118; background: #fffaf3; }
+#rtf-speed.speed-ok { color: #0b3d1e; background: #e7f6ec; border-left: 6px solid #1b7a3a; }
+#rtf-speed.speed-warn { color: #4a3200; background: #fff4cc; border-left: 6px solid #a86b00; }
+#rtf-speed.speed-bad { color: #7a1e0c; background: #fde8e1; border-left: 6px solid #c13a1d; }
+#rtf-speed.speed-stale { outline: 2px dashed #5c5346; outline-offset: 2px; }
 #caption-en { font-size: 28px; line-height: 1.35; min-height: 1.35em; }
 #caption-zh { color: #6b5644; min-height: 1.4em; }
 #first-run ol { margin: 8px 0 0; padding-left: 1.2em; }
@@ -58,6 +66,7 @@ label { display: block; margin-top: 8px; }
 <button id="try" class="secondary" type="button">試音</button>
 </div>
 <p id="phase">收音狀態：待命</p>
+<p id="rtf-speed" class="speed-empty" title="每 1 秒錄音需要的辨識秒數。一般是這一場最近 200 段的中位數，最慢是第 95 百分位。低於 0.9 才跟得上。新的一場沒有樣本時，不顯示上一場的數字。">辨識速度：開始聽之後才有數字</p>
 <p id="caption-en"></p>
 <p id="caption-zh"></p>
 <p id="status"></p>
@@ -68,8 +77,9 @@ label { display: block; margin-top: 8px; }
 <label>分享位址 <select id="nic"></select></label>
 </div>
 <div class="card">
-<label>這場術語，一行一個，例如 般若=prajna
-<textarea id="glossary" rows="4"></textarea></label>
+<label>這個房間的術語<span id="glossary-readonly"></span>，一行一個，例如 般若=prajna，別名寫成 禪學社|柴學社=Zen Club
+<textarea id="glossary" rows="4" autocomplete="off" aria-describedby="glossary-note"></textarea></label>
+<p id="glossary-note" class="warn" role="status"></p>
 <button id="save-terms" class="secondary" type="button">儲存術語</button>
 <button id="export" class="secondary" type="button">匯出 SRT</button>
 <label>跳過序號 <input id="skip-seq" inputmode="numeric" value="1" style="width:5em"></label>
@@ -84,6 +94,7 @@ label { display: block; margin-top: 8px; }
 import { createCaptureController } from "/static/recorder_machine.js";
 import { connectRoom, createCaptionView, mergeCaptionUpdate } from "/static/room_client.js";
 import { applyCaption } from "/static/host_caption.js";
+import { glossaryApplyLoadFailure, glossaryApplyLoaded, glossaryBeginLoad, glossaryEdit, glossaryRefusal, glossaryRoomState, glossarySaveDecision, glossarySaveLine, glossarySaveSettlement, glossaryTextDirty, glossaryTransportLine } from "/static/host_glossary.js";
 const roomEl = document.querySelector("#room");
 const log = document.querySelector("#log");
 const status = document.querySelector("#status");
@@ -108,6 +119,7 @@ let holdRoom = "";
 let captionConn = null;
 let listenedRoom = "";
 let listenKey = "";
+let glossaryState = glossaryRoomState();
 const view = createCaptionView(80);
 const captions = view.items;
 const phaseLabels = {
@@ -177,7 +189,9 @@ function listenCaptions(roomId, force) {
       if (listenKey) address += "&k=" + encodeURIComponent(listenKey);
       return address;
     },
-    onState: () => {},
+    onState: (text) => {
+      if (typeof text === "string" && text.startsWith("已連上")) loadGlossary(room);
+    },
     onEvent: (item) => showCaption(item, true),
     onDelete: (item) => {
       view.apply(item);
@@ -202,12 +216,11 @@ async function recoverAuth() {
     const data = await resp.json();
     if (!data || typeof data.token !== "string" || !data.token) throw new Error("無法重新取得主持權限");
     token = data.token;
-    const room = (ctl.session && ctl.session.roomId) || (roomEl.value || "class").trim() || "class";
-    const sessionId = (ctl.session && ctl.session.id) || "pending";
+    // The room on screen, not the last recording. After stop the selector can already be another room.
+    const room = (roomEl.value || "class").trim() || "class";
     const headers = { authorization: "Bearer " + token, "content-type": "application/json" };
     const opened = await fetch("/api/rooms/open", { method: "POST", headers, body: JSON.stringify({ room_id: room }) });
     if (opened.ok) rememberRoom(await opened.json());
-    await fetch("/api/glossary", { method: "POST", headers, body: JSON.stringify({ room_id: room, session_id: sessionId, text: document.querySelector("#glossary").value }) });
     listenCaptions(room, true);
   })();
   try {
@@ -215,6 +228,123 @@ async function recoverAuth() {
   } finally {
     authJob = null;
   }
+}
+function syncGlossaryText() {
+  const box = document.querySelector("#glossary");
+  if (box) glossaryState = glossaryEdit(glossaryState, box.value);
+}
+function paintGlossary() {
+  const box = document.querySelector("#glossary");
+  if (box) {
+    if (box.value !== glossaryState.text) box.value = glossaryState.text;
+    box.readOnly = !!glossaryState.readOnly;
+  }
+  const saveBtn = document.querySelector("#save-terms");
+  if (saveBtn) saveBtn.setAttribute("aria-disabled", glossaryState.locked || glossaryState.readOnly ? "true" : "false");
+  const note = document.querySelector("#glossary-note");
+  if (note) note.textContent = glossaryState.note || "";
+  const mark = document.querySelector("#glossary-readonly");
+  if (mark) mark.textContent = glossaryState.readOnly ? "（唯讀）" : "";
+}
+function glossaryText() {
+  syncGlossaryText();
+  return glossaryState.text;
+}
+async function loadGlossary(roomId) {
+  // Fill the box from the server and remember that room and version.
+  // A room switch clears both before the GET, so a failed load cannot keep the previous room.
+  // A reconnect keeps unsaved text and the version already on screen.
+  // A load aimed at a room the selector is not showing must not clear the box.
+  if (!token) return;
+  syncGlossaryText();
+  const room = String(roomId || roomEl.value || "class").trim() || "class";
+  const began = glossaryBeginLoad(glossaryState, room, roomEl.value);
+  if (!began.started) return;
+  glossaryState = began.state;
+  paintGlossary();
+  const generation = began.generation;
+  let resp;
+  try {
+    resp = await hostFetch("/api/rooms/" + encodeURIComponent(room) + "/glossary", { cache: "no-store" });
+  } catch (err) {
+    glossaryState = glossaryApplyLoadFailure(glossaryState, room, generation);
+    paintGlossary();
+    return;
+  }
+  if (!resp || !resp.ok) {
+    glossaryState = glossaryApplyLoadFailure(glossaryState, room, generation);
+    paintGlossary();
+    return;
+  }
+  if ((String(roomEl.value || "class").trim() || "class") !== room) return;
+  let data = null;
+  try {
+    data = await resp.json();
+  } catch (err) {
+    glossaryState = glossaryApplyLoadFailure(glossaryState, room, generation);
+    paintGlossary();
+    return;
+  }
+  if ((String(roomEl.value || "class").trim() || "class") !== room) return;
+  syncGlossaryText();
+  if (!data || !Array.isArray(data.terms) || !Number.isInteger(data.version)) {
+    glossaryState = glossaryApplyLoadFailure(glossaryState, room, generation);
+    paintGlossary();
+    return;
+  }
+  glossaryState = glossaryApplyLoaded(glossaryState, room, generation, data.terms, data.version);
+  paintGlossary();
+}
+async function postGlossary(selectorRoom, sessionId, headers) {
+  syncGlossaryText();
+  // if_version is the version stored when this box was filled. Do not GET a new
+  // version here: a page left open must send the old one and receive 409.
+  // The room is the one whose glossary is on screen, not the last recording session.
+  const request = glossarySaveDecision(glossaryState, selectorRoom, sessionId);
+  if (!request.post) {
+    if (request.reason === "empty") return null;
+    const reason = glossaryRefusal(glossaryState, request.reason);
+    const status = request.reason === "no-version" ? 409 : 400;
+    return {
+      status,
+      async json() {
+        return { ok: false, rejected: [{ line: 0, reason }] };
+      },
+    };
+  }
+  const payload = JSON.stringify(request.body);
+  const requestRoom = request.body.room_id;
+  const requestGeneration = glossaryState.generation;
+  const sent = headers
+    ? await fetch("/api/glossary", { method: "POST", headers, body: payload })
+    : await hostFetch("/api/glossary", { method: "POST", headers: { "content-type": "application/json" }, body: payload });
+  if (sent && sent.ok) {
+    // sent text, not the box: keystrokes during the POST are still unsaved.
+    const settled = glossarySaveSettlement(glossaryState, requestRoom, requestGeneration, request.body.text);
+    if (settled.settle) {
+      glossaryState = settled.state;
+      await loadGlossary(settled.reloadRoom);
+    }
+  }
+  return sent;
+}
+async function reportGlossary(room, sessionId, headers) {
+  let resp;
+  try {
+    resp = await postGlossary(room, sessionId, headers);
+  } catch (err) {
+    line(glossaryTransportLine(err));
+    return;
+  }
+  if (!resp) return;
+  let body = null;
+  try {
+    body = await resp.json();
+  } catch (err) {
+    body = null;
+  }
+  const message = glossarySaveLine(resp.status, body);
+  if (message) line(message);
 }
 async function hostFetch(url, options) {
   const build = () => {
@@ -288,16 +418,89 @@ async function setup() {
     : (data.translate_label + "。模型模式：" + (modeNames[data.asr_mode] || data.asr_mode) + (data.model_reloads_each_segment ? "，每段會重新載入。" : "，常駐服務已就緒。") + (data.storage ? "逐字稿已啟用儲存，可匯出保存期限內的完整內容。" : "逐字稿未啟用儲存；重開服務會清空，只可匯出近期字幕。"));
   go.disabled = !ready || !token || !ctl.canEditRoom();
   listenCaptions(roomEl.value);
+  loadGlossary(roomEl.value);
 }
 async function refreshMetrics() {
   if (!token) return;
-  const resp = await fetch("/api/metrics", { headers: { authorization: "Bearer " + token } });
-  if (!resp.ok) return;
-  const data = await resp.json();
-  const ram = data.rss_bytes ? Math.round(data.rss_bytes / 1048576) + " MB" : "尚未讀到";
-  const tokens = data.tokens_used ? "，譯文 tokens " + data.tokens_used : "";
-  const price = data.price ? "，金額只依 " + data.price.date + " 的來源" : "";
-  metrics.textContent = "待處理 " + data.pending + "，最久等待 " + data.oldest_wait_ms + " ms，上次辨識 " + (data.last_process_ms ?? "—") + " ms，拒絕 " + data.rejected + "，缺段 " + data.missing + "，聽眾 " + data.listeners + "，記憶體 " + ram + tokens + price;
+  try {
+    const resp = await fetch("/api/metrics", { headers: { authorization: "Bearer " + token } });
+    if (!resp.ok) {
+      noteMetricsFailure(document.querySelector("#rtf-speed"));
+      return;
+    }
+    const data = await resp.json();
+    const ram = data.rss_bytes ? Math.round(data.rss_bytes / 1048576) + " MB" : "尚未讀到";
+    const tokens = data.tokens_used ? "，譯文 tokens " + data.tokens_used : "";
+    const price = data.price ? "，金額只依 " + data.price.date + " 的來源" : "";
+    metrics.textContent = "待處理 " + data.pending + "，最久等待 " + data.oldest_wait_ms + " ms，上次辨識 " + (data.last_process_ms ?? "—") + " ms，純辨識 " + (data.process_ms ?? "—") + " ms，正在辨識 " + (data.asr_active_s ?? "—") + " 秒，拒絕 " + data.rejected + "，缺段 " + data.missing + "，聽眾 " + data.listeners + "，記憶體 " + ram + tokens + price;
+    paintRecognitionSpeed(data);
+  } catch (err) {
+    noteMetricsFailure(document.querySelector("#rtf-speed"));
+  }
+}
+function recognitionSpeedView(data, listening) {
+  const title = "每 1 秒錄音需要的辨識秒數。一般是這一場最近 200 段的中位數，最慢是第 95 百分位。低於 0.9 才跟得上。新的一場沒有樣本時，不顯示上一場的數字。";
+  const empty = { text: "辨識速度：開始聽之後才有數字", tone: "speed-empty", title: title };
+  if (!listening || !listening.roomId || !listening.sessionId) return empty;
+  const sessions = data && data.rtf && Array.isArray(data.rtf.sessions) ? data.rtf.sessions : [];
+  let found = null;
+  for (const row of sessions) {
+    if (row && row.room_id === listening.roomId && row.session_id === listening.sessionId) found = row;
+  }
+  const stats = found && found.recent ? found.recent : found;
+  const count = stats && stats.count != null ? Number(stats.count) : 0;
+  const block = stats && stats.rtf;
+  const p50 = block && block.p50 != null ? Number(block.p50) : null;
+  const p95 = block && block.p95 != null ? Number(block.p95) : null;
+  if (!(count > 0) || p50 == null || p95 == null || Number.isNaN(p50) || Number.isNaN(p95)) return empty;
+  let tone = "speed-ok";
+  let word = "跟得上";
+  if (p95 >= 0.9) {
+    tone = "speed-bad";
+    word = "跟不上，字幕會延遲";
+  } else if (p95 >= 0.7) {
+    tone = "speed-warn";
+    word = "接近上限";
+  }
+  const shown = Math.round(count);
+  const text = word + "｜辨識速度：一般 " + p50.toFixed(2) + "、最慢 " + p95.toFixed(2) + "（低於 0.9 才跟得上）。最近 " + shown + " 段";
+  return { text: text, tone: tone, title: title };
+}
+function sessionKey(session) {
+  if (!session || !session.roomId || !session.id) return "";
+  return String(session.roomId) + "\n" + String(session.id);
+}
+function noteMetricsFailure(speed) {
+  if (!speed) return;
+  const session = (typeof ctl !== "undefined" && ctl) ? ctl.session : null;
+  const current = sessionKey(session);
+  const painted = speed.metricsSession || "";
+  if (painted !== current) {
+    const listening = current ? { roomId: session.roomId, sessionId: session.id } : null;
+    const view = recognitionSpeedView(null, listening);
+    if (speed.classList && speed.classList.remove) {
+      speed.classList.remove("speed-empty", "speed-ok", "speed-warn", "speed-bad", "speed-stale");
+    }
+    if (speed.classList) speed.classList.add(view.tone);
+    speed.textContent = view.text;
+    speed.title = view.title;
+    speed.metricsSession = current;
+  }
+  if (speed.classList) speed.classList.add("speed-stale");
+  const mark = "（數字暫停更新）";
+  const textNow = speed.textContent || "";
+  if (!textNow.includes(mark)) speed.textContent = textNow + mark;
+}
+function paintRecognitionSpeed(data) {
+  const speed = document.querySelector("#rtf-speed");
+  if (!speed) return;
+  const listening = ctl.session ? { roomId: ctl.session.roomId, sessionId: ctl.session.id } : null;
+  const view = recognitionSpeedView(data, listening);
+  speed.metricsSession = sessionKey(ctl.session);
+  speed.classList.remove("speed-empty", "speed-ok", "speed-warn", "speed-bad", "speed-stale");
+  speed.classList.add(view.tone);
+  speed.textContent = view.text;
+  speed.title = view.title;
 }
 const ctl = createCaptureController({
   periodMs: 6000,
@@ -402,14 +605,12 @@ go.onclick = async () => {
     const opened = await hostFetch("/api/rooms/open", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: room }) });
     if (opened.ok) rememberRoom(await opened.json());
     listenCaptions(room, true);
-    await hostFetch("/api/glossary", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: room, session_id: "pending", text: document.querySelector("#glossary").value }) });
     await ctl.start();
     const activeRoom = ctl.session ? ctl.session.roomId : room;
     await hostFetch("/api/session/active", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: activeRoom, active: true }) });
-    if (ctl.session) {
-      await hostFetch("/api/glossary", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: ctl.session.roomId, session_id: ctl.session.id, text: document.querySelector("#glossary").value }) });
-    }
     line("開始聽了。每一段都是完整錄音。");
+    syncGlossaryText();
+    if (glossaryTextDirty(glossaryState)) line("術語尚未儲存，請按「儲存術語」。沒按儲存的詞不會套用。");
   } catch (err) {
     status.className = "warn";
     status.textContent = micError(err);
@@ -454,10 +655,27 @@ document.querySelector("#try").onclick = async () => {
     status.textContent = micError(err);
   }
 };
+document.querySelector("#glossary").addEventListener("input", () => {
+  syncGlossaryText();
+});
 document.querySelector("#save-terms").onclick = async () => {
-  if (!token || !ctl.session) { line("開始聽之後才會把術語套到這一場。"); return; }
-  await hostFetch("/api/glossary", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: ctl.session.roomId, session_id: ctl.session.id, text: document.querySelector("#glossary").value }) });
-  line("已儲存這一場的術語。");
+  if (!token || !ctl.session) { line("開始聽之後才會把術語存到這個房間。"); return; }
+  syncGlossaryText();
+  const selector = (roomEl.value || "class").trim() || "class";
+  const decision = glossarySaveDecision(glossaryState, selector, ctl.session.id);
+  if (!decision.post) {
+    if (decision.reason === "empty") {
+      line("術語是空的，沒有覆蓋這個房間已儲存的詞表。");
+      return;
+    }
+    line(glossaryRefusal(glossaryState, decision.reason));
+    return;
+  }
+  try {
+    await reportGlossary(selector, ctl.session.id);
+  } catch (err) {
+    line(glossaryTransportLine(err));
+  }
 };
 document.querySelector("#skip").onclick = async () => {
   if (!token || !ctl.session) {

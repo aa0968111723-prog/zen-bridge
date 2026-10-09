@@ -1,8 +1,9 @@
 """B-f. Stopping the session waits for audio already in ASR, not for English.
 
 VirtualHost.stop posts /api/session/end the way host.html does: after uploads drain,
-with no flush=0. sim_settings sets stop_flush_s to 2 virtual seconds so a 40s translation
-does not hold the stop button. B-f2 raises that budget so the gated ASR can finish.
+with no flush=0. sim_settings sets stop_flush_s to 8 virtual seconds, the product
+default, so a 40s translation does not hold the stop button. B-f1 still caps the
+stop at vlimit(3.5). B-f2 pins its own flush so the gated ASR can finish.
 """
 
 import threading
@@ -13,6 +14,7 @@ from tests.sim import (
     SCALE,
     Listener,
     caption_rows,
+    no_gc_pause,
     ScriptedTranslator,
     TextAsr,
     VirtualHost,
@@ -22,6 +24,7 @@ from tests.sim import (
     serving,
     sim_settings,
     vlimit,
+    watch_full_gc,
 )
 from tests.test_round2 import auth, breaking_decoder
 
@@ -33,15 +36,29 @@ async def test_stop_latency_not_bound_by_translation():
     stop() is pressed right after the fifth slice is handed to upload (drain=False), so
     the measured time includes settling that last upload, as host.html does before
     /api/session/end. On main that upload waits for English (about 40 virtual s).
+    Automatic GC is off for run+stop: a full collection is a pause the browser
+    and the server, in separate processes, do not share. The 3.5s bound is unchanged.
     """
     translator = ScriptedTranslator(lambda zh: ("ok", 40.0))
     async with serving(asr=TextAsr(1.5), translator=translator) as (app, client, token):
         await open_room(client, token, "class")
         host = VirtualHost(client, token, "class", "s")
-        await host.run(5, drain=False)
-        resp = await host.stop()
+        with no_gc_pause():
+            await host.run(5, drain=False)
+            with watch_full_gc() as full_gc:
+                resp = await host.stop()
         assert resp.status_code == 200, resp.text
+        assert not full_gc, (
+            "a full GC ran during stop; stop_elapsed_v includes that pause, not ASR or flush "
+            f"(stop_elapsed_v={host.stop_elapsed_v})"
+        )
+        # Flush budget is 8 virtual seconds (BREEZE_STOP_FLUSH). This cap did not
+        # move. 2v misses a stop that waits out the window on the Windows scale
+        # (under 4.2); 8v fails that stop. The last slice must still be kept.
         assert host.stop_elapsed_v <= vlimit(3.5)
+        last = next(row for row in caption_rows(app, "class") if row.get("seq") == 5)
+        assert last.get("status") not in {"missing", "error"}
+        assert last.get("zh") == "第5句"
 
 
 @pytest.mark.anyio

@@ -23,7 +23,7 @@ import threading
 import time
 import tracemalloc
 import urllib.error
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -55,6 +55,47 @@ def vms(real_s: float) -> float:
 
 def virtual_s(real_s: float) -> float:
     return real_s / SCALE
+
+
+@contextmanager
+def no_gc_pause():
+    """Collect, then disable automatic GC for one measured window.
+
+    A full collection is a stop-the-world pause. The 100-minute class freezes
+    and disables GC for the same reason. This shorter window does not freeze.
+    The enabled state from before the window is restored on the way out.
+    """
+    was_enabled = gc.isenabled()
+    gc.collect()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
+
+
+@contextmanager
+def watch_full_gc():
+    """Record generation-2 collections that start inside the block.
+
+    gc.callbacks runs on 3.11 and 3.13 before each collection. An empty list
+    means no full GC. The callback is removed even when the block fails.
+    """
+    seen: list[int] = []
+
+    def _on_gc(phase, info):
+        if phase == "start" and int(info.get("generation", -1)) >= 2:
+            seen.append(int(info["generation"]))
+
+    gc.callbacks.append(_on_gc)
+    try:
+        yield seen
+    finally:
+        try:
+            gc.callbacks.remove(_on_gc)
+        except ValueError:
+            pass
 
 
 def vlimit(limit: float) -> float:
@@ -95,7 +136,11 @@ def sim_settings(**over) -> Settings:
         gap_wait_s=3 * SCALE,
         heartbeat_s=0.05,
         idle_timeout_s=5,
-        stop_flush_s=2 * SCALE,
+        # 8 virtual seconds, the product default (BREEZE_STOP_FLUSH=8). B-f1's cap
+        # stays vlimit(3.5). A 2v flush does not catch a stop that sits out the
+        # window: on the Windows scale that stop was measured under 4.2, so it
+        # passed; at 8v the same stop is about 10v and fails. Stricter, not looser.
+        stop_flush_s=8 * SCALE,
         shutdown_flush_s=0.2,
     )
     base.update(over)
@@ -144,6 +189,20 @@ def _sleep_cancel(delay_s: float, cancel) -> bool:
     return cancel.wait(delay_s)
 
 
+def _deadline_margin(room_s: float) -> float:
+    """Real seconds to finish before the caller's translate deadline.
+
+    Strictest of the three reviews of the Windows 3.12 failure (run
+    37580495810): at least 50 ms, at least a tenth of the time still left,
+    and at least 20 ms plus three monotonic ticks. A fixed 20 ms early wake
+    was eaten by two 15.6 ms ticks (thread wait lands on the next tick,
+    asyncio.timeout fires one tick early). The scripted line still occupies
+    the worker until this margin before the deadline.
+    """
+    tick = time.get_clock_info("monotonic").resolution
+    return max(0.05, float(room_s) * 0.1, 0.02 + 3 * tick)
+
+
 class ScriptedTranslator(Translator):
     """plan(zh) -> ("ok", delay_v) | ("raise", exc) | ("block", event)."""
 
@@ -165,8 +224,9 @@ class ScriptedTranslator(Translator):
                 if deadline is not None:
                     # Finish inside the caller's timeout. A sleep equal to the deadline
                     # races asyncio.wait_for and comes back as "timeout" instead of English.
+                    # The margin has to cover a coarse monotonic clock, not a fixed 20 ms.
                     room = deadline - time.monotonic()
-                    delay = min(delay, max(0.0, room - min(0.02, room * 0.1)))
+                    delay = min(delay, max(0.0, room - _deadline_margin(room)))
                 if _sleep_cancel(delay, cancel):
                     return _timeout_result()
                 return _ok_result(zh)
@@ -336,6 +396,11 @@ def _body_json(resp) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _cached_push_rows(rows: list[dict]) -> list[dict]:
+    """Seq and status only. The httpx Response and its body stay out of the cache."""
+    return [{"seq": int(row["seq"]), "status": int(row["status"])} for row in rows]
+
+
 async def post_segment(client, token, room, session, seq, payload: bytes, t0_ms: int, t1_ms: int, *, retry: bool = False):
     """Host-page opt-in: wait_translation=0 and x-breeze-async-translation: 1."""
     headers = {**auth(token), "x-breeze-async-translation": "1"}
@@ -411,8 +476,10 @@ class VirtualHost:
         # segment_end is taken after that so the sample is not latency.
         await self._release_slice.wait()
         payload = text.encode()
+        # Same clock as _recv_mono. Do not switch this one to perf_counter.
         self.segment_end_mono[seq] = time.monotonic()
-        started = time.monotonic()
+        # perf_counter, not monotonic: Windows 3.11 monotonic steps by ~15.6 ms.
+        started = time.perf_counter()
         self._active_posts += 1
         self.max_posts = max(self.max_posts, self._active_posts)
         try:
@@ -440,7 +507,7 @@ class VirtualHost:
                         self._retry_tasks.discard(current)
         finally:
             self._active_posts -= 1
-        elapsed_v = (time.monotonic() - started) / self.scale
+        elapsed_v = (time.perf_counter() - started) / self.scale
         self.responses.append({
             "seq": seq,
             "status": resp.status_code,
@@ -459,13 +526,14 @@ class VirtualHost:
             if not active:
                 return
             start_ms = self.clock_ms
-            real = time.monotonic()
+            # perf_counter, not monotonic: Windows 3.11 monotonic steps by ~15.6 ms.
+            real = time.perf_counter()
             await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
-            # Sub-millisecond wakeups are the done-callback, not a recorder pause.
-            # A real pause is the ASR overrun (seconds). Ignore under 1 virtual second
-            # so loop noise cannot stretch a 1000-segment SRT.
-            spent_ms = int(round((time.monotonic() - real) / self.scale * 1000))
-            if spent_ms >= 1000:
+            # Book every real pause, including those under one virtual second.
+            # An immediate return (a free slot) never reaches this wait.
+            # Round-to-zero is the scheduler, not a pause the clock can see.
+            spent_ms = int(round((time.perf_counter() - real) / self.scale * 1000))
+            if spent_ms > 0:
                 self.clock_ms += spent_ms
                 self.waiting.append((start_ms / 1000, self.clock_ms / 1000))
 
@@ -511,7 +579,8 @@ class VirtualHost:
 
     async def stop(self):
         """Wait for uploads already started, then POST /api/session/end. No flush=0."""
-        real = time.monotonic()
+        # Same clock as the upload wait. monotonic() on Windows 3.11 is one tick wide.
+        real = time.perf_counter()
         if self._tasks:
             await asyncio.wait(self._tasks)
         resp = await self.client.post(
@@ -523,8 +592,15 @@ class VirtualHost:
             },
             headers={**auth(self.token), "content-type": "application/json"},
         )
-        self.stop_elapsed_v = (time.monotonic() - real) / self.scale
+        self.stop_elapsed_v = (time.perf_counter() - real) / self.scale
         return resp
+
+    def release_upload_results(self) -> None:
+        """Drop push rows and finished tasks so their httpx responses can be freed."""
+        self.responses.clear()
+        self._all.clear()
+        self._tasks.clear()
+        self._retry_tasks.clear()
 
     @property
     def waiting_v_total(self) -> float:
@@ -571,6 +647,7 @@ class SimReport:
     waiting_v_total: float = 0.0
     segment_end_mono: dict[int, float] = field(default_factory=dict)
     zh_ready_mono: dict[int, float] = field(default_factory=dict)
+    # seq and status only. Push bodies and httpx Response objects stay out of _RUN_CACHE.
     responses: list[dict] = field(default_factory=list)
     final_metrics: dict = field(default_factory=dict)
     results_at: dict[int, int] = field(default_factory=dict)
@@ -583,6 +660,8 @@ class SimReport:
     tracemalloc_500: int = 0
     tracemalloc_750: int = 0
     tracemalloc_1000: int = 0
+    rss_0: int = 0
+    rss_250: int = 0
     rss_500: int = 0
     rss_750: int = 0
     rss_1000: int = 0
@@ -590,6 +669,10 @@ class SimReport:
     storm_rejects: int = 0
     retries: list[int] = field(default_factory=list)
     translate_skipped: int = 0
+    # seq, translate_status, has_en. From caption state, not the export file.
+    translate_rows: list = field(default_factory=list)
+    translate_queued_at_export: int = 0
+    translate_busy_at_export: int = 0
 
 
 def _zh_ready_times(listeners: list[Listener]) -> dict[int, float]:
@@ -704,14 +787,19 @@ def _sample_server_memory() -> tuple[int, int]:
 
 
 def _class_plan(zh: str):
-    """2s English, except a 40s window on segments 300-330 (the translate timeout)."""
+    """2s English, except segments 300-330, which take almost the whole 40s budget.
+
+    Slow is not a timeout. The translator finishes one deadline margin early,
+    so those lines come back in English unless the queue drops them. A timeout
+    in that window is a harness failure, not the backlog the test is measuring.
+    """
     seq = _seq_of(zh)
     if 300 <= seq <= 330:
         return ("ok", 40.0)
     return ("ok", 2.0)
 
 
-async def _run_100min_async() -> SimReport:
+async def _run_100min_async(*, trace: bool) -> SimReport:
     room = "class"
     session = "sim100"
     root = Path(tempfile.mkdtemp(prefix="breeze-sim-"))
@@ -750,9 +838,12 @@ async def _run_100min_async() -> SimReport:
         return orig_admit()
 
     pipe.try_admit_count = storm_admit
-    tracing = tracemalloc.is_tracing()
-    if not tracing:
+    # tracemalloc walks the whole process. On a 100-minute class that walk is
+    # the stall, so the latency run leaves it off. The memory run opts in.
+    started_trace = False
+    if trace and not tracemalloc.is_tracing():
         tracemalloc.start()
+        started_trace = True
     # Host, server and both listeners share one process here, and every real
     # millisecond is 1/SCALE virtual milliseconds. A full GC pass is a 30-90 ms
     # stop-the-world pause on a runner (measured on 3.11), which the recorder model
@@ -778,7 +869,10 @@ async def _run_100min_async() -> SimReport:
         # A plain return does not yield, so the upload cannot admit first.
         if seq == 601:
             storm["rounds"] = 16
-        if seq not in (500, 750) and seq % 50 != 0:
+        # 250 is an RSS point on the latency run only. The traced run still
+        # collects here, but does not snapshot: that walk is the stall.
+        rss_points = (250, 500, 750) if not trace else (500, 750)
+        if seq not in rss_points and seq % 50 != 0:
             return None
         # The upload created at the end of the previous slice has not run yet.
         # Park it so the sample is not inside its Chinese latency, then let any
@@ -788,7 +882,7 @@ async def _run_100min_async() -> SimReport:
             assert host is not None
             host.hold_new_slices()
             try:
-                if seq in (500, 750):
+                if seq in rss_points:
                     mem_at[seq] = await sample_after_translations(pipe, _sample_server_memory)
                 else:
                     await sample_after_translations(pipe, gc.collect)
@@ -818,6 +912,10 @@ async def _run_100min_async() -> SimReport:
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline and len(getattr(translator, "finished", [])) < 1:
                 await asyncio.sleep(0.01)
+            # Baseline RSS for the latency run, after warmup, before segment 1.
+            # The traced run does not sample here: a snapshot walk is the stall.
+            if not trace:
+                mem_at[0] = await sample_after_translations(pipe, _sample_server_memory)
             host = VirtualHost(client, token, room, session)
             pending_snaps: list[asyncio.Task] = []
 
@@ -841,13 +939,28 @@ async def _run_100min_async() -> SimReport:
             flush = getattr(app.state.store, "flush", None)
             if flush is not None:
                 await asyncio.to_thread(flush)
+            # Sample the queue before export. A line still in flight would be
+            # missing English in the file without a finished status yet.
+            pipe = app.state.pipeline
+            queued_at_export = 0 if pipe._translate_q is None else pipe._translate_q.qsize()
+            busy_at_export = int(pipe._translate_busy)
             srt_resp = await client.get("/api/export", params={"room_id": room, "kind": "srt"}, headers=auth(token))
             json_resp = await client.get("/api/export", params={"room_id": room, "kind": "json"}, headers=auth(token))
             assert srt_resp.status_code == 200, srt_resp.text
             assert json_resp.status_code == 200, json_resp.text
             final = (await client.get("/api/metrics", headers=auth(token))).json()
             state = caption_rows(app, room)
+            translate_rows = [
+                {
+                    "seq": int(row.get("seq") or 0),
+                    "translate_status": str(row.get("translate_status") or ""),
+                    "has_en": bool(row.get("en")),
+                }
+                for row in state
+            ]
             pipe = app.state.pipeline
+            _, rss_0 = mem_at.get(0, (0, 0))
+            _, rss_250 = mem_at.get(250, (0, 0))
             traced_500, rss_500 = mem_at.get(500, (0, 0))
             traced_750, rss_750 = mem_at.get(750, (0, 0))
             traced_1000, rss_1000 = mem_at.get(1000, (0, 0))
@@ -863,7 +976,7 @@ async def _run_100min_async() -> SimReport:
                 waiting_v_total=host.waiting_v_total,
                 segment_end_mono=dict(host.segment_end_mono),
                 zh_ready_mono=_zh_ready_times(listeners),
-                responses=list(host.responses),
+                responses=_cached_push_rows(host.responses),
                 final_metrics=final,
                 results_at={int(item["seq"]): int(item["results"]) for item in snapshots},
                 emitted=sum(1 for key in pipe._emitted_segs if key[0] == room),  # the warm-up room is not the class
@@ -875,6 +988,8 @@ async def _run_100min_async() -> SimReport:
                 tracemalloc_500=traced_500,
                 tracemalloc_750=traced_750,
                 tracemalloc_1000=traced_1000,
+                rss_0=rss_0,
+                rss_250=rss_250,
                 rss_500=rss_500,
                 rss_750=rss_750,
                 rss_1000=rss_1000,
@@ -882,17 +997,47 @@ async def _run_100min_async() -> SimReport:
                 storm_rejects=int(storm["rejects"]),
                 retries=list(host.retries),
                 translate_skipped=int(getattr(pipe, "translate_skipped", 0) or 0),
+                translate_rows=translate_rows,
+                translate_queued_at_export=queued_at_export,
+                translate_busy_at_export=busy_at_export,
             )
             await host.stop()
     finally:
         for listener in listeners:
             await listener.close()
         await stop(app)
-        if not tracing and tracemalloc.is_tracing():
+        if started_trace and tracemalloc.is_tracing():
             tracemalloc.stop()
         if gc_was_enabled:
             gc.enable()
+        if host is not None:
+            host.release_upload_results()
+        # The report already copied the fields tests read. Drop the class,
+        # including upload tasks and their httpx responses, before collecting.
+        host = None
+        app = None
+        translator = None
+        asr = None
+        pipe = None
+        observed = None
+        orig_admit = None
+        storm_admit = None
+        collect_between_slices = None
+        on_start = None
+        on_each = None
+        listeners = []
+        client = None
+        warm = None
+        srt_resp = None
+        json_resp = None
+        final = None
+        state = None
+        snapshots = None
+        pending_snaps = None
         gc.unfreeze()
+        # Outside the paced class. Frees what the report did not keep and
+        # resets gen2 before the next test's measured window.
+        gc.collect()
     return report
 
 
@@ -909,13 +1054,17 @@ async def _snapshot(app, client, token, seq: int, snapshots: list[dict]) -> None
     snapshots.append(data)
 
 
-def run_100min() -> SimReport:
-    """One paced 100-minute class per process. Shared by backlog, SRT, and limit tests."""
-    key = (SEGMENTS, SCALE, "100min-v2")
+def run_100min(*, trace: bool = False) -> SimReport:
+    """One paced 100-minute class per process. Latency callers leave tracing off.
+
+    trace=True is the memory run: same scale and the same class, plus a heap
+    snapshot. It is not the report latency tests read.
+    """
+    key = (SEGMENTS, SCALE, "100min-v3", bool(trace))
     cached = _RUN_CACHE.get(key)
     if cached is not None:
         return cached
-    report = asyncio.run(_run_100min_async())
+    report = asyncio.run(_run_100min_async(trace=bool(trace)))
     _RUN_CACHE[key] = report
     return report
 

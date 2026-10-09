@@ -36,7 +36,7 @@
 這些行為在提交 `cb21186`。本地自動測試有覆蓋對應失敗路徑。這不是實機通過，GitHub Actions 也還沒跑這個提交：
 
 - 主持權杖只在 loopback，且 Host／Origin 要對上確切埠；權杖不進 setup／QR
-- `/api/push` 在解析表單前准入；同一段 single-flight；重送相同內容不佔第二個名額
+- `/api/push` 先讀完並解析 request body，再准入（佔佇列名額）。非 multipart 回 415，讀 body 逾時回 408。同一段 single-flight；重送相同內容不佔第二個名額
 - 中文先廣播，英譯失敗保留同一段中文
 - RoomBus 依 `room_id` 分開；缺段與過短的補償窗口會標 missing 或 gap
 - 匿名 WebSocket 不開房

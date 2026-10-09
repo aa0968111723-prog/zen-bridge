@@ -52,6 +52,41 @@ def test_since_reports_gap_when_cursor_is_ahead_of_this_process():
     assert fresh.since("class", 9)["gap"] is True
 
 
+def test_prune_expired_notifies_without_tombstone_or_crossing_rooms():
+    bus = RoomBus()
+    bus.publish({
+        "id": "class:s:1", "room_id": "class", "session_id": "s", "session_ord": 1,
+        "seq": 1, "version": 2, "zh": "甲", "updated_at": 10,
+    })
+    bus.publish({
+        "id": "class:s:2", "room_id": "class", "session_id": "s", "session_ord": 1,
+        "seq": 2, "version": 1, "zh": "乙", "updated_at": 10_000,
+    })
+    bus.publish({
+        "id": "other:s:1", "room_id": "other", "session_id": "s", "session_ord": 1,
+        "seq": 1, "version": 1, "zh": "別班", "updated_at": 10_000,
+    })
+    removed = bus.prune_expired(100, now=200)
+    assert removed == [("class", "class:s:1")]
+    assert "class:s:1" not in bus._tomb.get("class", ())
+    assert [item["zh"] for item in bus.history("class")] == ["乙"]
+    assert [item["zh"] for item in bus.history("other")] == ["別班"]
+    notice = bus.publish({"type": "captions_expired", "room_id": "class", "ids": ["class:s:1"]})
+    assert notice is not None
+    assert notice["type"] == "captions_expired"
+    assert notice["ids"] == ["class:s:1"]
+    assert notice["room_id"] == "class"
+    assert all(item.get("type") != "captions_expired" for item in bus.history("class"))
+    assert all(item.get("type") != "captions_expired" for item in bus.history("other"))
+    again = bus.publish({
+        "id": "class:s:1", "room_id": "class", "session_id": "s", "session_ord": 1,
+        "seq": 1, "version": 1, "zh": "再來", "updated_at": 10_000,
+    })
+    assert again is not None
+    assert again["zh"] == "再來"
+    assert "別班" not in [item.get("zh") for item in bus.history("class")]
+
+
 def test_cursor_not_reset_after_drop():
     bus = RoomBus()
     first = bus.publish({"id": "a:s:1", "room_id": "class", "session_id": "s", "session_ord": 1, "seq": 1, "version": 1, "zh": "舊"})

@@ -49,7 +49,8 @@ sockets[1].onmessage({
   data: JSON.stringify({ type: "hello", latest_cursor: 3, history: [], events: [] }),
 });
 await tick();
-assert.ok(resets.includes("reset"));
+// The backwards hello has no captions yet. Do not clear before they arrive.
+assert.deepEqual(resets, []);
 const replay = sockets.at(-1);
 assert.match(replay.address, /cursor=0/);
 assert.match(replay.address, /replay=1/);
@@ -62,6 +63,7 @@ replay.onopen();
 replay.onmessage({
   data: JSON.stringify({ type: "hello", latest_cursor: 3, history }),
 });
+assert.ok(resets.includes("reset"));
 assert.deepEqual(events.map((item) => item.id), ["class:s:1", "class:s:2", "class:s:3"]);
 assert.equal(conn.cursor, 3);
 conn.stop();

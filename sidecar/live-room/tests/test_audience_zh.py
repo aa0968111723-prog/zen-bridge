@@ -19,7 +19,9 @@ from app.translate import TranslateResult, Translator
 from tests.test_round2 import Socket, app_for, auth, open_room, push, stop, token_of
 
 
-_SECRET_KEYS = {"zh_raw", "host_token", "token", "listen_key", "listen_url", "authorization"}
+_SECRET_KEYS = {
+    "zh_raw", "term_flags", "host_token", "token", "listen_key", "listen_url", "authorization",
+}
 ORIGINAL = "誤辨的張三"
 EDITED = "已遮蔽"
 FAILED_PARTIAL = "失敗的半句"
@@ -46,6 +48,7 @@ class PartialAsr:
 
 def test_audience_whitelist_omits_raw_text_and_secrets():
     assert "zh_raw" in _PASS
+    assert "term_flags" in _PASS
     assert _SECRET_KEYS.isdisjoint(_LISTENER_PASS)
     event = {
         "type": "caption",
@@ -67,6 +70,7 @@ def test_audience_whitelist_omits_raw_text_and_secrets():
         "listen_key": "listen-secret",
         "listen_url": "http://evil.example/listen",
         "authorization": "Bearer host-secret",
+        "term_flags": [{"zh": "般若", "en": "LOCKED-PRAJNA", "reason": "missing"}],
     }
     out = for_listener(event)
     assert out["zh"] == EDITED
@@ -75,7 +79,9 @@ def test_audience_whitelist_omits_raw_text_and_secrets():
     assert out["t0_ms"] == 1000
     blob = json.dumps(out, ensure_ascii=False)
     assert "zh_raw" not in out
+    assert "term_flags" not in out
     assert ORIGINAL not in blob
+    assert "LOCKED-PRAJNA" not in blob
     assert "host-secret" not in blob
     assert "listen-secret" not in blob
     assert _SECRET_KEYS.isdisjoint(out)
@@ -91,17 +97,22 @@ def test_bus_keeps_zh_raw_for_storage_and_export_state():
         "version": 1,
         "zh": EDITED,
         "zh_raw": ORIGINAL,
+        "term_flags": [{"zh": "般若", "en": "LOCKED-PRAJNA", "reason": "missing"}],
     })
     assert snap is not None
     assert snap["zh_raw"] == ORIGINAL
+    assert snap["term_flags"][0]["reason"] == "missing"
     assert bus.history("class")[0]["zh_raw"] == ORIGINAL
     assert bus.caption_state("class")[0]["zh_raw"] == ORIGINAL
+    assert bus.caption_state("class")[0]["term_flags"][0]["en"] == "LOCKED-PRAJNA"
     resumed = bus.since("class", 99)
     assert resumed["gap"] is True
     assert resumed["backfill"][0]["zh_raw"] == ORIGINAL
     visible = for_listener(resumed["backfill"][0])
     assert visible["zh"] == EDITED
     assert "zh_raw" not in visible
+    assert "term_flags" not in visible
+    assert "LOCKED-PRAJNA" not in json.dumps(visible, ensure_ascii=False)
 
 
 def _walk(value):

@@ -1,5 +1,5 @@
 // J2. room_unavailable reason "ended" tells the listener the room is over and
-// does not burn the 8 reconnect attempts. unknown_or_ended still retries.
+// does not reconnect by itself. unknown_or_ended still retries (see the state suite).
 
 import assert from "node:assert/strict";
 import { connectRoom } from "../app/static/room_client.js";
@@ -33,7 +33,7 @@ const conn = connectRoom({
     sleeps += 1;
     return Promise.resolve();
   },
-  onState: (text) => states.push(text),
+  onState: (detail) => states.push(detail),
   onEvent: () => {},
 });
 
@@ -43,9 +43,14 @@ sockets[0].onopen();
 sockets[0].onmessage({
   data: JSON.stringify({ type: "room_unavailable", reason: "ended" }),
 });
-await conn.done;
-assert.ok(states.some((text) => String(text).includes("房間已結束")), states.join(" | "));
+await tick();
+const rendered = states.map((detail) => (detail && detail.text) || String(detail)).join(" | ");
+assert.ok(rendered.includes("已結束"), rendered);
+assert.equal(rendered.includes("房間已結束"), false, rendered);
+assert.ok(states.some((detail) => detail && detail.kind === "ended"), rendered);
 assert.equal(sockets.length, 1);
 assert.equal(sleeps, 0);
 assert.equal(sockets[0].closed, true);
+conn.stop();
+await conn.done;
 console.log("room client room end ok");
