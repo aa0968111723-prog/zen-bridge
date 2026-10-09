@@ -47,17 +47,20 @@ def test_default_audio_cap_fits_a_short_slice():
 
 
 # New installs copy .env.example onto .env (scripts/install_runtime.py). These two
-# lines are the documented install profile, not the in-process fallback: README
-# ships resident ASR and a sqlite caption file. The fallback stays cli / empty so
+# lines are the documented install profile, not the in-process fallback: Zen App
+# ships native ASR and a sqlite caption file. The fallback stays cli / empty so
 # a process with no .env does not open a database or require a resident server.
 _INSTALL_PROFILE = {
-    "BREEZE_ASR": "resident",
+    "BREEZE_ASR": "native",
     "BREEZE_DATA_PATH": "data/captions.sqlite3",
 }
 # Read straight from the environment, not via Settings.
 _DIRECT_DEFAULTS = {
     "OPENAI_API_KEY": "",
     "OPENAI_TRANSLATION_MODEL": "gpt-4.1-mini",
+    "ZEN_BRIDGE_UI_URL": "https://vexlark.co",
+    "ZEN_BRIDGE_AGENT_URL": "wss://vexlark.co/asr-agent",
+    "ZEN_BRIDGE_AGENT_TOKEN": "",
 }
 
 
@@ -91,7 +94,7 @@ def test_env_example_matches_code_defaults():
         assert only == bare, key
     for name in Settings.__dataclass_fields__:
         if name == "asr_mode":
-            assert loaded.asr_mode == "resident"
+            assert loaded.asr_mode == "native"
             assert bare.asr_mode == "cli"
             continue
         if name == "data_path":

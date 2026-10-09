@@ -9,6 +9,7 @@ for(const name of ['dist','public','drizzle-pg','scripts','lib','app','component
 await mkdir(join(output,'sidecar'),{recursive:true});
 await cp('sidecar/breeze-gateway.mjs',join(output,'sidecar/breeze-gateway.mjs'));
 await cp('sidecar/zen-front.mjs',join(output,'sidecar/zen-front.mjs'));
+try{await cp('dictionary-data',join(output,'dictionary-data'),{recursive:true});}catch(error){if(error.code!=='ENOENT')throw error;}
 const revision=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 await writeFile(join(output,'REVISION'),revision+'\n');
 console.log('Tencent runtime prepared:',output);

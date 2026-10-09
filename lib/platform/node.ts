@@ -47,6 +47,20 @@ export async function batchPostgres(url: string, commands: Command[]) {
     for (const command of commands) await tx.unsafe(command.sql, command.args as postgres.ParameterOrJSON<never>[]);
   });
 }
+// Hold a session lock on one reserved connection while streaming datasets through
+// bounded transactions. A crashed process releases the lock automatically.
+export async function withPostgresImportLock<T>(url:string, work:()=>Promise<T>):Promise<T|{status:'import-in-progress'}> {
+  const client=await database(url), connection=await client.reserve();
+  let acquired=false;
+  try {
+    const [row]=await connection`SELECT pg_try_advisory_lock(79438202) AS acquired`;
+    acquired=!!row.acquired;
+    if(!acquired)return {status:'import-in-progress'};
+    return await work();
+  } finally {
+    try {if(acquired)await connection`SELECT pg_advisory_unlock(79438202)`;}finally{connection.release();}
+  }
+}
 function audioPath(directory: string, key: string) {
   // Keys come from UUID-based routes; reject traversal even for database values.
   if (!/^(recordings|references)\/[a-f0-9-]+\/[a-f0-9-]+$/i.test(key)) throw new Error('音檔路徑格式不正確。');

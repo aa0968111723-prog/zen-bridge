@@ -28,6 +28,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python tests/deploy_rollback.py
+      - run: python -m unittest discover -s tests -p dictionary_dataset.py
       - name: Test desktop runtime
         working-directory: sidecar/live-room
         run: |

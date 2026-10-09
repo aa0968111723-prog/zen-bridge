@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 const require = createRequire(import.meta.url);
 const { build } = await import(pathToFileURL(createRequire(require.resolve('drizzle-kit')).resolve('esbuild')).href);
 await mkdir('work', { recursive: true });
-for (const suite of ['runtime', 'hermes']) {
+for (const suite of ['runtime', 'hermes', 'dictionary']) {
   const output = resolve('work/' + suite + '-test.mjs');
   try {
     await build({ entryPoints: ['tests/' + suite + '.test.ts'], outfile: output, bundle: true, platform: 'node', format: 'esm', packages: 'external', alias: { '@': resolve('.') }, logLevel: 'silent' });
