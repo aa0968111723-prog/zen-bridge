@@ -13,10 +13,10 @@ export async function dictionarySources(privateAllowed=false){
 export async function lookupDictionary(query:string,privateAllowed=false,limit=30){
  const key=dictionaryKey(query).slice(0,160);if(!key)return [];
  // Indexed exact/prefix keys avoid scanning millions of definitions.
- return rows<DictionaryEntry>(`SELECT DISTINCT e.id,e.source_id,e.word,e.alternative,e.pronunciation,e.zh,e.en,s.title AS source_title,s.license,s.license_url,s.source_url,CASE WHEN k.key=? THEN 0 ELSE 1 END AS match_rank
+ return rows<DictionaryEntry>(`SELECT DISTINCT e.id,e.source_id,e.word,e.alternative,e.pronunciation,e.zh,e.en,s.title AS source_title,s.license,s.license_url,s.source_url,CASE WHEN lower(e.word)=? OR lower(e.alternative)=? THEN 0 WHEN k.key=? THEN 1 ELSE 2 END AS match_rank
  FROM dictionary_keys k JOIN dictionary_entries e ON e.id=k.entry_id JOIN dictionary_sources s ON s.id=e.source_id
  WHERE e.snapshot=s.version AND (s.public=1 OR ?=1) AND k.key>=? AND k.key<?
- ORDER BY match_rank,e.word,e.id LIMIT ?`,key,privateAllowed?1:0,key,key+'\uffff',Math.max(1,Math.min(limit,50)));
+ ORDER BY match_rank,e.word,e.id LIMIT ?`,key,key,key,privateAllowed?1:0,key,key+'\uffff',Math.max(1,Math.min(limit,50)));
 }
 export async function dictionaryReferences(input:string,privateAllowed=false){
  const normalized=dictionaryKey(input).slice(0,600),keys=new Set<string>();
@@ -26,9 +26,10 @@ export async function dictionaryReferences(input:string,privateAllowed=false){
  }
  if(!keys.size)return [];
  try {
-  const result=await rows<DictionaryEntry>(`SELECT DISTINCT e.id,e.source_id,e.word,e.alternative,e.pronunciation,e.zh,e.en,s.title AS source_title,s.license,s.license_url,s.source_url
+  const terms=Array.from(keys),placeholders=terms.map(()=>'?').join(',');
+  const result=await rows<DictionaryEntry>(`SELECT DISTINCT e.id,e.source_id,e.word,e.alternative,e.pronunciation,e.zh,e.en,s.title AS source_title,s.license,s.license_url,s.source_url,CASE WHEN lower(e.word) IN (${placeholders}) OR lower(e.alternative) IN (${placeholders}) THEN 0 ELSE 1 END AS match_rank
    FROM dictionary_keys k JOIN dictionary_entries e ON e.id=k.entry_id JOIN dictionary_sources s ON s.id=e.source_id
-   WHERE e.snapshot=s.version AND (s.public=1 OR ?=1) AND k.key IN (${Array.from(keys,()=>'?').join(',')}) ORDER BY e.word,e.id LIMIT 12`,privateAllowed?1:0,...keys);
+   WHERE e.snapshot=s.version AND (s.public=1 OR ?=1) AND k.key IN (${placeholders}) ORDER BY match_rank,e.word,e.id LIMIT 12`,...terms,...terms,privateAllowed?1:0,...terms);
   let remaining=2400;const references=[];for(const e of result){if(remaining<=0)break;const zh=e.zh.slice(0,Math.min(240,remaining));remaining-=zh.length;const en=e.en.slice(0,Math.min(240,remaining));remaining-=en.length;references.push({word:e.word,zh,en,source:e.source_title});}return references;
  } catch {return [];}
 }

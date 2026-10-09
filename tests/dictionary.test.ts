@@ -41,6 +41,10 @@ try {
   const hostResult=await GET(new Request('http://test/api/dictionaries?q=meditation',{headers:{'x-zen-host':token}}));
   const hostBody=await hostResult.json() as {privateAllowed:boolean;entries:unknown[];sources:unknown[]};
   assert.equal(hostBody.privateAllowed,true);assert.equal(hostBody.entries.length,2);assert.equal(hostBody.sources.length,2);
+  insert.run('gloss','open','new','aardvark','','meditation related gloss');
+  sql.prepare('INSERT INTO dictionary_keys VALUES(?,?)').run('gloss','meditation');
+  assert.equal((await lookupDictionary('meditation',false,1))[0].word,'meditation');
+  assert.equal((await dictionaryReferences('meditation'))[0].word,'meditation');
   const req=(body:BodyInit,authorized=true)=>new Request('http://test/api/dictionaries',{method:'POST',headers:authorized?{'x-zen-host':token}:{},body});
   assert.equal((await POST(req('{}',false))).status,403);
   assert.equal((await POST(req('{'))).status,400);
