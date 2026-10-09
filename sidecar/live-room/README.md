@@ -1,26 +1,24 @@
-# breeze-live-room
+# 禪譯 Zen Bridge 本機引擎與 Windows App
 
-本機 Breeze 中文辨識、可選英文翻譯，以及區網手機／平板字幕。
+此目錄是 `breeze-live-room` 匯入的本機 runtime。主要 UI 與維護倉庫為 [Zen Bridge](https://github.com/aa0968111723-prog/zen-bridge)，線上工作台為 https://vexlark.co 。UI 修改位置在主倉庫 `app/workspace.tsx`；此目錄負責本機模型、配對通道與桌面安裝。
 
-目前是安裝驗收候選版。完整安裝、辨識自檢及長場次匯出修正在 [PR #3](https://github.com/aa0968111723-prog/breeze-live-room/pull/3)，目標為 main；正式使用仍須完成主持機的速度、中文準確度、麥克風與長時間驗收。通過單元測試不等於通過實機驗收。
+## 安裝與使用
 
-## 第一次使用
+從 [Zen Bridge 正式 Releases](https://github.com/aa0968111723-prog/zen-bridge/releases/latest) 下載 `Zen-Bridge-Setup.exe` 並安裝。App 包含獨立 Python、CPU 辨識模型與必要工具，完成後開啟「禪譯 Zen Bridge」。首次主持配對需要管理員提供連線碼；公開安裝包不包含連線碼或 API 金鑰。
 
-1. 準備 Windows 11 x64（Intel／AMD）。安裝器會下載並核對獨立 Python，無需先手動安裝 Python 或 Git。
-2. 解壓縮專案，雙擊 `install.bat`。會安裝 Python 套件，下載固定版本 Breeze 模型、whisper.cpp CPU 套件與 ffmpeg，並核對大小與 SHA256。第一次約下載 1.2GB，需至少 5GB 可用空間。
-3. 關閉字幕服務後，雙擊 `verify.bat`，確認真實模型可辨識及速度足以承受。結果在 `data/runtime-check.json`，不包含逐字稿或 API 金鑰。
-4. 雙擊 `start.bat`。啟動前會檢查工具／DLL、模型、埠及目錄權限；瀏覽器等服務啟動後才開啟。
-5. 在主持機的 `http://127.0.0.1:<BREEZE_PORT>` 允許麥克風，開始聽。聽眾裝置與電腦連同一個 Wi-Fi，掃 QR 看字幕。
+App 顯示 Zen Bridge 主工作台。建立或選擇社課，選擇麥克風與語言，再開始收音。聽眾沿用 Zen 的 `/r/{id}` 與手機 QR。選單「檢查更新」讀取 Zen Bridge 的正式安裝檔並核對 SHA256，保留 `.env` 與既有資料。關閉 App 會結束本機模型與服務。
 
-錯誤時雙擊 `doctor.bat`。詳細步驟與 Microsoft 官方下載入口在 [安裝說明](docs/INSTALL.md)。
+設定為 `ZEN_BRIDGE_UI_URL`、`ZEN_BRIDGE_AGENT_URL`、`ZEN_BRIDGE_AGENT_TOKEN`。配對使用 WSS、Bearer 認證及隨 App 更新的 certifi CA，並驗證憑證和網域。
 
-## 安裝成 App
+## 執行限制與維護
 
-雙擊 `Breeze-Live-Room-Setup.exe`。安裝精靈是中文，不用選資料夾，也不用另外裝 Python。完成後桌面會出現「禪譯聽眾房」，按完成就會開啟。打開後畫面上有三步：開始聽、允許麥克風、手機掃 QR。
+辨識使用同一個常駐本機模型。收音轉為 PCM16／mono／16kHz，片段約 6 秒且不重疊；積壓會暫停收音並顯示提示，暫停發言不加入字幕。Ryzen 5 5600H 主持機實測 6 秒公開音訊約需 40–48 秒，尚不符合無缺段持續即時字幕。真實中文、麥克風與長時間課堂仍需驗收。
 
-打開後先看到啟動狀態，模型就緒才進入字幕頁。選單「檢查更新」只接受這個儲存庫正式 Release 的同名安裝檔，核對 SHA256 後才安裝；`.env` 與字幕資料會留著。關閉視窗會一併停止字幕服務與辨識程序。
+雲端 relay 會在記憶體轉送音訊給主持機，本機音訊暫存於辨識後移除；Breeze 模式沒有自動雲端 ASR fallback。文字翻譯沿用 Zen 的 Hermes／既有 provider 與資料庫。
 
-還沒有附安裝檔的正式 Release 時，檢查更新會直接說明，不會改去下載其他檔案。
+安裝器：`desktop/setup.iss`；App：`desktop/Launcher.cs`；配對：`app/zen_agent.py`；模型：`app/native_asr.py` 和 `app/native_worker.py`。CI、部署與正式發布由主倉庫根目錄 `.github/workflows` 維護；此 subtree 內的舊 workflow 只供來源追蹤。
+
+本機診斷仍可使用 `doctor.bat`、`verify.bat` 與以下原引擎文件。下面涉及 ZIP／區網主持頁的操作是保留的獨立引擎診斷流程；日常使用採上面的 Zen Bridge App 流程。
 
 ## 安裝包與更新
 
