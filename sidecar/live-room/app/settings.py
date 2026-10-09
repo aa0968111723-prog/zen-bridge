@@ -141,8 +141,8 @@ class Settings:
             raise ValueError("BREEZE_MAX_AUDIO_BYTES 至少為 1")
         if self.max_audio_seconds <= 0:
             raise ValueError("BREEZE_MAX_AUDIO_SECONDS 必須大於 0")
-        if self.upload_read_timeout_s <= 0:
-            raise ValueError("BREEZE_UPLOAD_READ_TIMEOUT 必須大於 0")
+        if not (math.isfinite(self.upload_read_timeout_s) and self.upload_read_timeout_s > 0):
+            raise ValueError("BREEZE_UPLOAD_READ_TIMEOUT 必須為大於 0 的有限數值")
         if self.max_rooms < 1 or self.max_listeners < 1:
             raise ValueError("房間數與聽眾數至少為 1")
         if self.asr_workers < 1:

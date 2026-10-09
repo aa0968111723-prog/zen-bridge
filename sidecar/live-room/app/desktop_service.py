@@ -15,7 +15,7 @@ def main():
     os.chdir(root)
     fill_process_environ(root / '.env')
     settings = Settings.from_env()
-    server = uvicorn.Server(uvicorn.Config('app.server:app', host='0.0.0.0', port=settings.port, log_level='warning'))
+    server = uvicorn.Server(uvicorn.Config('app.server:app', host='0.0.0.0', port=settings.port, log_level='warning', proxy_headers=False))
     def control():
         sys.stdin.readline()
         server.should_exit = True

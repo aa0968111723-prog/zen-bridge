@@ -88,7 +88,9 @@ class NativeResidentAsr(ResidentAsr):
                 self.proc.stdin.write(json.dumps({'path': str(Path(wav).resolve()), 'prompt': prompt, 'language': language}, ensure_ascii=True) + '\n')
                 self.proc.stdin.flush()
                 response = self._receive(self.inference_timeout_s)
-                return AsrResult(ok=response.get('ok', False), text=response.get('text', ''),
+                ok = response.get('ok', False)
+                text = response.get('text', '')
+                return AsrResult(ok=ok, text=text, blank=bool(ok and not text.strip()),
                     error=response.get('error', ''), loaded_once=self.loads == 1)
             except (OSError, ValueError):
                 self.close()
