@@ -1,0 +1,70 @@
+name: tests
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - run: pip install -r requirements-lock.txt -r requirements-dev.txt
+      - run: python -m pytest
+      - run: node tests/recorder_machine.test.mjs
+      - run: node tests/room_client.test.mjs
+  windows-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install and infer from a path with spaces and Chinese characters
+        shell: pwsh
+        env:
+          BREEZE_NONINTERACTIVE: "1"
+          BREEZE_REQUIRE_SHORTCUT: "1"
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'Breeze test 測試'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Get-ChildItem -Force | Where-Object { $_.Name -notin @('.git', '.venv') } | Copy-Item -Destination $target -Recurse -Force
+          Push-Location $target
+          try {
+            cmd /c install.bat
+            if ($LASTEXITCODE -ne 0) { throw 'Windows install failed' }
+            powershell -NoProfile -ExecutionPolicy Bypass -File .\install-shortcut.ps1 -CheckOnly
+            if ($LASTEXITCODE -eq 2) { throw 'Desktop shortcut was not created (CheckOnly exit 2)' }
+            elseif ($LASTEXITCODE -eq 1) { throw 'Desktop shortcut target or working directory is incorrect (CheckOnly exit 1)' }
+            elseif ($LASTEXITCODE -ne 0) { throw "Desktop shortcut check failed (exit $LASTEXITCODE)" }
+            powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ci\read_shortcuts.ps1 -Out data\shortcut-readback.json
+            if ($LASTEXITCODE -ne 0) { throw 'Shortcut read-back mismatch' }
+            cmd /c doctor.bat
+            if ($LASTEXITCODE -ne 0) { throw 'Preflight failed' }
+            cmd /c verify.bat
+            if ($LASTEXITCODE -ne 0) { throw 'Real ASR inference failed' }
+            $env:BREEZE_ASR = 'cli'
+            cmd /c verify.bat --output data/runtime-check-cli.json
+            if ($LASTEXITCODE -ne 0) { throw 'Real CLI inference failed' }
+            Remove-Item Env:BREEZE_ASR
+          } finally {
+            Pop-Location
+          }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-runtime-check
+          path: |
+            ${{ runner.temp }}/Breeze test 測試/data/runtime-check*.json
+            ${{ runner.temp }}/Breeze test 測試/data/shortcut-readback.json
+          if-no-files-found: ignore

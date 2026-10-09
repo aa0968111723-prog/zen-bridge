@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>禪譯主持</title>
+<style>
+:root { color-scheme: light; }
+body { margin: 0; font-family: "Segoe UI", "PingFang TC", sans-serif; background: #f3eadb; color: #2a2118; }
+main { max-width: 820px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 30px; margin: 0 0 6px; }
+p { line-height: 1.5; }
+button, input, select, textarea { font-size: 18px; }
+button { min-height: 44px; padding: 10px 16px; margin: 8px 8px 0 0; border: 0; border-radius: 12px; background: #8a5424; color: #fff; }
+button:disabled { opacity: .45; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #c47a32; outline-offset: 2px; }
+.lead { color: #6b5644; margin-top: 0; }
+#go { min-height: 56px; padding: 14px 28px; font-size: 22px; font-weight: 750; }
+.share-title, .section { font-size: 18px; font-weight: 750; margin: 18px 0 4px; }
+#qr { display: block; margin-top: 8px; background: #fff; border-radius: 12px; }
+#url { word-break: break-all; }
+#metrics, #log { font-size: 15px; line-height: 1.45; }
+#metrics { color: #6b5644; }
+button.secondary { background: #5d6b4a; }
+.card { background: #fffaf3; border-radius: 18px; padding: 16px; margin-top: 16px; box-shadow: 0 10px 28px rgba(80, 48, 16, .08); }
+label { display: block; margin-top: 8px; }
+.warn { color: #8a2b12; font-weight: 650; }
+.meter { height: 12px; background: #eadfce; border-radius: 99px; overflow: hidden; margin-top: 8px; }
+.meter span { display: block; height: 100%; width: 0; background: #c47a32; }
+#phase { font-weight: 700; }
+#caption-en { font-size: 28px; line-height: 1.35; min-height: 1.35em; }
+#caption-zh { color: #6b5644; min-height: 1.4em; }
+#first-run ol { margin: 8px 0 0; padding-left: 1.2em; }
+#first-run li { margin: 6px 0; }
+#log { white-space: pre-wrap; min-height: 140px; max-height: 280px; overflow: auto; }
+</style>
+</head>
+<body>
+<main>
+<h1>禪譯主持</h1>
+<p class="lead">這台是主持端。同一個 Wi-Fi 的手機掃下面的 QR。沒有金鑰時只出中文。</p>
+<div class="card" id="first-run">
+<p><strong>第一次使用，只要三步</strong></p>
+<ol>
+<li>按「開始聽」，並允許麥克風。</li>
+<li>對著電腦說話，下面會出現中文字幕。</li>
+<li>手機連同一個 Wi-Fi，掃描 QR 看字幕。</li>
+</ol>
+<button id="hide-guide" class="secondary" type="button">我知道了</button>
+</div>
+<div class="card">
+<label>房間 <input id="room" value="class" autocomplete="off"></label>
+<label>麥克風 <select id="mic"><option value="">預設麥克風</option></select></label>
+<div class="meter" aria-hidden="true"><span id="level"></span></div>
+<div>
+<button id="go">開始聽</button>
+<button id="stop" disabled>停止</button>
+<button id="try" class="secondary" type="button">試音</button>
+</div>
+<p id="phase">收音狀態：待命</p>
+<p id="caption-en"></p>
+<p id="caption-zh"></p>
+<p id="status"></p>
+<p id="metrics"></p>
+<p class="share-title">聽眾掃這裡</p>
+<img id="qr" alt="聽眾 QR" width="220">
+<p id="url"></p>
+<label>分享位址 <select id="nic"></select></label>
+</div>
+<div class="card">
+<label>這場術語，一行一個，例如 般若=prajna
+<textarea id="glossary" rows="4"></textarea></label>
+<button id="save-terms" class="secondary" type="button">儲存術語</button>
+<button id="export" class="secondary" type="button">匯出 SRT</button>
+<label>跳過序號 <input id="skip-seq" inputmode="numeric" value="1" style="width:5em"></label>
+<button id="skip" class="secondary" type="button">標記缺段</button>
+<button id="delete-seg" class="secondary" type="button">刪除此段</button>
+<button id="retranslate" class="secondary" type="button" hidden>重試英譯</button>
+</div>
+<h2 class="section">紀錄</h2>
+<div class="card" id="log" role="log" aria-live="polite"></div>
+</main>
+<script type="module">
+import { createCaptureController } from "/static/recorder_machine.js";
+import { connectRoom, createCaptionView, mergeCaptionUpdate } from "/static/room_client.js";
+import { applyCaption } from "/static/host_caption.js";
+const roomEl = document.querySelector("#room");
+const log = document.querySelector("#log");
+const status = document.querySelector("#status");
+const metrics = document.querySelector("#metrics");
+const phaseEl = document.querySelector("#phase");
+const captionEn = document.querySelector("#caption-en");
+const captionZh = document.querySelector("#caption-zh");
+const go = document.querySelector("#go");
+const guide = document.querySelector("#first-run");
+function hideGuide() {
+  if (!guide) return;
+  guide.hidden = true;
+  try { localStorage.setItem("breeze-guide", "1"); } catch (err) {}
+}
+try { if (localStorage.getItem("breeze-guide") === "1") hideGuide(); } catch (err) {}
+document.querySelector("#hide-guide").onclick = hideGuide;
+const stopBtn = document.querySelector("#stop");
+const lines = [];
+let token = "";
+let ready = false;
+let holdRoom = "";
+let captionConn = null;
+let listenedRoom = "";
+let listenKey = "";
+const view = createCaptionView(80);
+const captions = view.items;
+const phaseLabels = {
+  idle: "待命",
+  preparing: "準備麥克風",
+  recording: "聽講中",
+  waiting: "處理積壓，已暫停產生新錄音；此時說話不會加入字幕",
+  draining: "送出尾段",
+  error: "收音中斷",
+};
+function line(text) {
+  lines.unshift(text);
+  log.textContent = lines.slice(0, 40).join("\n");
+}
+function rememberRoom(data) {
+  if (!data || typeof data !== "object") return;
+  if (typeof data.listen_key === "string" && data.listen_key) {
+    listenKey = data.listen_key;
+    return;
+  }
+  if (typeof data.listen_url !== "string" || !data.listen_url) return;
+  try {
+    const found = new URL(data.listen_url).searchParams.get("k");
+    if (found) listenKey = found;
+  } catch (err) { /* listen_url is not always a full URL */ }
+}
+function paintCaption(fromSocket, item, prevEn) {
+  const shown = applyCaption({ items: captions }, null);
+  const retryBtn = document.querySelector("#retranslate");
+  if (shown.item) {
+    captionEn.textContent = shown.label;
+    captionZh.textContent = shown.zh;
+    if (retryBtn) retryBtn.hidden = !shown.retry;
+  } else {
+    captionEn.textContent = "";
+    captionZh.textContent = "";
+    if (retryBtn) retryBtn.hidden = true;
+  }
+  if (fromSocket && item && item.en && !prevEn) {
+    line(item.en + "\n" + (item.zh || item.error || ""));
+  }
+}
+function showCaption(incoming, fromSocket) {
+  if (!incoming || incoming.id == null || incoming.id === "") return;
+  const prev = captions.get(incoming.id) || null;
+  const merged = mergeCaptionUpdate(prev, incoming);
+  if (!merged || merged === prev) return;
+  view.apply(merged);
+  if (view.deleted.has(incoming.id) && !captions.has(incoming.id)) {
+    paintCaption(false, null, false);
+    return;
+  }
+  paintCaption(fromSocket, merged, prev && prev.en);
+}
+function listenCaptions(roomId, force) {
+  if (!token) return;
+  const room = (roomId || roomEl.value || "class").trim() || "class";
+  if (!force && captionConn && listenedRoom === room) return;
+  if (captionConn) captionConn.stop();
+  if (listenedRoom !== room) view.reset();
+  listenedRoom = room;
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  captionConn = connectRoom({
+    room,
+    url: () => {
+      let address = scheme + "://" + location.host + "/ws/listen?room_id=" + encodeURIComponent(room);
+      if (listenKey) address += "&k=" + encodeURIComponent(listenKey);
+      return address;
+    },
+    onState: () => {},
+    onEvent: (item) => showCaption(item, true),
+    onDelete: (item) => {
+      view.apply(item);
+      paintCaption(false, null, false);
+      line("已刪除一段字幕。");
+    },
+    onClear: (data) => {
+      view.apply(data && data.type ? data : { type: "captions_cleared" });
+      paintCaption(false, null, false);
+      line("這個房間的字幕已清除。");
+    },
+    onBackfill: (rows) => { view.replace(rows); paintCaption(false, null, false); },
+    onReset: () => { view.reset(); paintCaption(false, null, false); },
+  });
+}
+let authJob = null;
+async function recoverAuth() {
+  if (authJob) return authJob;
+  authJob = (async () => {
+    const resp = await fetch("/api/host-token", { cache: "no-store" });
+    if (!resp.ok) throw new Error("無法重新取得主持權限");
+    const data = await resp.json();
+    if (!data || typeof data.token !== "string" || !data.token) throw new Error("無法重新取得主持權限");
+    token = data.token;
+    const room = (ctl.session && ctl.session.roomId) || (roomEl.value || "class").trim() || "class";
+    const sessionId = (ctl.session && ctl.session.id) || "pending";
+    const headers = { authorization: "Bearer " + token, "content-type": "application/json" };
+    const opened = await fetch("/api/rooms/open", { method: "POST", headers, body: JSON.stringify({ room_id: room }) });
+    if (opened.ok) rememberRoom(await opened.json());
+    await fetch("/api/glossary", { method: "POST", headers, body: JSON.stringify({ room_id: room, session_id: sessionId, text: document.querySelector("#glossary").value }) });
+    listenCaptions(room, true);
+  })();
+  try {
+    await authJob;
+  } finally {
+    authJob = null;
+  }
+}
+async function hostFetch(url, options) {
+  const build = () => {
+    const opts = { ...(options || {}) };
+    const headers = { ...(opts.headers || {}) };
+    if (token) headers.authorization = "Bearer " + token;
+    opts.headers = headers;
+    return opts;
+  };
+  let resp = await fetch(url, build());
+  if (resp.status !== 401) return resp;
+  await recoverAuth();
+  return fetch(url, build());
+}
+function micError(err) {
+  const name = err && err.name;
+  if (name === "NotAllowedError") return "瀏覽器拒絕了麥克風。請允許後再按開始。";
+  if (name === "NotFoundError") return "找不到麥克風。";
+  if (name === "NotReadableError") return "麥克風被別的程式佔用，或剛剛被拔掉。";
+  return "無法開始聽：" + (err && err.message ? err.message : "未知錯誤");
+}
+function deviceId() {
+  const value = document.querySelector("#mic").value;
+  return value ? { deviceId: { exact: value } } : true;
+}
+async function setup() {
+  const headers = token ? { authorization: "Bearer " + token } : {};
+  const data = await fetch("/api/setup?room_id=" + encodeURIComponent(roomEl.value), { headers, cache: "no-store" }).then((r) => r.json());
+  rememberRoom(data);
+  const qr = document.querySelector("#qr");
+  if (!data.share_ready) {
+    qr.removeAttribute("src");
+    document.querySelector("#url").textContent = data.share_message || "尚無可供其他裝置使用的連結";
+  } else {
+    document.querySelector("#url").textContent = data.listen_url;
+    const qrResp = await fetch("/api/qr?room_id=" + encodeURIComponent(roomEl.value) + "&t=" + Date.now(), { headers, cache: "no-store" });
+    if (qrResp.ok) {
+      const blob = await qrResp.blob();
+      if (qr.dataset.objectUrl) URL.revokeObjectURL(qr.dataset.objectUrl);
+      const objectUrl = URL.createObjectURL(blob);
+      qr.dataset.objectUrl = objectUrl;
+      qr.src = objectUrl;
+    } else {
+      qr.removeAttribute("src");
+    }
+  }
+  const nic = document.querySelector("#nic");
+  nic.textContent = "";
+  const hosts = data.share_hosts || [];
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "自動選擇";
+  nic.appendChild(blank);
+  for (const host of hosts) {
+    const option = document.createElement("option");
+    option.value = host;
+    option.textContent = host;
+    if (host === data.share_host) option.selected = true;
+    nic.appendChild(option);
+  }
+  const missing = [];
+  const modeNames = { native: "本機常駐", resident: "常駐服務", cli: "命令列" };
+  if (!data.whisper && data.asr_mode !== "native") missing.push("whisper-cli.exe");
+  if (!data.model) missing.push("Breeze 模型");
+  if (!data.ffmpeg) missing.push("ffmpeg");
+  if (data.asr_ready === false) missing.push(data.resident_error || "辨識服務尚未就緒");
+  ready = missing.length === 0;
+  status.className = missing.length || !data.storage ? "warn" : "";
+  status.textContent = missing.length
+    ? ("還缺：" + missing.join("、") + "。不會改走雲端辨識。")
+    : (data.translate_label + "。模型模式：" + (modeNames[data.asr_mode] || data.asr_mode) + (data.model_reloads_each_segment ? "，每段會重新載入。" : "，常駐服務已就緒。") + (data.storage ? "逐字稿已啟用儲存，可匯出保存期限內的完整內容。" : "逐字稿未啟用儲存；重開服務會清空，只可匯出近期字幕。"));
+  go.disabled = !ready || !token || !ctl.canEditRoom();
+  listenCaptions(roomEl.value);
+}
+async function refreshMetrics() {
+  if (!token) return;
+  const resp = await fetch("/api/metrics", { headers: { authorization: "Bearer " + token } });
+  if (!resp.ok) return;
+  const data = await resp.json();
+  const ram = data.rss_bytes ? Math.round(data.rss_bytes / 1048576) + " MB" : "尚未讀到";
+  const tokens = data.tokens_used ? "，譯文 tokens " + data.tokens_used : "";
+  const price = data.price ? "，金額只依 " + data.price.date + " 的來源" : "";
+  metrics.textContent = "待處理 " + data.pending + "，最久等待 " + data.oldest_wait_ms + " ms，上次辨識 " + (data.last_process_ms ?? "—") + " ms，拒絕 " + data.rejected + "，缺段 " + data.missing + "，聽眾 " + data.listeners + "，記憶體 " + ram + tokens + price;
+}
+const ctl = createCaptureController({
+  periodMs: 6000,
+  roomId: () => roomEl.value || "class",
+  newId: () => crypto.randomUUID().replace(/-/g, "").slice(0, 16),
+  openMic: () => navigator.mediaDevices.getUserMedia({ audio: deviceId() }),
+  onUploadError: (meta, err) => {
+    line("第 " + meta.seq + " 段上傳未確認完成：" + (err?.message || "網路錯誤") + "；請檢查連線與字幕。停止後可匯出已接收內容。");
+    status.className = "warn";
+    status.textContent = "有字幕段上傳未確認完成，請檢查下方紀錄。";
+  },
+  createRecorder: (stream) => {
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+    return new MediaRecorder(stream, { mimeType: mime });
+  },
+  upload: async (meta, blob) => {
+    const address = "/api/push?room_id=" + encodeURIComponent(meta.roomId) + "&session_id=" + encodeURIComponent(meta.sessionId) + "&seq=" + meta.seq;
+    function formFor(retryFlag) {
+      const body = new FormData();
+      body.append("room_id", meta.roomId);
+      body.append("session_id", meta.sessionId);
+      body.append("seq", String(meta.seq));
+      body.append("t0_ms", String(meta.t0_ms || 0));
+      body.append("t1_ms", String(meta.t1_ms || 0));
+      if (retryFlag) body.append("retry", "1");
+      body.append("wait_translation", "0");
+      body.append("audio", blob, "segment.webm");
+      return body;
+    }
+    async function post(retryFlag) {
+      const abort = new AbortController();
+      const timeout = setTimeout(() => abort.abort(), 300000);
+      try {
+        return await fetch(address, {
+          method: "POST",
+          body: formFor(retryFlag),
+          signal: abort.signal,
+          headers: {
+            authorization: "Bearer " + token,
+            "x-breeze-async-translation": "1",
+            ...(retryFlag ? { "x-breeze-retry": "1" } : {}),
+          },
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    let resp = await post(false);
+    if (resp.status === 401) {
+      await recoverAuth();
+      resp = await post(false);
+    }
+    let data = await resp.json();
+    if (resp.status === 429) {
+      line("佇列已滿，稍後重送這一段：" + meta.seq);
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      resp = await post(true);
+      if (resp.status === 401) {
+        await recoverAuth();
+        resp = await post(true);
+      }
+      data = await resp.json();
+    }
+    if (!resp.ok || !data.ok) {
+      const message = data.detail || data.error || "辨識失敗";
+      line("失敗：" + message);
+      throw new Error(message);
+    }
+    showCaption(data, false);
+    if (data.zh || data.error) line(data.zh || data.error);
+    return data;
+  },
+  onPhase(next) {
+    const extra = next === "error" && ctl.lastError ? "：" + ctl.lastError : "";
+    phaseEl.textContent = "收音狀態：" + (phaseLabels[next] || next) + extra;
+  },
+});
+function pinnedRoomValue() {
+  if (ctl.session && !ctl.canEditRoom()) return ctl.session.roomId;
+  if (holdRoom) return holdRoom;
+  if (!ctl.canEditRoom() && ctl.pendingRoom) return ctl.pendingRoom;
+  return "";
+}
+function lockRoom() {
+  const pinned = pinnedRoomValue();
+  if (pinned) roomEl.value = pinned;
+  roomEl.disabled = !ctl.canEditRoom() || Boolean(holdRoom);
+  go.disabled = !ready || !token || !ctl.canEditRoom() || Boolean(holdRoom);
+  stopBtn.disabled = ctl.canEditRoom();
+  const extra = ctl.state === "error" && ctl.lastError ? "：" + ctl.lastError : "";
+  phaseEl.textContent = "收音狀態：" + (phaseLabels[ctl.state] || ctl.state) + extra;
+}
+go.onclick = async () => {
+  hideGuide();
+  if (!ready || !ctl.canEditRoom() || holdRoom) return;
+  const room = (roomEl.value || "class").trim() || "class";
+  roomEl.value = room;
+  holdRoom = room;
+  roomEl.disabled = true;
+  go.disabled = true;
+  try {
+    const opened = await hostFetch("/api/rooms/open", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: room }) });
+    if (opened.ok) rememberRoom(await opened.json());
+    listenCaptions(room, true);
+    await hostFetch("/api/glossary", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: room, session_id: "pending", text: document.querySelector("#glossary").value }) });
+    await ctl.start();
+    const activeRoom = ctl.session ? ctl.session.roomId : room;
+    await hostFetch("/api/session/active", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: activeRoom, active: true }) });
+    if (ctl.session) {
+      await hostFetch("/api/glossary", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: ctl.session.roomId, session_id: ctl.session.id, text: document.querySelector("#glossary").value }) });
+    }
+    line("開始聽了。每一段都是完整錄音。");
+  } catch (err) {
+    status.className = "warn";
+    status.textContent = micError(err);
+  } finally {
+    holdRoom = "";
+    lockRoom();
+  }
+};
+stopBtn.onclick = async () => {
+  stopBtn.disabled = true;
+  const current = ctl.session;
+  await ctl.stop();
+  if (current) {
+    const endBody = { room_id: current.roomId, session_id: current.id, last_seq: ctl.lastSeq || 0 };
+    await hostFetch("/api/session/end", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(endBody) });
+  }
+  lockRoom();
+  line(ctl.lastError ? ("已停止：" + ctl.lastError) : "已停止。收音已停，送出的尾段也處理完了。");
+};
+document.querySelector("#try").onclick = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: deviceId() });
+    const bar = document.querySelector("#level");
+    const audio = new AudioContext();
+    const source = audio.createMediaStreamSource(stream);
+    const analyser = audio.createAnalyser();
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.fftSize);
+    const started = performance.now();
+    const paint = () => {
+      analyser.getByteTimeDomainData(data);
+      let peak = 0;
+      for (const value of data) peak = Math.max(peak, Math.abs(value - 128));
+      bar.style.width = Math.min(100, peak * 2) + "%";
+      if (performance.now() - started < 1500) requestAnimationFrame(paint);
+    };
+    paint();
+    setTimeout(() => { stream.getTracks().forEach((track) => track.stop()); audio.close(); }, 1600);
+    line("正在試音。這不會送去辨識。");
+  } catch (err) {
+    status.className = "warn";
+    status.textContent = micError(err);
+  }
+};
+document.querySelector("#save-terms").onclick = async () => {
+  if (!token || !ctl.session) { line("開始聽之後才會把術語套到這一場。"); return; }
+  await hostFetch("/api/glossary", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: ctl.session.roomId, session_id: ctl.session.id, text: document.querySelector("#glossary").value }) });
+  line("已儲存這一場的術語。");
+};
+document.querySelector("#skip").onclick = async () => {
+  if (!token || !ctl.session) {
+    line("還沒開始聽，不能標記缺段。");
+    return;
+  }
+  const seq = Number(document.querySelector("#skip-seq").value);
+  const resp = await fetch("/api/segment/missing", {
+    method: "POST",
+    headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+    body: JSON.stringify({ room_id: ctl.session.roomId, session_id: ctl.session.id, seq, reason: "主持端放棄這段" }),
+  });
+  const data = await resp.json();
+  line(resp.ok ? "已標記缺段 " + seq : (data.detail || "無法標記缺段"));
+};
+document.querySelector("#delete-seg").onclick = async () => {
+  if (!token || !ctl.session) {
+    line("還沒開始聽，不能刪除字幕。");
+    return;
+  }
+  const seq = Number(document.querySelector("#skip-seq").value);
+  const id = ctl.session.roomId + ":" + ctl.session.id + ":" + seq;
+  const resp = await hostFetch("/api/captions?room_id=" + encodeURIComponent(ctl.session.roomId) + "&id=" + encodeURIComponent(id), {
+    method: "DELETE",
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    line(data.detail || "無法刪除這段");
+    return;
+  }
+  view.apply({ type: "caption_deleted", id, session_id: ctl.session.id, seq });
+  paintCaption(false, null, false);
+  line("已刪除第 " + seq + " 段。");
+};
+document.querySelector("#retranslate").onclick = async () => {
+  const shown = applyCaption({ items: captions }, null);
+  if (!shown.retry || !shown.item) {
+    line("這一段沒有需要重試的英譯。");
+    return;
+  }
+  const item = shown.item;
+  const roomId = item.room_id || (ctl.session && ctl.session.roomId) || roomEl.value;
+  const resp = await hostFetch("/api/segment/retranslate", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ room_id: roomId, session_id: item.session_id, seq: item.seq }),
+  });
+  let data = {};
+  try {
+    data = await resp.json();
+  } catch (err) {
+    data = {};
+  }
+  if (!resp.ok) {
+    line(data.detail || "無法重試英譯");
+    return;
+  }
+  line("已重送第 " + item.seq + " 段的英譯。");
+};
+document.querySelector("#export").onclick = async () => {
+  const resp = await fetch("/api/export?room_id=" + encodeURIComponent(roomEl.value) + "&kind=srt", { headers: { authorization: "Bearer " + token } });
+  const text = await resp.text();
+  const blob = new Blob([text], { type: "text/plain" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = roomEl.value + ".srt";
+  link.click();
+};
+document.querySelector("#nic").onchange = async (ev) => {
+  const resp = await fetch("/api/share-host", { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify({ host: ev.target.value, room_id: roomEl.value }) });
+  if (resp.ok) rememberRoom(await resp.json());
+  setup();
+};
+roomEl.addEventListener("input", () => {
+  const pinned = pinnedRoomValue();
+  if (!pinned) return;
+  if (roomEl.value !== pinned) {
+    roomEl.value = pinned;
+    line("收音中不能直接換房間。請先停止。");
+  }
+});
+roomEl.addEventListener("change", () => {
+  const pinned = pinnedRoomValue();
+  if (pinned) {
+    roomEl.value = pinned;
+    line("收音中不能直接換房間。請先停止。");
+    return;
+  }
+  setup();
+});
+window.addEventListener("pagehide", () => {
+  if (captionConn) captionConn.stop();
+  ctl.stop();
+});
+const tokenResp = await fetch("/api/host-token");
+if (!tokenResp.ok) {
+  status.className = "warn";
+  status.textContent = "請用這台電腦的瀏覽器開主持頁。聽眾頁不能開始聽。";
+  go.disabled = true;
+} else {
+  token = (await tokenResp.json()).token;
+  const opened = await fetch("/api/rooms/open", { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify({ room_id: roomEl.value || "class" }) });
+  if (opened.ok) rememberRoom(await opened.json());
+}
+if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const mic = document.querySelector("#mic");
+  for (const device of devices.filter((item) => item.kind === "audioinput")) {
+    const option = document.createElement("option");
+    option.value = device.deviceId;
+    option.textContent = device.label || "麥克風";
+    mic.appendChild(option);
+  }
+}
+setup();
+setInterval(refreshMetrics, 2000);
+refreshMetrics();
+</script>
+</body>
+</html>

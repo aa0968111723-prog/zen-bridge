@@ -47,3 +47,5 @@ next-env.d.ts
 
 # generated TypeScript build cache
 *.tsbuildinfo
+__pycache__/
+*.pyc

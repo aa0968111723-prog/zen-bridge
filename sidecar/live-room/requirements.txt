@@ -1,0 +1,8 @@
+fastapi==0.142.2
+uvicorn==0.54.0
+python-multipart==0.0.32
+qrcode==8.2
+pillow==12.3.0
+pywhispercpp==1.5.1
+numpy==2.3.5
+websockets==15.0.1

@@ -1,0 +1,69 @@
+name: Zen Bridge integration
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - run: node tests/runtime.mjs
+      - run: node tests/capture.mjs
+      - run: node tests/breeze-gateway.mjs
+      - run: node tests/zen-front.mjs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python tests/deploy_rollback.py
+      - name: Test desktop runtime
+        working-directory: sidecar/live-room
+        run: |
+          python -m pip install -r requirements-lock.txt -r requirements-dev.txt
+          python -m pytest
+          node tests/recorder_machine.test.mjs
+          node tests/room_client.test.mjs
+      - run: pnpm build
+        env:
+          DEPLOY_TARGET: zeabur
+      - run: node tests/startup.mjs
+      - run: node scripts/pack-tencent.mjs work/tencent-release
+      - run: tar -czf zen-runtime.tgz -C work/tencent-release .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zen-tencent-runtime
+          path: zen-runtime.tgz
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: zen-tencent-runtime
+      - name: Publish the checked release
+        env:
+          DEPLOY_HOST: ${{ secrets.ZEN_SSH_HOST }}
+          DEPLOY_USER: ${{ secrets.ZEN_SSH_USER }}
+          PRIVATE_KEY: ${{ secrets.ZEN_SSH_PRIVATE_KEY }}
+          HOST_KEY: ${{ secrets.ZEN_SSH_HOST_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$HOST_KEY" | tr -d '\r' > ~/.ssh/known_hosts
+          deploy_host=$(printf '%s' "$DEPLOY_HOST" | tr -d '\r\n')
+          deploy_user=$(printf '%s' "$DEPLOY_USER" | tr -d '\r\n')
+          cat zen-runtime.tgz | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$deploy_user@$deploy_host" publish "$GITHUB_SHA"

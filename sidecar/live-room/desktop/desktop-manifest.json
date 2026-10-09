@@ -1,0 +1,21 @@
+{
+  "webview2": {
+    "version": "1.0.4258.31",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4258.31/microsoft.web.webview2.1.0.4258.31.nupkg",
+    "sha256": "56f7f4b8bf9aee4b8efefbbdd4f67d5f74ebd1b100ed0806da71bf76af481aa9"
+  },
+  "vc_runtime": {
+    "url": "https://aka.ms/vc14/vc_redist.x64.exe",
+    "sha256": "843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c"
+  },
+  "inno_setup": {
+    "version": "6.6.1",
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_6_1/innosetup-6.6.1.exe",
+    "sha256": "d243ce440c02705530699554fb9612b9b2bd7a2a90629cdb7f41e66f5faeb91f"
+  },
+  "bootstrapper": {
+    "url": "https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+    "sha256": "aa38a8cfce6179b87181609b1c730a29eaf26138fc833af5759e67576770f3a3",
+    "size": 1850576
+  }
+}

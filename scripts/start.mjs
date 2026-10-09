@@ -6,9 +6,20 @@ const target = initializeNodeRuntime(process.argv.includes('--zeabur') ? 'zeabur
 const extra = process.argv.slice(2).filter(arg => arg !== '--zeabur');
 if (target === 'zeabur') {
   const port = Number(process.env.PORT || 3000);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT 必須為有效的連接埠。');
+  if (!Number.isInteger(port) || port < 1 || port > 65534) throw new Error('PORT 必須為有效的連接埠。');
+  let uiPort = port;
+  if (process.env.BREEZE_AGENT_TOKEN) {
+    const { createBreezeGateway } = await import('../sidecar/breeze-gateway.mjs');
+    const gateway = createBreezeGateway({ token: process.env.BREEZE_AGENT_TOKEN });
+    await new Promise((resolve, reject) => { gateway.server.once('error', reject); gateway.server.listen(Number(process.env.BREEZE_AGENT_PORT || 8770), '0.0.0.0', resolve); });
+    uiPort = port + 1;
+    const { createZenFront } = await import('../sidecar/zen-front.mjs');
+    const front = createZenFront(gateway, uiPort);
+    await new Promise((resolve, reject) => { front.once('error', reject); front.listen(port, '0.0.0.0', resolve); });
+    for (const signal of ['SIGINT','SIGTERM']) process.once(signal, () => { front.close(); void gateway.close(); });
+  }
   const cli = new URL('../node_modules/vinext/dist/cli.js', import.meta.url);
-  process.argv = [process.execPath, fileURLToPath(cli), 'start', '--port', String(port), '--hostname', '0.0.0.0'];
+  process.argv = [process.execPath, fileURLToPath(cli), 'start', '--port', String(uiPort), '--hostname', uiPort === port ? '0.0.0.0' : '127.0.0.1'];
   await import(cli.href);
 } else {
   const hasFlag = name => extra.some(arg => arg === '--' + name || arg.startsWith('--' + name + '='));

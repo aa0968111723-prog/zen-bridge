@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>禪譯聽眾</title>
+<style>
+:root { --bg: #fbf6ee; --fg: #2a2118; --muted: #6b5644; --line: rgba(90, 60, 30, .2); --size: 40px; }
+body { margin: 0; min-height: 100dvh; display: flex; flex-direction: column; background: var(--bg); color: var(--fg); font-family: "Segoe UI", "PingFang TC", sans-serif; }
+body.dark { --bg: #16130f; --fg: #f6f1e7; --muted: #d9d0c3; --line: rgba(255, 255, 255, .16); }
+body.zh-only .en, body.en-only .zh { display: none; }
+header { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px calc(10px + env(safe-area-inset-top)); background: color-mix(in srgb, var(--bg) 92%, transparent); }
+button, select { font-size: 16px; min-height: 44px; padding: 8px 12px; border-radius: 10px; border: 0; background: #8a5424; color: white; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid #c47a32; outline-offset: 2px; }
+#state { color: var(--fg); font-weight: 750; }
+.stage { flex: 1; display: flex; flex-direction: column; justify-content: center; min-height: 42vh; padding: 8px 8px 12px; }
+.en { font-size: var(--size); font-weight: 700; padding: 12px 20px 8px; line-height: 1.35; }
+.zh { font-size: calc(var(--size) * .62); color: var(--muted); padding: 0 20px 20px; line-height: 1.45; }
+ul { list-style: none; margin: 0; padding: 0 16px calc(24px + env(safe-area-inset-bottom)); max-height: 28vh; overflow: auto; }
+li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 16px; }
+#hist-label { margin: 0 16px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+<span id="state">連線中…</span>
+<button id="retry" type="button">重新連線</button>
+<button id="theme" type="button">暗色</button>
+<button id="full" type="button">全螢幕</button>
+<label>顯示 <select id="mode"><option value="both">中英</option><option value="zh">中文</option><option value="en">英文</option></select></label>
+<label>字級 <select id="size"><option value="28">小</option><option value="34" selected>中</option><option value="46">大</option></select></label>
+<label><input id="pause" type="checkbox"> 暫停跟隨</label>
+<button id="live" type="button">回到即時</button>
+</header>
+<div class="stage">
+<div class="en" id="en">等待主持端</div>
+<div class="zh" id="zh"></div>
+</div>
+<p id="hist-label">最近字幕</p>
+<ul id="history"></ul>
+<script type="module">
+import { connectRoom, createCaptionView, liveTail, orderedCaptions } from "/static/room_client.js";
+const room = location.pathname.split("/").filter(Boolean).pop();
+const listenKey = new URLSearchParams(location.search).get("k") || "";
+const view = createCaptionView(80);
+const items = view.items;
+const state = { follow: true, pinned: null };
+const en = document.querySelector("#en");
+const zh = document.querySelector("#zh");
+const history = document.querySelector("#history");
+function render() {
+  const item = liveTail(items, state.follow, state.pinned);
+  const failed = item && (item.status === "missing" || item.status === "error" || item.status === "timeout" || item.status === "cancelled");
+  en.textContent = !item ? "等待主持端" : (failed ? (item.error || "這段沒有字幕") : (item.en || ""));
+  zh.textContent = item ? (item.zh || "") : "";
+  history.textContent = "";
+  const rows = orderedCaptions(items).slice(-12);
+  for (const row of rows) {
+    const li = document.createElement("li");
+    const zh = row.zh || row.error || "";
+    li.textContent = row.en ? zh + "　" + row.en : zh;
+    history.appendChild(li);
+  }
+}
+function show(item) {
+  view.apply(item);
+  render();
+}
+let conn = connect();
+function connect() {
+  return connectRoom({
+    room,
+    url: () => {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      let address = proto + "://" + location.host + "/ws/listen?room_id=" + encodeURIComponent(room);
+      if (listenKey) address += "&k=" + encodeURIComponent(listenKey);
+      return address;
+    },
+    onState: (text) => { document.querySelector("#state").textContent = text; },
+    onEvent: show,
+    onDelete: show,
+    onClear: (data) => { view.apply(data && data.type ? data : { type: "captions_cleared" }); render(); },
+    onBackfill: (rows) => { view.replace(rows); render(); },
+    onReset: () => { view.reset(); render(); },
+    onGap: () => { document.querySelector("#state").textContent = "補償窗口不足，只補到伺服器還留著的字幕"; },
+  });
+}
+document.querySelector("#retry").onclick = () => { conn.stop(); conn = connect(); conn.nudge(); };
+document.querySelector("#theme").onclick = () => {
+  document.body.classList.toggle("dark");
+  document.querySelector("#theme").textContent = document.body.classList.contains("dark") ? "亮色" : "暗色";
+};
+document.querySelector("#full").onclick = () => {
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+  else document.exitFullscreen();
+};
+document.querySelector("#mode").onchange = (ev) => {
+  document.body.classList.remove("zh-only", "en-only");
+  if (ev.target.value === "zh") document.body.classList.add("zh-only");
+  if (ev.target.value === "en") document.body.classList.add("en-only");
+};
+document.querySelector("#size").onchange = (ev) => { document.documentElement.style.setProperty("--size", ev.target.value + "px"); };
+document.querySelector("#pause").onchange = (ev) => {
+  state.follow = !ev.target.checked;
+  if (!state.follow) state.pinned = liveTail(items, true) && liveTail(items, true).id;
+  render();
+};
+document.querySelector("#live").onclick = () => {
+  state.follow = true;
+  state.pinned = null;
+  document.querySelector("#pause").checked = false;
+  render();
+};
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") conn.nudge(); });
+</script>
+</body>
+</html>

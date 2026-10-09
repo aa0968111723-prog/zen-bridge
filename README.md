@@ -1,5 +1,13 @@
 # 禪譯 Zen Bridge
 
+## 統一 App 與 Tencent 部署
+
+Zen Bridge 是主要 UI，Breeze Live Room 的本機引擎已整合在 `sidecar/live-room`。桌面 App 顯示同一份 Zen Bridge 介面，維持活動、人員、文字記憶、翻譯与聽眾房；Breeze 模型只在主持電腦載入，透過已配對的 WSS gateway 接回雲端，不放進網站映像。
+
+網站入口為 [禪譯 Zen Bridge](https://vexlark.co)。Windows 安裝包採 `Zen-Bridge-Setup.exe`，不含任何主持連線碼或 API 金鑰。新主持電腦需由管理員提供一次性的配對設定；已配對電腦安裝／更新會保留 `.env` 與既有本機資料。
+
+GitHub integration workflow 驗證 TypeScript、既有服務、收音與 gateway，再透過受限 SSH 部署到指定 Tencent 服務。部署不重裝雲端模型，保存先前服務設定並在 readiness 失敗時回復。架構、權限及有限佇列說明見 [整合架構](docs/UNIFIED-ARCHITECTURE.md)。本機 CPU 仍可能慢於連續語音，積壓期間會明示暂停，不能把安裝通過視為持續即時／中文準確度验收完成。
+
 > 同一份程式可部署到 Cloudflare Workers 或 Zeabur，以 DEPLOY_TARGET 選擇執行平台。
 
 淡江禪學社的中英雙向翻譯工作台。以社團文宣的晴空、木色、奶油紙感與嫩芽龜龜客製介面。Sites 私人網站由平台管理登入與存取；Cloudflare 使用 D1／R2，Zeabur 使用 Postgres 與選用的 Volume。
