@@ -19,6 +19,7 @@ from scripts.update_runtime import descriptor
 
 SETUP_NAME = "Zen-Bridge-Setup.exe"
 UPDATE_NAME = "Zen-Bridge-Update.exe"
+PINNED_INSTALLERS = 'https://github.com/aa0968111723-prog/zen-bridge/releases/download/runtime-assets-v1/'
 
 
 def find_iscc() -> Path:
@@ -48,32 +49,41 @@ def stage_python_cache() -> None:
         print("Python cache missing; prepare_desktop will download it.", flush=True)
 
 
-def stage_bootstrapper(payload: Path) -> None:
-    spec = json.loads((ROOT / "desktop" / "desktop-manifest.json").read_text(encoding="utf-8"))["bootstrapper"]
-    cache = ROOT / ".downloads" / "WebView2Bootstrapper.exe"
-    sibling = ROOT.parent / "cache" / "WebView2Bootstrapper.exe"
-    source = cache if cache.is_file() else sibling
-    if not source.is_file():
-        cache.parent.mkdir(exist_ok=True)
-        with urllib.request.urlopen(spec['url'], timeout=60) as incoming, cache.open('wb') as outgoing:
-            shutil.copyfileobj(incoming, outgoing)
-        source = cache
-    if source.stat().st_size != spec["size"] or sha256(source) != spec["sha256"]:
-        raise RuntimeError("WebView2 bootstrapper is missing or failed checksum")
-    destination = payload / "desktop" / "WebView2Bootstrapper.exe"
+def stage_pinned_installer(payload: Path, key: str, name: str) -> None:
+    spec = json.loads((ROOT / 'desktop/desktop-manifest.json').read_text(encoding='utf-8'))[key]
+    cache = ROOT / '.downloads' / name
+    def matches(path):
+        return path.is_file() and ('size' not in spec or path.stat().st_size == spec['size']) and sha256(path) == spec['sha256']
+    source = next((p for p in (cache, ROOT.parent / 'cache' / name) if matches(p)), None)
+    if source is None:
+        # Microsoft's evergreen links can move. The mirror contains the exact
+        # previously signed, pinned vendor bytes; neither source bypasses SHA256.
+        limit = spec.get('size', 64 * 1024 * 1024)
+        for url in (spec['url'], PINNED_INSTALLERS + name):
+            try:
+                with urllib.request.urlopen(url, timeout=60) as incoming:
+                    data = incoming.read(limit + 1)
+                if len(data) > limit or ('size' in spec and len(data) != spec['size']) or hashlib.sha256(data).hexdigest() != spec['sha256']:
+                    continue
+                cache.parent.mkdir(exist_ok=True)
+                cache.write_bytes(data)
+                source = cache
+                break
+            except OSError:
+                continue
+    if source is None:
+        raise RuntimeError('Pinned Microsoft installer unavailable or failed checksum: ' + name)
+    destination = payload / 'desktop' / name
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
 
 
+def stage_bootstrapper(payload: Path) -> None:
+    stage_pinned_installer(payload, 'bootstrapper', 'WebView2Bootstrapper.exe')
+
+
 def stage_vc_runtime(payload: Path) -> None:
-    spec = json.loads((ROOT / 'desktop/desktop-manifest.json').read_text())['vc_runtime']
-    cached = ROOT / '.downloads/vc_redist.x64.exe'
-    if not cached.is_file():
-        with urllib.request.urlopen(spec['url'], timeout=60) as incoming, cached.open('wb') as outgoing:
-            shutil.copyfileobj(incoming, outgoing)
-    if sha256(cached) != spec['sha256']:
-        raise RuntimeError('Microsoft runtime checksum mismatch')
-    shutil.copy2(cached, payload / 'desktop/vc_redist.x64.exe')
+    stage_pinned_installer(payload, 'vc_runtime', 'vc_redist.x64.exe')
 
 
 def clean_user_paths(payload: Path) -> None:
