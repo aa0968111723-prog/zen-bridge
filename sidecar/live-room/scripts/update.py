@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 from scripts.package_release import FILES, DIRECTORIES, source_files
 from app.settings import Settings, fill_process_environ
 
-REPOSITORY = 'aa0968111723-prog/breeze-live-room'
+REPOSITORY = 'aa0968111723-prog/zen-bridge'
 ASSET = 'Breeze-Live-Room-Windows.zip'
 
 def fetch(url, limit=20 * 1024 * 1024):
@@ -38,7 +38,8 @@ def allowed(name):
     path = PurePosixPath(name)
     return (not path.is_absolute() and '..' not in path.parts and '\\' not in name and ':' not in name
             and '__pycache__' not in path.parts and path.suffix != '.pyc'
-            and (name in FILES or (len(path.parts) > 1 and path.parts[0] in DIRECTORIES)))
+            and (name in FILES or (len(path.parts) > 1 and path.parts[0] in DIRECTORIES)
+                 or (len(path.parts) == 2 and path.parts[0] == 'tools' and path.suffix == '.py')))
 
 def unpack(archive, destination):
     with zipfile.ZipFile(archive) as zipped:
@@ -97,6 +98,10 @@ def replace_source(source, root):
         shutil.copytree(source / directory, target)
     for name in FILES:
         shutil.copy2(source / name, root / name)
+    # Python diagnostics are managed source; downloaded EXE/DLL runtime remains.
+    for path in (source / 'tools').glob('*.py'):
+        (root / 'tools').mkdir(exist_ok=True)
+        shutil.copy2(path, root / 'tools' / path.name)
 
 def restore(root, backup):
     if not (backup / 'complete').is_file():
