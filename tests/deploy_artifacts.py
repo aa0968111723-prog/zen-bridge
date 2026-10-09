@@ -14,8 +14,8 @@ with tempfile.TemporaryDirectory() as directory:
         (incoming/(revision+'.tgz')).write_bytes(b'generated artifact')
     (releases/'personal').mkdir();(incoming/'personal.txt').write_text('keep')
     result=deploy.prune_release_artifacts({current,prior})
-    assert result=={'releases':1,'archives':2}
+    assert result=={'releases':1,'archives':1}
     assert all((releases/name).is_dir() for name in (current,prior,foreign,'personal'))
-    assert all((incoming/(name+'.tgz')).is_file() for name in (current,prior))
+    assert all((incoming/(name+'.tgz')).is_file() for name in (current,prior,foreign))
     assert (incoming/'personal.txt').read_text()=='keep'
 print('PASS: artifact pruning retains current, rollback and unmanaged folders within the managed directories')

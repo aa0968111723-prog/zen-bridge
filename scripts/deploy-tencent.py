@@ -19,18 +19,23 @@ SERVICE = 'service-6abe121cc3a8364ca8506194'
 def prune_release_artifacts(keep):
     """Only source artifacts with matching managed revision markers are removed."""
     removed={'releases':0,'archives':0}
+    if (BASE/'releases').is_symlink() or (BASE/'incoming').is_symlink():return removed
     releases=(BASE/'releases').resolve()
+    if releases.parent!=BASE.resolve():return removed
+    managed=set()
     for path in releases.iterdir():
         if path.name in keep or not re.fullmatch('[a-f0-9]{40}',path.name) or path.is_symlink() or not path.is_dir():continue
         if path.resolve().parent!=releases:continue
         try:
             if (path/'REVISION').read_text().strip()!=path.name:continue
+            managed.add(path.name)
             shutil.rmtree(path);removed['releases']+=1
         except OSError:continue
     incoming=(BASE/'incoming').resolve()
+    if incoming.parent!=BASE.resolve():return removed
     for path in incoming.glob('*.tgz'):
         revision=path.name[:-4]
-        if revision in keep or not re.fullmatch('[a-f0-9]{40}',revision) or path.is_symlink() or not path.is_file():continue
+        if revision in keep or revision not in managed or not re.fullmatch('[a-f0-9]{40}',revision) or path.is_symlink() or not path.is_file():continue
         if path.resolve().parent!=incoming:continue
         try:path.unlink();removed['archives']+=1
         except OSError:continue
