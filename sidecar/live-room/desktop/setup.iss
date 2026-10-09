@@ -10,6 +10,11 @@
 #ifndef PythonVersion
   #define PythonVersion "3.12.10"
 #endif
+#ifdef CompactSetup
+  #ifndef PatchFingerprint
+    #error PatchFingerprint is required for compact updates
+  #endif
+#endif
 [Setup]
 AppId={{68770E3F-50EE-493F-8A23-6A82C5FFDA69}
 AppName=禪譯 Zen Bridge
@@ -23,7 +28,11 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
 OutputDir={#OutputDir}
+#ifdef CompactSetup
+OutputBaseFilename=Zen-Bridge-Update
+#else
 OutputBaseFilename=Zen-Bridge-Setup
+#endif
 ; The model and wheels are already compressed. zip keeps the one-click build practical.
 Compression=zip
 SolidCompression=no
@@ -73,9 +82,15 @@ ExitSetupMessage=安裝還沒完成。確定要離開嗎？
 SetupAborted=安裝未完成。可以稍後再執行一次安裝程式。
 
 [Files]
+#ifdef CompactSetup
+Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pyc,__pycache__\*,.env,data\*,logs\*,tmp\*,.venv\*,.updates\*,models\*,.python\*,tools\*,desktop\WebView2Bootstrapper.exe,desktop\vc_redist.x64.exe"
+Source: "{#PayloadDir}\scripts\update_runtime.py"; DestName: "ZenUpdateCheck.py"; Flags: dontcopy
+Source: "{#PayloadDir}\desktop\update-runtime.json"; DestName: "ZenUpdateRuntime.json"; Flags: dontcopy
+#else
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pyc,__pycache__\*,.env,data\*,logs\*,tmp\*,.venv\*,.updates\*,models\*"
 ; Quantized weights hardly compress; copy them directly to keep builds fast.
 Source: "{#PayloadDir}\models\*"; DestDir: "{app}\models"; Flags: ignoreversion nocompression
+#endif
 Source: "{#PayloadDir}\.env.example"; DestDir: "{app}"; DestName: ".env"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Dirs]
@@ -86,7 +101,9 @@ Name: "{app}\tmp"
 [InstallDelete]
 ; Replace only the App-managed dependency tree. User settings and captions
 ; live outside .python and are retained during reinstall and uninstall.
+#ifndef CompactSetup
 Type: filesandordirs; Name: "{app}\.python\{#PythonVersion}\tools\Lib\site-packages"
+#endif
 Type: files; Name: "{autodesktop}\Breeze Live Room.lnk"
 Type: files; Name: "{userprograms}\Breeze Live Room\Breeze Live Room.lnk"
 Type: files; Name: "{userprograms}\Breeze Live Room\Uninstall Breeze Live Room.lnk"
@@ -105,6 +122,24 @@ Name: "{group}\移除禪譯 Zen Bridge"; Filename: "{uninstallexe}"
 Filename: "{app}\Breeze.exe"; Description: "立刻開啟禪譯 Zen Bridge"; Flags: nowait postinstall skipifsilent
 
 [Code]
+#ifdef CompactSetup
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Python: String;
+  ResultCode: Integer;
+begin
+  Result := '此更新包需要相容的既有辨識引擎。請下載 Zen-Bridge-Setup.exe 完整安裝包。';
+  Python := ExpandConstant('{app}\.python\{#PythonVersion}\tools\python.exe');
+  if not FileExists(Python) then Exit;
+  ExtractTemporaryFile('ZenUpdateCheck.py');
+  ExtractTemporaryFile('ZenUpdateRuntime.json');
+  if Exec(Python, '-I ' + AddQuotes(ExpandConstant('{tmp}\ZenUpdateCheck.py')) +
+      ' --root ' + AddQuotes(ExpandConstant('{app}')) + ' --expected {#PatchFingerprint}' +
+      ' --descriptor ' + AddQuotes(ExpandConstant('{tmp}\ZenUpdateRuntime.json')),
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
+    Result := '';
+end;
+#endif
 function WebView2Present: Boolean;
 var
   Version: String;
@@ -121,6 +156,9 @@ var
   Bootstrapper: String;
   VcInstaller: String;
 begin
+#ifdef CompactSetup
+  Exit;
+#endif
   if CurStep <> ssPostInstall then Exit;
   Bootstrapper := ExpandConstant('{app}\desktop\WebView2Bootstrapper.exe');
   if not WebView2Present then begin

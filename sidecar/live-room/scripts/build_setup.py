@@ -15,8 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.install_runtime import sha256
 from scripts.prepare_desktop import prepare
+from scripts.update_runtime import descriptor
 
 SETUP_NAME = "Zen-Bridge-Setup.exe"
+UPDATE_NAME = "Zen-Bridge-Update.exe"
 
 
 def find_iscc() -> Path:
@@ -101,6 +103,9 @@ def build(payload: Path, output: Path, assets: Path, sdk: Path | None) -> Path:
     compiler = find_iscc()
     output.mkdir(parents=True, exist_ok=True)
     version = (payload / "VERSION").read_text(encoding="utf-8").strip()
+    runtime = descriptor(payload)
+    encoded_runtime = json.dumps(runtime, sort_keys=True)
+    (payload / 'desktop/update-runtime.json').write_text(encoded_runtime, encoding='ascii')
     command = [
         str(compiler),
         "/Qp",
@@ -117,6 +122,12 @@ def build(payload: Path, output: Path, assets: Path, sdk: Path | None) -> Path:
     digest = sha256(installer)
     (output / (SETUP_NAME + ".sha256")).write_text(digest + "  " + SETUP_NAME + "\n", encoding="ascii")
     print(f"{installer}: SHA256 {digest}", flush=True)
+    subprocess.run(command[:-1] + ['/DCompactSetup=1', '/DPatchFingerprint=' + runtime['fingerprint'], command[-1]], check=True)
+    compact = output / UPDATE_NAME
+    compact_digest = sha256(compact)
+    (output / (UPDATE_NAME + '.sha256')).write_text(compact_digest + '  ' + UPDATE_NAME + '\n', encoding='ascii')
+    (output / 'Zen-Bridge-runtime.json').write_text(encoded_runtime, encoding='ascii')
+    print(f'{compact}: {compact.stat().st_size} bytes, SHA256 {compact_digest}', flush=True)
     return installer
 
 

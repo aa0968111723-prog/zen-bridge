@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "aa0968111723-prog/zen-bridge"
 SETUP_NAME = "Zen-Bridge-Setup.exe"
 SHA_NAME = "Zen-Bridge-Setup.exe.sha256"
+UPDATE_NAME = "Zen-Bridge-Update.exe"
+RUNTIME_NAME = "Zen-Bridge-runtime.json"
 MAX_BYTES = 2 * 1024 * 1024 * 1024
 ALLOWED_HOSTS = {
     "github.com",
@@ -73,7 +75,7 @@ def plan(release: dict, current: str) -> dict:
     assets = {}
     for item in release.get("assets") or []:
         name = item.get("name")
-        if name in {SETUP_NAME, SHA_NAME}:
+        if name in {SETUP_NAME, SHA_NAME, UPDATE_NAME, UPDATE_NAME + '.sha256', RUNTIME_NAME}:
             assets[name] = item
     if SETUP_NAME not in assets or SHA_NAME not in assets:
         return {"status": "unavailable", "message": "已有較新版本，但正式安裝檔尚未發布。請稍後再試。"}
@@ -87,13 +89,42 @@ def plan(release: dict, current: str) -> dict:
     size = int(setup.get("size") or 0)
     if size <= 0 or size > MAX_BYTES:
         raise ValueError("安裝檔大小異常")
-    return {
+    chosen = {
         "status": "update",
         "version": tag.lstrip("v"),
         "bytes": size,
         "setup_url": setup["browser_download_url"],
         "sha_url": digest["browser_download_url"],
+        "mode": "full",
     }
+    if all(name in assets for name in (UPDATE_NAME, UPDATE_NAME + '.sha256', RUNTIME_NAME)):
+        for name in (UPDATE_NAME, UPDATE_NAME + '.sha256', RUNTIME_NAME):
+            item = assets[name]
+            assert_https(item.get('browser_download_url') or '')
+            if item['browser_download_url'] != prefix + name:
+                raise ValueError('小型更新檔不屬於此專案的正式版本')
+        size = int(assets[UPDATE_NAME].get('size') or 0)
+        if not 0 < size < MAX_BYTES:
+            raise ValueError('小型更新檔大小異常')
+        chosen['compact'] = {'setup_url': assets[UPDATE_NAME]['browser_download_url'],
+            'sha_url': assets[UPDATE_NAME + '.sha256']['browser_download_url'],
+            'runtime_url': assets[RUNTIME_NAME]['browser_download_url'], 'bytes': size}
+    return chosen
+
+
+def select_compatible(chosen: dict, root: Path, verify=True) -> dict:
+    compact = chosen.get('compact')
+    if chosen.get('status') != 'update' or not compact:
+        return chosen
+    from scripts.update_runtime import compatible, probably_compatible, valid_descriptor
+    try:
+        descriptor = json.loads(fetch_text(compact['runtime_url'], limit=64 * 1024))
+        ready = valid_descriptor(descriptor) and (compatible(root, descriptor) if verify else probably_compatible(root, descriptor))
+        if ready:
+            return {**chosen, **compact, 'mode': 'compact', 'source_name': UPDATE_NAME}
+    except (OSError, ValueError, TypeError):
+        pass
+    return chosen
 
 
 def opener():
@@ -129,7 +160,7 @@ def stream_verified(url: str, dest: Path, digest: str, limit: int = MAX_BYTES, u
     try:
         with open_url(request, timeout=60) as response, partial.open("wb") as handle:
             while True:
-                block = response.read(1024 * 1024)
+                block = response.read(64 * 1024)
                 if not block:
                     break
                 total += len(block)
@@ -150,7 +181,7 @@ def download_update(chosen: dict) -> dict:
     if chosen.get("status") != "update":
         return {key: chosen[key] for key in ("status", "version", "message") if key in chosen}
     sidecar = fetch_text(chosen["sha_url"])
-    digest = parse_sha256_sidecar(sidecar)
+    digest = parse_sha256_sidecar(sidecar, chosen.get('source_name', SETUP_NAME))
     destination = Path(tempfile.mkdtemp(prefix='BreezeUpdate-')) / SETUP_NAME
     stream_verified(chosen["setup_url"], destination, digest, limit=int(chosen["bytes"]))
     (destination.parent / 'breeze-update.json').write_text(json.dumps({
@@ -203,10 +234,10 @@ def fetch_text(url: str, limit: int = 4096) -> str:
 def run(check: bool, download: bool, root: Path) -> dict:
     os.environ.pop("SSLKEYLOGFILE", None)
     current = (root / "VERSION").read_text(encoding="utf-8").strip()
-    chosen = plan(fetch_release(), current)
+    chosen = select_compatible(plan(fetch_release(), current), root, verify=download)
     if download:
         return download_update(chosen)
-    public = {key: chosen[key] for key in ("status", "version", "message", "bytes") if key in chosen}
+    public = {key: chosen[key] for key in ("status", "version", "message", "bytes", "mode") if key in chosen}
     return public
 
 

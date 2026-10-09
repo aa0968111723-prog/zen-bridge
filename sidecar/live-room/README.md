@@ -57,3 +57,9 @@ Windows workflow 增加 Python 3.11／3.12、錄音與觀眾端測試，以及�
 在主持機本機（才能拿到 loopback 權杖）對已啟動的服務執行 `scripts/device_check.py`。它不會印出權杖。`watch` 每隔數秒把佇列深度、拒絕、缺段與記憶體寫進 CSV／JSON；`export` 下載該房的 JSON／SRT，並對編號、時間格式、單調、重疊、結束晚於開始、seq 是否重複、缺號各印 PASS／FAIL；`listen` 以聽眾身份連上 `/ws/listen`，記錄每則字幕的到達時間。沒有安裝 `websockets` 時，`listen` 會說明並略過，不影響另外兩個指令。
 
 本版未包含前次提出的全部 10 個追加面向；那些是後續功能工作包。
+
+## 小型程式更新
+
+從 v0.4.3 起，App 的「檢查更新」先比對執行環境指紋，下載前再核對實際模型、工具／DLL 的 SHA256、Python 套件版本與原生 binding。相容時使用 `Zen-Bridge-Update.exe`，保留現有 Python、tools、model、設定與資料；不相容時使用完整 Setup。初次安裝使用 `Zen-Bridge-Setup.exe`。已裝 0.4.0–0.4.2 的主持機可直接從正式 Release 下載小型更新包；安裝器仍會先核對相容性。
+
+維護更新相容性 gate 時，若判定契約改变，請提升 `scripts/update_runtime.py` 的 GATE_VERSION；發行時保留完整 Setup、小型 Update、各自 SHA256 和 runtime descriptor 五個資產。
