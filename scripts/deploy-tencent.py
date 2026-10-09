@@ -114,8 +114,7 @@ def apply(revision):
         candidates=[p for p in current if not p['metadata'].get('deletionTimestamp') and p['status']['phase']=='Running' and p['metadata'].get('annotations',{}).get('zen.bridge/revision')==revision]
         if not candidates:
             raise RuntimeError('Updated application pod missing')
-        probe='fetch("http://127.0.0.1:"+(process.env.PORT||3000)+"/api/dictionaries",{signal:AbortSignal.timeout(10000)}).then(async r=>{const b=await r.json();process.exit(r.ok&&Array.isArray(b.sources)?0:1)}).catch(()=>process.exit(1))'
-        kubectl('-n',NAMESPACE,'exec',candidates[0]['metadata']['name'],'--','node','-e',probe)
+        kubectl('-n',NAMESPACE,'exec',candidates[0]['metadata']['name'],'--','node','/zen/scripts/application-readiness.mjs')
     except (subprocess.CalledProcessError,RuntimeError):
         kubectl('-n',NAMESPACE,'patch','deployment',SERVICE,'--type=merge','-p',json.dumps({'spec':previous['spec']}))
         raise RuntimeError('Readiness failed; previous service configuration restored')

@@ -27,7 +27,7 @@ for mode in ('rollout','database'):
             if 'patch' in args and 'deployment' in args: patches.append(json.loads(args[-1]))
             if 'get' in args and 'deployment' in args: return json.dumps(previous).encode()
             if 'get' in args and 'pods' in args: return json.dumps({'items': [{'metadata': {'name': 'pod', 'annotations': {'zen.bridge/revision': revision}}, 'status': {'phase': 'Running'}}]}).encode()
-            if 'exec' in args and 'fetch(' in args[-1]: raise subprocess.CalledProcessError(1, args)
+            if 'exec' in args and args[-1]=='/zen/scripts/application-readiness.mjs': raise subprocess.CalledProcessError(1, args)
             if 'exec' in args: return deploy.hashlib.sha256(b'lock\n').hexdigest().encode()
             if 'get' in args and 'ingress' in args: return json.dumps({'metadata': {'name': 'ingress'}, 'spec': {'rules': [{'http': {'paths': []}}]}}).encode()
             return b''
