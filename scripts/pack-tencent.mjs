@@ -1,8 +1,10 @@
 import { mkdir, cp, writeFile, readdir, rm } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import {assertTencentBuild} from './tencent-build.mjs';
 const root=process.cwd();
 const output=resolve(process.argv[2]||'work/tencent-release');
+await assertTencentBuild();
 if(output===root||root.startsWith(output+'/'))throw new Error('Use a separate artifact directory');
 await mkdir(output,{recursive:true});
 for(const name of ['dist','public','drizzle-pg','scripts','lib','app','components','db','.openai','package.json','pnpm-lock.yaml','vite.config.ts','next.config.ts','tsconfig.json'])await cp(resolve(name),join(output,name),{recursive:true});
