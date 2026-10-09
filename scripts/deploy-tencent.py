@@ -1,5 +1,6 @@
 """Host-side release apply. Invoked by a restricted deployment SSH key."""
 import json
+import copy
 import hashlib
 import os
 import re
@@ -57,7 +58,7 @@ def apply(revision):
     token = token_path.read_text().strip()
     kubectl('apply','-f','-', value={'apiVersion':'v1','kind':'Secret','metadata':{'name':'zen-breeze-pairing','namespace':NAMESPACE},
         'type':'Opaque','stringData':{'token':token}})
-    template = previous['spec']['template']
+    template = copy.deepcopy(previous['spec']['template'])
     container = next(c for c in template['spec']['containers'] if c['name']=='zen-bridge')
     env = {item['name']:item for item in container.get('env',[])}
     for name,value in {'PUBLIC_BASE_URL':'https://vexlark.co','SPEECH_PROVIDER':'breeze',

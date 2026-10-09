@@ -23,6 +23,18 @@ jobs:
       - run: node tests/runtime.mjs
       - run: node tests/capture.mjs
       - run: node tests/breeze-gateway.mjs
+      - run: node tests/zen-front.mjs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python tests/deploy_rollback.py
+      - name: Test desktop runtime
+        working-directory: sidecar/live-room
+        run: |
+          python -m pip install -r requirements-lock.txt -r requirements-dev.txt
+          python -m pytest
+          node tests/recorder_machine.test.mjs
+          node tests/room_client.test.mjs
       - run: pnpm build
         env:
           DEPLOY_TARGET: zeabur

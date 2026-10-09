@@ -37,7 +37,9 @@ def build(root=ROOT, output=None):
             info = zipfile.ZipInfo(path.relative_to(root).as_posix(), (2026, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             zipped.writestr(info, path.read_bytes())
-        zipped.writestr('package-manifest.json', json.dumps(manifest, sort_keys=True))
+        info = zipfile.ZipInfo('package-manifest.json', (2026, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_DEFLATED
+        zipped.writestr(info, json.dumps(manifest, sort_keys=True))
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     (output / (archive.name + '.sha256')).write_text(digest + '  ' + archive.name + '\n', encoding='ascii')
     print(f'{archive.name}: version {version}, SHA256 {digest}')

@@ -8,6 +8,7 @@ await mkdir(output,{recursive:true});
 for(const name of ['dist','public','drizzle-pg','scripts','lib','app','components','db','.openai','package.json','pnpm-lock.yaml','vite.config.ts','next.config.ts','tsconfig.json'])await cp(resolve(name),join(output,name),{recursive:true});
 await mkdir(join(output,'sidecar'),{recursive:true});
 await cp('sidecar/breeze-gateway.mjs',join(output,'sidecar/breeze-gateway.mjs'));
+await cp('sidecar/zen-front.mjs',join(output,'sidecar/zen-front.mjs'));
 const revision=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 await writeFile(join(output,'REVISION'),revision+'\n');
 console.log('Tencent runtime prepared:',output);

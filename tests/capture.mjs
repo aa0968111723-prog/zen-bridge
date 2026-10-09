@@ -29,3 +29,14 @@ pause=false;for(let i=0;i<4;i++)node.onaudioprocess(frame);
 assert.equal(emitted.length,1);assert.ok(emitted[0]>=1,'waiting time must remain on the caption timeline');
 backpressure.stop();
 console.log('PASS: 48kHz to PCM16/16kHz conversion and bounded pause timeline');
+
+let partialPause=false,partial=[];
+const partialCapture=await sandbox.exports.capture((audio,offset)=>partial.push({audio,offset}),()=>{},{windowSeconds:1,isPaused:()=>partialPause});
+node.onaudioprocess(frame);
+partialPause=true;node.onaudioprocess(frame);
+partialPause=false;for(let i=0;i<4;i++)node.onaudioprocess(frame);
+assert.equal(partial.length,1);
+assert.equal(partial[0].offset,8192/16000,'resume starts after dropped partial and paused audio');
+assert.equal((await partial[0].audio.arrayBuffer()).byteLength,44+16384*2,'no pre-pause audio is joined');
+partialCapture.stop();
+console.log('PASS: partial audio is dropped across pause without shifting resumed captions');
