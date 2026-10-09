@@ -16,6 +16,8 @@ DIRECTORIES = ('app', 'scripts', 'docs', 'desktop')
 
 def source_files(root=ROOT):
     files = [root / name for name in FILES]
+    # Ship Python diagnostics without bundling the downloaded tool binaries.
+    files.extend((root / 'tools').glob('*.py'))
     for directory in DIRECTORIES:
         files.extend(p for p in (root / directory).rglob('*')
                      if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc'

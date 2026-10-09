@@ -25,20 +25,181 @@ def should_join(prev: str, nxt: str, gap_ms: int) -> bool:
     return True
 
 
+def utf8_text(value: str) -> str:
+    """Drop characters that cannot be encoded as UTF-8. Valid text is unchanged."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        pass
+    else:
+        return value
+    kept = []
+    for char in value:
+        try:
+            char.encode("utf-8")
+        except UnicodeEncodeError:
+            continue
+        kept.append(char)
+    return "".join(kept)
+
+
+def _utf8_ok(value: str) -> bool:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _scrub_value(value):
+    if isinstance(value, str):
+        return utf8_text(value)
+    if isinstance(value, list):
+        return [_scrub_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _scrub_value(item) if isinstance(item, (str, list, dict)) else item
+            for key, item in value.items()
+        }
+    return value
+
+
+def scrub_caption(event: dict) -> dict:
+    """Keep a caption publishable. Bad English is a failed translation; Chinese stays.
+
+    A lone surrogate cannot be written to SQLite or sent on a WebSocket. Dropping it
+    here stops one model reply from closing every new listener.
+    """
+    if not isinstance(event, dict):
+        return {}
+    en = event.get("en")
+    en_bad = isinstance(en, str) and not _utf8_ok(en)
+    out = _scrub_value(event)
+    if not isinstance(out, dict) or not en_bad:
+        return out if isinstance(out, dict) else {}
+    out["en"] = ""
+    if str(out.get("type") or "") in {"captions_cleared", "caption_deleted"}:
+        return out
+    if str(out.get("status") or "") in {"", "ready", "ok"}:
+        out["status"] = "translate_failed"
+    if str(out.get("translate_status") or "") in {"", "ok"}:
+        out["translate_status"] = "bad_response"
+    if not str(out.get("error") or "").strip():
+        out["error"] = "英譯不是純英文，中文仍保留"
+    return out
+
+
+def _split_glossary(text: str) -> tuple[str, str] | None:
+    # A line that already has "=" keeps the old split, including a later fullwidth equals.
+    if "=" in text:
+        left, right = text.split("=", 1)
+        return left, right
+    index = text.find("＝")
+    if index < 0:
+        return None
+    return text[:index], text[index + 1 :]
+
+
 def parse_glossary(raw: str, limit: int = 40) -> list[dict]:
+    """Legacy host textarea. `zh=en` results stay the same, including the silent cap of 40.
+
+    Also accepts a fullwidth equals, and `標準詞|別名1|別名2=English`.
+    Strict rejection lives on the room glossary API, not here.
+    """
     rows = []
     for line in (raw or "").splitlines():
         text = line.strip()
-        if not text or text.startswith("#") or "=" not in text:
+        if not text or text.startswith("#"):
             continue
-        zh, en = text.split("=", 1)
-        zh = zh.strip()[:40]
-        en = en.strip()[:80]
+        split = _split_glossary(text)
+        if split is None:
+            continue
+        left, right = split
+        en = right.strip()[:80]
+        if "|" in left:
+            parts = [part.strip() for part in left.split("|")]
+            zh = parts[0].strip()[:40]
+            aliases = [part for part in parts[1:] if part]
+        else:
+            zh = left.strip()[:40]
+            aliases = []
         if zh and en:
-            rows.append({"zh": zh, "en": en})
+            row = {"zh": zh, "en": en}
+            if aliases:
+                row["aliases"] = aliases
+            rows.append(row)
         if len(rows) >= limit:
             break
     return rows
+
+
+# These separators are line breaks for str.splitlines but must not wipe a glossary.
+_LEGACY_BREAKS = ("\x85", "\u2028", "\u2029")
+
+
+def strict_legacy_rows(raw: str, limit: int = 40, max_en: int = 80) -> tuple[list[dict], list[dict]]:
+    """Parse a host textarea without dropping rows or cutting English short.
+
+    A non-blank line that is not `zh=en` is rejected. Any rejected entry means the
+    caller must not save. Blank lines and `#` comments are ignored, but they still
+    count toward the line number on each accepted row. An empty alias fragment is
+    rejected, same as PUT. An empty box is rejected so it cannot clear the room.
+    `parse_glossary` still truncates for old callers.
+    """
+    if not isinstance(raw, str):
+        return [], [{"line": 0, "reason": "text 必須是文字"}]
+    for mark in _LEGACY_BREAKS:
+        if mark in raw:
+            return [], [{"line": 0, "reason": "術語含有不可見的換行，沒有寫入"}]
+    rows: list[dict] = []
+    rejected: list[dict] = []
+    for line_no, line in enumerate(raw.split("\n"), start=1):
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        split = _split_glossary(text)
+        if split is None:
+            rejected.append({"line": line_no, "reason": "缺少 = 或 ＝"})
+            continue
+        left, right = split
+        en = right.strip()
+        line_bad = False
+        if "|" in left:
+            parts = [part.strip() for part in left.split("|")]
+            zh = parts[0].strip()
+            aliases = []
+            for part in parts[1:]:
+                # Whitespace-only, including a fullwidth space, is an empty alias.
+                # A zero-width character is not stripped; validation rejects it later.
+                if not part:
+                    reason = "別名是空的，不能當別名"
+                    if not rejected or rejected[-1].get("line") != line_no or rejected[-1].get("reason") != reason:
+                        rejected.append({"line": line_no, "reason": reason})
+                    line_bad = True
+                    continue
+                aliases.append(part)
+        else:
+            zh = left.strip()
+            aliases = []
+        if not zh or not en:
+            rejected.append({"line": line_no, "reason": "中文或英文是空的"})
+            line_bad = True
+        if line_bad:
+            continue
+        if len(rows) >= limit:
+            return [], [{"line": line_no, "reason": f"術語超過 {limit} 條"}]
+        if len(en) > max_en:
+            rejected.append({"line": line_no, "reason": f"英文超過 {max_en} 字"})
+            continue
+        row = {"zh": zh, "en": en, "line": line_no}
+        if aliases:
+            row["aliases"] = aliases
+        rows.append(row)
+    if rejected:
+        return [], rejected
+    if not rows:
+        return [], [{"line": 0, "reason": "沒有有效的術語，不會清空這個房間的詞表"}]
+    return rows, []
 
 
 # A single session's t0/t1 stay relative to that session. Export places later sessions

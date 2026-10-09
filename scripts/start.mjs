@@ -5,6 +5,13 @@ import { initializeNodeRuntime } from '../lib/env.ts';
 const target = initializeNodeRuntime(process.argv.includes('--zeabur') ? 'zeabur' : undefined).DEPLOY_TARGET;
 const extra = process.argv.slice(2).filter(arg => arg !== '--zeabur');
 if (target === 'zeabur') {
+  if (process.env.DATABASE_URL) {
+    const { importDictionaries } = await import('./import-dictionaries.mjs');
+    const { bootstrapDictionaries } = await import('./dictionary-bootstrap.mjs');
+    const imports=new AbortController();
+    for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>imports.abort());
+    void bootstrapDictionaries(importDictionaries,{signal:imports.signal}).then(r => console.log('Dictionary bootstrap:', JSON.stringify(r))).catch(() => console.error('Dictionary bootstrap failed; existing data retained'));
+  }
   const port = Number(process.env.PORT || 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65534) throw new Error('PORT 必須為有效的連接埠。');
   let uiPort = port;

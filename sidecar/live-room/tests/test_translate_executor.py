@@ -6,7 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.translate import TranslateResult, Translator
-from tests.test_pipeline_repair import app_for, push, settings_with, stop, token_of
+from tests.test_pipeline_repair import app_for, auth, push, settings_with, stop, token_of
 
 
 def test_cancel_event_stops_backoff_without_sleeping():
@@ -84,6 +84,8 @@ async def test_translate_loop_survives_translator_exception():
             assert first.status_code == 200
             assert first.json()["zh"] == "炸"
             assert first.json()["status"] == "translate_failed"
+            assert app.state.pipeline.translate_errors == 1
+            assert app.state.pipeline.translate_skipped == 0
             assert second.status_code == 200, second.text
             assert second.json()["zh"] == "好"
             assert second.json()["en"] == "EN 好"
@@ -112,6 +114,66 @@ async def test_translation_timeout_sets_cancel_and_keeps_chinese():
             assert body["en"] == ""
             assert body["status"] == "translate_failed"
             assert body["translate_status"] == "timeout"
+            assert app.state.pipeline.translate_timeouts == 1
+            assert app.state.pipeline.translate_skipped == 0
+            assert app.state.pipeline.translate_waiter_timeouts == 0
+    finally:
+        await stop(app)
+
+
+class _FastThenBlock(Translator):
+    def __init__(self):
+        super().__init__(enabled=True, key="k")
+        self.calls = 0
+
+    def translate(self, zh, glossary=None, context=None, deadline=None, cancel=None):
+        del glossary, context, deadline, cancel
+        self.calls += 1
+        return TranslateResult("EN " + zh, "ok")
+
+
+@pytest.mark.anyio
+async def test_waiter_timeout_is_counted_when_no_worker_finishes():
+    """The retranslate wait is not the worker timeout.
+
+    Workers are cancelled after the first line lands, and not restarted.
+    The retranslate then sits until its own wait expires. That publishes
+    waiter_timeout and must not increment the worker timeout counter.
+    """
+    translator = _FastThenBlock()
+    app = app_for(
+        translator=translator,
+        settings=settings_with(allow_testclient=True, translate_timeout_s=0.2, translate_workers=1),
+    )
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://127.0.0.1:8780") as client:
+            token = await token_of(app, client)
+            first = await asyncio.wait_for(push(client, token, "class", "s", 1, "先".encode()), 2)
+            assert first.status_code == 200, first.text
+            assert first.json()["en"] == "EN 先"
+            pipe = app.state.pipeline
+            for task in list(pipe._tasks):
+                task.cancel()
+            if pipe._tasks:
+                await asyncio.gather(*pipe._tasks, return_exceptions=True)
+            pipe._tasks.clear()
+            assert pipe._workers is True
+            again = await asyncio.wait_for(
+                client.post(
+                    "/api/segment/retranslate",
+                    json={"room_id": "class", "session_id": "s", "seq": 1},
+                    headers={**auth(token), "content-type": "application/json"},
+                ),
+                3,
+            )
+            assert again.status_code == 200, again.text
+            body = again.json()
+            assert body["zh"] == "先"
+            assert body["en"] == ""
+            assert body["translate_status"] == "waiter_timeout"
+            assert pipe.translate_waiter_timeouts == 1
+            assert pipe.translate_timeouts == 0
+            assert pipe.translate_skipped == 0
     finally:
         await stop(app)
 

@@ -128,3 +128,52 @@ def test_stream_publishes_only_after_checksum(tmp_path):
 
 def test_prerelease_is_not_installed():
     assert plan(release(prerelease=True), "0.3.0")["status"] == "unavailable"
+
+
+def compact_release():
+    from app.desktop_update import UPDATE_NAME, RUNTIME_NAME
+    body = release()
+    prefix = 'https://github.com/aa0968111723-prog/zen-bridge/releases/download/v0.4.0/'
+    body['assets'] += [{'name': name, 'browser_download_url': prefix + name, 'size': 100} for name in (UPDATE_NAME, UPDATE_NAME + '.sha256', RUNTIME_NAME)]
+    return body
+
+
+def test_compact_requires_matching_healthy_runtime(monkeypatch, tmp_path):
+    from app.desktop_update import select_compatible, UPDATE_NAME
+    chosen = plan(compact_release(), '0.3.0')
+    monkeypatch.setattr('app.desktop_update.fetch_text', lambda url, **kwargs: json.dumps(compact_descriptor()))
+    monkeypatch.setattr('scripts.update_runtime.compatible', lambda root, expected: False)
+    assert select_compatible(chosen, tmp_path)['mode'] == 'full'
+    monkeypatch.setattr('scripts.update_runtime.compatible', lambda root, expected: expected['fingerprint'] == 'a' * 64)
+    compact = select_compatible(chosen, tmp_path)
+    assert compact['mode'] == 'compact' and compact['source_name'] == UPDATE_NAME
+    assert compact['bytes'] == 100 and compact['setup_url'].endswith(UPDATE_NAME)
+
+
+def test_compact_metadata_cannot_point_outside_official_tag():
+    from app.desktop_update import RUNTIME_NAME
+    body = compact_release()
+    next(a for a in body['assets'] if a['name'] == RUNTIME_NAME)['browser_download_url'] = 'https://github.com/another/repo/releases/download/v0.4.0/' + RUNTIME_NAME
+    with pytest.raises(ValueError): plan(body, '0.3.0')
+
+
+@pytest.mark.parametrize('descriptor', [{'schema': 2, 'fingerprint': 'a' * 64}, {'schema': 1, 'fingerprint': None}, {}])
+def test_bad_compact_metadata_falls_back_to_full(monkeypatch, tmp_path, descriptor):
+    from app.desktop_update import select_compatible
+    monkeypatch.setattr('app.desktop_update.fetch_text', lambda url, **kwargs: json.dumps(descriptor))
+    assert select_compatible(plan(compact_release(), '0.3.0'), tmp_path)['mode'] == 'full'
+
+
+def compact_descriptor():
+    return {'schema': 1, 'gate_version': 1, 'fingerprint': 'a' * 64, 'tools': {name: {'size': 4, 'sha256': 'b' * 64} for name in ('ffmpeg.exe', 'whisper-cli.exe')}}
+
+
+def test_check_is_cheap_but_download_revalidates(monkeypatch, tmp_path):
+    from app.desktop_update import select_compatible
+    monkeypatch.setattr('app.desktop_update.fetch_text', lambda url, **kwargs: json.dumps(compact_descriptor()))
+    monkeypatch.setattr('scripts.update_runtime.probably_compatible', lambda root, value: True)
+    def deep(root, value): raise AssertionError('deep hashing should not happen on --check')
+    monkeypatch.setattr('scripts.update_runtime.compatible', deep)
+    assert select_compatible(plan(compact_release(), '0.3.0'), tmp_path, verify=False)['mode'] == 'compact'
+    monkeypatch.setattr('scripts.update_runtime.compatible', lambda root, value: False)
+    assert select_compatible(plan(compact_release(), '0.3.0'), tmp_path, verify=True)['mode'] == 'full'

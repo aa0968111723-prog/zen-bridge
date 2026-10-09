@@ -22,10 +22,12 @@ def test_release_excludes_configuration_models_and_captions(tmp_path):
         assert 'desktop/Launcher.cs' in zipped.namelist()
         assert 'desktop/setup.iss' in zipped.namelist()
         assert 'app/desktop_update.py' in zipped.namelist()
+        assert 'tools/rtf_check.py' in zipped.namelist()
+        assert not any(n.startswith('tools/') and n.endswith(('.exe','.dll')) for n in zipped.namelist())
         assert not any(n == '.env' or n.startswith(('.venv/', '.python/', 'models/', 'data/', '.git/')) for n in zipped.namelist())
     unpack(archive, tmp_path / 'unpacked')
 
-@pytest.mark.parametrize('path', ['../escape.py', 'app/../../escape.py', '.env', 'data/captions.sqlite3', 'app/evil\\name.py', 'app/evil:stream'])
+@pytest.mark.parametrize('path', ['../escape.py', 'app/../../escape.py', '.env', 'data/captions.sqlite3', 'app/evil\\name.py', 'app/evil:stream','tools/evil.exe','tools/sub/evil.py'])
 def test_update_rejects_paths_and_user_data(tmp_path, path):
     archive = build(ROOT, tmp_path)
     with zipfile.ZipFile(archive) as original:
@@ -51,6 +53,16 @@ def test_corrupt_package_rejected(tmp_path):
             zipped.writestr(name, data)
     with pytest.raises(ValueError, match='checksum'):
         unpack(archive, tmp_path / 'stage')
+
+def test_source_update_copies_diagnostics_and_preserves_binary_runtime(tmp_path):
+    root = copy_source(tmp_path / 'installed')
+    stage = copy_source(tmp_path / 'stage')
+    tool = root / 'tools' / 'ffmpeg.exe'
+    tool.write_bytes(b'preserved-runtime')
+    (root / 'tools' / 'rtf_check.py').write_text('old diagnostic')
+    replace_source(stage, root)
+    assert (root / 'tools' / 'rtf_check.py').read_bytes() == (stage / 'tools' / 'rtf_check.py').read_bytes()
+    assert tool.read_bytes() == b'preserved-runtime'
 
 def test_rollback_preserves_settings_and_captions_and_restores_model(tmp_path):
     root = copy_source(tmp_path / 'installed')

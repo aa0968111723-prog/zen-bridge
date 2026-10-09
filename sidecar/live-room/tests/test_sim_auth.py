@@ -31,10 +31,11 @@ async def test_every_host_route_requires_token():
     """B-h1. Reflect require_host. The count is part of the contract: a new host route must update it."""
     async with serving(asr=TextAsr(0), settings=sim_settings(translate=False)) as (app, client, token):
         routes = _host_routes(app)
-        assert len(routes) == 14
+        # GET and PUT /api/rooms/{room_id}/glossary are host routes. The count moves when one is added.
+        assert len(routes) == 16
         for route in routes:
             method = sorted(route.methods - {"HEAD", "OPTIONS"})[0]
-            path = route.path
+            path = route.path.replace("{room_id}", "class")
             params = {"room_id": "class", "session_id": "s", "seq": "1", "kind": "txt"}
             missing = await client.request(method, path, params=params)
             assert missing.status_code == 401, (method, path, missing.status_code, missing.text)

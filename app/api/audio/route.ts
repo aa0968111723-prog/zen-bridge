@@ -51,7 +51,7 @@ export async function POST(request: Request) {
       const currentRole = auto ? roles[detected?.id ?? ''] ?? detected?.role ?? '待確認' : role;
       const notes = [part.note, terms.note].filter(Boolean);
       if (source && !translation && textTranslationProvider(env)) {
-        try { translation = await translateText(source, session, detected, currentRole, direction); }
+        try { translation = await translateText(source, session, detected, currentRole, direction,!!env.BREEZE_AGENT_TOKEN&&breezeHostAllowed(request,env)); }
         catch { notes.push(textTranslationProvider(env) === 'hermes' ? 'Hermes 補譯失敗，原文已保存；請檢查 Hermes 連線與模型設定。' : '補譯失敗，原文已保存；請檢查 OPENAI_API_KEY 與 OPENAI_TRANSLATION_MODEL。'); }
       }
       ids.push(await saveSegment({ sessionId, personId: detected?.id ?? null,

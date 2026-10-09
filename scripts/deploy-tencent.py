@@ -5,6 +5,7 @@ import hashlib
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -14,6 +15,31 @@ from pathlib import Path
 BASE = Path('/opt/zen-bridge')
 NAMESPACE = 'environment-6ab4cf1136d2a6cac4cddef5'
 SERVICE = 'service-6abe121cc3a8364ca8506194'
+
+def prune_release_artifacts(keep):
+    """Only source artifacts with matching managed revision markers are removed."""
+    removed={'releases':0,'archives':0}
+    if (BASE/'releases').is_symlink() or (BASE/'incoming').is_symlink():return removed
+    releases=(BASE/'releases').resolve()
+    if releases.parent!=BASE.resolve():return removed
+    managed=set()
+    for path in releases.iterdir():
+        if path.name in keep or not re.fullmatch('[a-f0-9]{40}',path.name) or path.is_symlink() or not path.is_dir():continue
+        if path.resolve().parent!=releases:continue
+        try:
+            if (path/'REVISION').read_text().strip()!=path.name:continue
+            managed.add(path.name)
+            shutil.rmtree(path);removed['releases']+=1
+        except OSError:continue
+    incoming=(BASE/'incoming').resolve()
+    if incoming.parent!=BASE.resolve():return removed
+    for path in incoming.glob('*.tgz'):
+        revision=path.name[:-4]
+        if revision in keep or revision not in managed or not re.fullmatch('[a-f0-9]{40}',revision) or path.is_symlink() or not path.is_file():continue
+        if path.resolve().parent!=incoming:continue
+        try:path.unlink();removed['archives']+=1
+        except OSError:continue
+    return removed
 
 def kubectl(*args, value=None):
     return subprocess.run(['k3s','kubectl',*args], input=json.dumps(value).encode() if value is not None else None,
@@ -84,10 +110,18 @@ def apply(revision):
         {'op':'replace','path':'/spec/rules/0/http/paths','value':paths}]))
     try:
         kubectl('-n',NAMESPACE,'rollout','status','deployment/'+SERVICE,'--timeout=240s')
-    except subprocess.CalledProcessError:
+        current=json.loads(kubectl('-n',NAMESPACE,'get','pods','-l','zeabur_service_id='+SERVICE.removeprefix('service-'),'-o','json'))['items']
+        candidates=[p for p in current if not p['metadata'].get('deletionTimestamp') and p['status']['phase']=='Running' and p['metadata'].get('annotations',{}).get('zen.bridge/revision')==revision]
+        if not candidates:
+            raise RuntimeError('Updated application pod missing')
+        probe='fetch("http://127.0.0.1:"+(process.env.PORT||3000)+"/api/dictionaries",{signal:AbortSignal.timeout(10000)}).then(async r=>{const b=await r.json();process.exit(r.ok&&Array.isArray(b.sources)?0:1)}).catch(()=>process.exit(1))'
+        kubectl('-n',NAMESPACE,'exec',candidates[0]['metadata']['name'],'--','node','-e',probe)
+    except (subprocess.CalledProcessError,RuntimeError):
         kubectl('-n',NAMESPACE,'patch','deployment',SERVICE,'--type=merge','-p',json.dumps({'spec':previous['spec']}))
         raise RuntimeError('Readiness failed; previous service configuration restored')
-    print(json.dumps({'revision':revision,'url':'https://vexlark.co','backup':str(backup),'status':'ready'}))
+    prior=previous['spec']['template'].get('metadata',{}).get('annotations',{}).get('zen.bridge/revision')
+    pruned=prune_release_artifacts({revision,prior})
+    print(json.dumps({'revision':revision,'url':'https://vexlark.co','backup':str(backup),'status':'ready','pruned':pruned}))
 
 if __name__=='__main__':
     apply(sys.argv[1])

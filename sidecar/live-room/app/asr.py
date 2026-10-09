@@ -30,6 +30,8 @@ class AsrResult:
     text: str = ""
     error: str = ""
     loaded_once: bool = False
+    # Resident heard nothing. Empty, not an error, and not a speed sample.
+    blank: bool = False
 
 
 class CliAsr:
@@ -276,7 +278,7 @@ class ResidentAsr:
             return AsrResult(ok=False, error=self.last_error or "常駐辨識失敗", loaded_once=self.loads == 1)
         cleaned = str(text or "").strip()
         if not cleaned:
-            return AsrResult(ok=False, error="常駐辨識沒有回傳文字", loaded_once=self.loads == 1)
+            return AsrResult(ok=True, text="", blank=True, loaded_once=self.loads == 1)
         return AsrResult(ok=True, text=cleaned, loaded_once=self.loads == 1)
 
     def _http_inference(self, wav: Path, prompt: str) -> str:

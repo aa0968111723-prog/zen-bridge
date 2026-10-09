@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "sources": [
+    {
+      "id": "cc-cedict",
+      "title": "CC-CEDICT 社群漢英詞典",
+      "file": "cc-cedict.ndjson.gz",
+      "entry_count": 125244,
+      "input_sha256": "dd2307775fd21f5d350e6cb0e6a946bfe2eaedd79bb9ce524a67e7fccddf6a8f",
+      "data_sha256": "802464902e990f3960b059571b9a8dd3ac47f531b061dd229fea083d40880d7d",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+      "source_url": "https://www.mdbg.net/chinese/dictionary?page=cc-cedict",
+      "snapshot_at": "2026-10-10"
+    },
+    {
+      "id": "ecdict",
+      "title": "ECDICT 英漢詞典",
+      "file": "ecdict.ndjson.gz",
+      "entry_count": 770585,
+      "input_sha256": "1a6947e04785db63613a92e14903cdae7954f7e84860b10e68e5c7cbb3f9c3cf",
+      "data_sha256": "ac1f62307672fa351ae81d0891566ec51e89c70f730d05331a5ca1f6a615da41",
+      "license": "MIT",
+      "license_url": "https://github.com/skywind3000/ECDICT/blob/bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b/LICENSE",
+      "source_url": "https://github.com/skywind3000/ECDICT/tree/bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b",
+      "snapshot_at": "2026-10-10"
+    }
+  ]
+}

@@ -1,8 +1,21 @@
 import http from 'node:http';
+import {timingSafeEqual} from 'node:crypto';
 
 // The hosting proxy exposes one application port; route agent upgrades here.
-export function createZenFront(gateway, uiPort) {
+export function createZenFront(gateway, uiPort, {hostToken=process.env.BREEZE_AGENT_TOKEN||''}={}) {
   const server = http.createServer((req, res) => {
+    let path;
+    try {path=decodeURIComponent(new URL(req.url,'http://localhost').pathname).replace(/\/+/g,'/').replace(/\/$/,'');}
+    catch {res.writeHead(400);res.end('Invalid request path');return;}
+    const publicRead=req.method==='GET'&&(path==='/api/dictionaries'||/^\/api\/room\/[a-f0-9-]{36}$/i.test(path));
+    const privateRoute=path==='/mcp'||path.startsWith('/api/')&&!publicRead;
+    if(hostToken&&privateRoute){
+      const supplied=Buffer.from(typeof req.headers['x-zen-host']==='string'?req.headers['x-zen-host']:''),expected=Buffer.from(hostToken);
+      if(supplied.length!==expected.length||!timingSafeEqual(supplied,expected)){
+        res.writeHead(403,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});
+        res.end(JSON.stringify({error:'請使用已配對的 Zen Bridge 主持 App。'}));return;
+      }
+    }
     const upstream = http.request({ hostname: '127.0.0.1', port: uiPort,
       path: req.url, method: req.method, headers: req.headers }, reply => {
       res.writeHead(reply.statusCode, reply.headers); reply.pipe(res);

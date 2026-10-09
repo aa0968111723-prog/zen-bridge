@@ -6,35 +6,39 @@ import time
 from typing import Awaitable, Callable
 
 from app.aio import cancellation_pending, wait_bounded
+from app.textutil import scrub_caption
 
 # Stored captions, host export, and host HTTP bodies. zh_raw is the recognition
 # text from before a host edit, and any partial text left when recognition failed.
+# term_flags is the host-only locked-term check.
 _PASS = (
     "type", "id", "room_id", "session_id", "session_ord", "seq", "version",
     "zh", "en", "status", "translate_status", "error", "t0_ms", "t1_ms", "zh_raw",
-    "epoch",
+    "term_flags", "epoch",
 )
 # Audience sockets. Same caption fields, without zh_raw. A host token or listen
 # key is not a caption field and must not be added here.
 _LISTENER_PASS = (
     "type", "id", "room_id", "session_id", "session_ord", "seq", "version",
     "zh", "en", "status", "translate_status", "error", "t0_ms", "t1_ms",
-    "epoch", "cursor",
+    "epoch", "cursor", "ids",
 )
 _AUDIENCE_DENY = frozenset({
-    "zh_raw", "host_token", "token", "listen_key", "listen_url", "authorization",
+    "zh_raw", "term_flags", "host_token", "token", "listen_key", "listen_url", "authorization",
 })
-_CONTROL = {"caption_deleted", "captions_cleared"}
+_CONTROL = {"caption_deleted", "captions_cleared", "captions_expired"}
 
 
 def for_listener(event: dict) -> dict:
     """Copy one caption onto the audience whitelist.
 
     Storage and host export keep zh_raw. This is the view a listener socket may see.
+    Text that cannot be UTF-8 is dropped here so hello and live frames can be sent.
     """
     if not isinstance(event, dict):
         return {}
-    return {key: event[key] for key in _LISTENER_PASS if key in event and key not in _AUDIENCE_DENY}
+    safe = scrub_caption(event)
+    return {key: safe[key] for key in _LISTENER_PASS if key in safe and key not in _AUDIENCE_DENY}
 
 
 class RoomBus:
@@ -71,6 +75,7 @@ class RoomBus:
         return nxt
 
     def publish(self, event: dict) -> dict | None:
+        event = scrub_caption(event)
         room = str(event.get("room_id") or "")
         raw_updated = event.get("updated_at")
         snap = {key: event.get(key) for key in _PASS}
@@ -102,6 +107,11 @@ class RoomBus:
             return dict(stored)
         if kind == "caption_deleted":
             self._remove_id(room, seg_id)
+            return dict(stored)
+        if kind == "captions_expired":
+            # Tell listeners which lines aged out. Do not tombstone them: a later
+            # upload of the same seq is a new line, not a replay of a deleted one.
+            stored["ids"] = [str(item) for item in (event.get("ids") or []) if item]
             return dict(stored)
         self._remember_state(room, stored, raw_updated)
         rows = self.by_room.setdefault(room, [])
@@ -218,7 +228,10 @@ class RoomBus:
         removed: list[tuple[str, str]] = []
         for room, stamps in list(self._caption_at.items()):
             stale = [seg_id for seg_id, stamp in list(stamps.items()) if float(stamp) < cutoff]
+            versions = self._ver.get(room)
             for seg_id in stale:
+                if versions is not None:
+                    versions.pop(seg_id, None)
                 self._remove_id(room, seg_id)
                 removed.append((room, seg_id))
             if not self._state.get(room):

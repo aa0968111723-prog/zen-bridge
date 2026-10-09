@@ -24,10 +24,14 @@ jobs:
       - run: node tests/capture.mjs
       - run: node tests/breeze-gateway.mjs
       - run: node tests/zen-front.mjs
+      - run: node tests/tencent-build.mjs
+      - run: node tests/dictionary-bootstrap.mjs
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: python tests/deploy_rollback.py
+      - run: python tests/deploy_artifacts.py
+      - run: python -m unittest discover -s tests -p dictionary_dataset.py
       - name: Test desktop runtime
         working-directory: sidecar/live-room
         run: |

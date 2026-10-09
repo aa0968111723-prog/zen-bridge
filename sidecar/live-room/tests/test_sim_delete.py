@@ -145,8 +145,14 @@ async def test_listener_backfills_after_delete():
         try:
             host = VirtualHost(client, token, "class", "old")
             await host.run(30, pace=False)
-            assert await listener.wait_for(lambda: any(int(m.get("cursor") or 0) >= 30 for m in listener.messages), 10)
-            saved = max(int(m.get("cursor") or 0) for m in listener.messages)
+            # Snapshot after the listener has caught the bus cursor. Taking the
+            # max of messages that have arrived so far can land mid-batch.
+            target = app.state.bus.latest_cursor("class")
+            assert await listener.wait_for(
+                lambda: any(int(m.get("cursor") or 0) >= target for m in listener.messages),
+                10,
+            )
+            saved = target
             await _delete(client, token, "class")
             assert await listener.wait_for(
                 lambda: any(m.get("type") == "captions_cleared" for m in listener.messages),

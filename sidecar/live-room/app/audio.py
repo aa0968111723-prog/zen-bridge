@@ -93,14 +93,27 @@ def _wav_pcm_span(wav: Path) -> tuple[int, int, int] | None:
                 return None
 
 
-def wav_duration_seconds(wav: Path) -> float | None:
+def riff_duration_seconds(wav: Path) -> float | None:
+    """Seconds from a RIFF/WAVE header, or None when this file is not WAVE.
+
+    Callers that already decoded a slice should prefer this over a size guess.
+    """
     if not wav.exists():
         return None
     span = _wav_pcm_span(wav)
-    if span is not None:
-        offset, size, bps = span
-        available = max(0, wav.stat().st_size - offset)
-        return min(max(0, size), available) / bps
+    if span is None:
+        return None
+    offset, size, bps = span
+    available = max(0, wav.stat().st_size - offset)
+    return min(max(0, size), available) / bps
+
+
+def wav_duration_seconds(wav: Path) -> float | None:
+    if not wav.exists():
+        return None
+    duration = riff_duration_seconds(wav)
+    if duration is not None:
+        return duration
     if wav.stat().st_size < 44:
         return 0.0
     # Not a WAVE container. Callers still need a size-based ceiling.
@@ -116,7 +129,7 @@ def _pcm_rms(pcm: bytes) -> float:
     count = len(samples)
     if count == 0:
         return 0.0
-    # Stride long windows. This runs on every segment, even when the gate is off.
+    # Stride long windows. The pipeline does not call this when the silence gate is off.
     step = 8 if count > 4000 else 1
     total = 0
     seen = 0

@@ -57,7 +57,9 @@ def main() -> None:
     if os.getenv("BREEZE_OPEN_BROWSER") == "1":
         threading.Thread(target=open_when_serving, args=(settings.port, stopped, settings.resident_startup_s + 20), daemon=True).start()
     try:
-        uvicorn.run("app.server:app", host="0.0.0.0", port=settings.port)
+        # Replay buckets use the TCP peer. The default proxy_headers=True would
+        # trust X-Forwarded-For from loopback and split one local client into many.
+        uvicorn.run("app.server:app", host="0.0.0.0", port=settings.port, proxy_headers=False)
     finally:
         stopped.set()
 

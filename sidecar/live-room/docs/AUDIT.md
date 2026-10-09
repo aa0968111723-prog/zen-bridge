@@ -13,7 +13,7 @@
 ## 已修
 
 - 主持權杖：`/api/host-token` 只接受真實 loopback（`127.0.0.1`／`::1`；測試才允許 `testclient`）。Host 必須帶與 `BREEZE_PORT` 相同的埠。有 Origin 時，scheme、host、埠都要完全符合；非 loopback 不能省埠。不看 `X-Forwarded-*`。上傳、開關房、設定、匯出、刪字幕都要 Bearer。`/api/setup` 的 `host_token` 是 null，QR 只含聽眾網址。
-- 准入在解析表單之前：`/api/push` 先看 Content-Length 與佇列／在途位元組，滿了回 429，然後才 `request.form()`。同一段若已在飛行中，重送不佔第二個名額。
+- 讀完並解析 request body 之後才准入（佔佇列名額）：`/api/push` 先查權杖與 Content-Length。非 multipart 回 415，超過上限回 413，讀取逾時回 408，格式不對回 400，然後才佔名額；滿了回 429。讀 body 的同時不佔名額（只有主持權杖、單次約 2 MB 加 64 KB、20 秒一定結束）。同一段若已在飛行中，重送不佔第二個名額。
 - 管線 single-flight：同一 `(room_id, session_id, seq)` 在任何 await 之前登記一個 future。相同內容併入該 future；不同內容 409。預設 `BREEZE_ASR_WORKERS=1`。
 - 中文先於英文：辨識成功先以 `zh_ready` 經 RoomBus 廣播，再排隊英譯。英譯例外、逾時、佇列滿或額度用完，只把同一 id 更新為 `translate_failed` 並加版本，中文留著。逾時不假設沒有計費。
 - 缺段：序號有洞時，gap 等待（預設 3 秒）後標 `missing`，後面繼續。會話結束會補洞。堆積超過上限會先跳過缺的序號。聽眾帶 cursor 重連；日誌窗口不夠時 `gap: true`，客戶端只說補償窗口不足，不造段。

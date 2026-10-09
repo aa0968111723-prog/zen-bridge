@@ -123,6 +123,7 @@ async def test_full_queue_skips_oldest_not_the_new_segment():
                 if item.get("translate_status") == "skipped_backlog"
             ]
             assert skipped
+            assert pipe.translate_skipped == len(skipped)
             assert skipped[0]["zh"] == "舊"
             assert skipped[0]["status"] == "translate_failed"
             assert skipped[0]["en"] == ""
