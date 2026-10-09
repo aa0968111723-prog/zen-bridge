@@ -3,6 +3,8 @@ import asyncio
 import base64
 import json
 import os
+import ssl
+import certifi
 import tempfile
 import wave
 from pathlib import Path
@@ -18,13 +20,14 @@ async def run_agent(asr):
     if parsed.scheme != 'wss' or parsed.username or parsed.password or parsed.query or parsed.fragment or len(token) < 32 or '\n' in token or '\r' in token:
         raise ValueError('Invalid Zen Bridge pairing configuration')
     root = Path(__file__).resolve().parents[1]
+    tls = ssl.create_default_context(cafile=certifi.where())
     (root / 'tmp').mkdir(exist_ok=True)
     while True:
         try:
             if not asr.health():
                 await asyncio.sleep(2)
                 continue
-            async with connect(url, additional_headers={'Authorization': 'Bearer ' + token}, proxy=None,
+            async with connect(url, additional_headers={'Authorization': 'Bearer ' + token}, proxy=None, ssl=tls,
                     max_size=12_000_000, ping_interval=20, ping_timeout=30, open_timeout=20) as socket:
                 await socket.send(json.dumps({'type': 'ready', 'protocol': 1, 'engine': 'breeze-native'}))
                 async for message in socket:
