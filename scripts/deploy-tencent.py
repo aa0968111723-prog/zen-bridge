@@ -5,6 +5,7 @@ import hashlib
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -14,6 +15,26 @@ from pathlib import Path
 BASE = Path('/opt/zen-bridge')
 NAMESPACE = 'environment-6ab4cf1136d2a6cac4cddef5'
 SERVICE = 'service-6abe121cc3a8364ca8506194'
+
+def prune_release_artifacts(keep):
+    """Only source artifacts with matching managed revision markers are removed."""
+    removed={'releases':0,'archives':0}
+    releases=(BASE/'releases').resolve()
+    for path in releases.iterdir():
+        if path.name in keep or not re.fullmatch('[a-f0-9]{40}',path.name) or path.is_symlink() or not path.is_dir():continue
+        if path.resolve().parent!=releases:continue
+        try:
+            if (path/'REVISION').read_text().strip()!=path.name:continue
+            shutil.rmtree(path);removed['releases']+=1
+        except OSError:continue
+    incoming=(BASE/'incoming').resolve()
+    for path in incoming.glob('*.tgz'):
+        revision=path.name[:-4]
+        if revision in keep or not re.fullmatch('[a-f0-9]{40}',revision) or path.is_symlink() or not path.is_file():continue
+        if path.resolve().parent!=incoming:continue
+        try:path.unlink();removed['archives']+=1
+        except OSError:continue
+    return removed
 
 def kubectl(*args, value=None):
     return subprocess.run(['k3s','kubectl',*args], input=json.dumps(value).encode() if value is not None else None,
@@ -93,7 +114,9 @@ def apply(revision):
     except (subprocess.CalledProcessError,RuntimeError):
         kubectl('-n',NAMESPACE,'patch','deployment',SERVICE,'--type=merge','-p',json.dumps({'spec':previous['spec']}))
         raise RuntimeError('Readiness failed; previous service configuration restored')
-    print(json.dumps({'revision':revision,'url':'https://vexlark.co','backup':str(backup),'status':'ready'}))
+    prior=previous['spec']['template'].get('metadata',{}).get('annotations',{}).get('zen.bridge/revision')
+    pruned=prune_release_artifacts({revision,prior})
+    print(json.dumps({'revision':revision,'url':'https://vexlark.co','backup':str(backup),'status':'ready','pruned':pruned}))
 
 if __name__=='__main__':
     apply(sys.argv[1])
