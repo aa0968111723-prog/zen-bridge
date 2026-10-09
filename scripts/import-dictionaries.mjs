@@ -24,7 +24,7 @@ async function importCatalog(catalogPath){
   const [old]=await queryPostgres(url,'SELECT version,entry_count FROM dictionary_sources WHERE id=$1',[source.id]);
   if(old?.version===snapshot&&Number(old.entry_count)===source.entry_count){results.push({id:source.id,status:'current',entries:source.entry_count});continue;}
   await queryPostgres(url,`INSERT INTO dictionary_sources(id,title,license,license_url,source_url,version,sha256,entry_count,public,updated_at)
-   VALUES($1,$2,$3,$4,$5,'',$6,0,1,$7) ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title,license=EXCLUDED.license,license_url=EXCLUDED.license_url,source_url=EXCLUDED.source_url`,[source.id,source.title,source.license,source.license_url,source.source_url,source.input_sha256,new Date().toISOString()]);
+   VALUES($1,$2,$3,$4,$5,'',$6,0,1,$7) ON CONFLICT(id) DO NOTHING`,[source.id,source.title,source.license,source.license_url,source.source_url,source.input_sha256,new Date().toISOString()]);
   let pending=[],count=0;
   async function flush(){
    if(!pending.length)return;
@@ -44,7 +44,7 @@ async function importCatalog(catalogPath){
    if(!/^[a-f0-9]{32}$/.test(item.id)||!valid(item.word,160)||!item.word||!valid(item.alternative,160)||!valid(item.pronunciation,200)||!valid(item.zh,8000)||!valid(item.en,8000)||!Array.isArray(item.keys)||item.keys.length>64||item.keys.some(k=>!valid(k,160)||!k||/[\r\n\t]/.test(k)))throw Error('Invalid dictionary entry');
    pending.push(item);count++;if(count>source.entry_count)throw Error('Dictionary entry count mismatch');if(pending.length>=400)await flush();}
   await flush();if(count!==source.entry_count)throw Error('Dictionary entry count mismatch');
-  await queryPostgres(url,'UPDATE dictionary_sources SET version=$1,sha256=$2,entry_count=$3,updated_at=$4 WHERE id=$5',[snapshot,source.input_sha256,count,new Date().toISOString(),source.id]);
+  await queryPostgres(url,'UPDATE dictionary_sources SET version=$1,sha256=$2,entry_count=$3,updated_at=$4,title=$6,license=$7,license_url=$8,source_url=$9 WHERE id=$5',[snapshot,source.input_sha256,count,new Date().toISOString(),source.id,source.title,source.license,source.license_url,source.source_url]);
   results.push({id:source.id,status:'imported',entries:count});
  }
  return {status:'ready',sources:results};
