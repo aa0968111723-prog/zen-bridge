@@ -2,7 +2,7 @@
   #error PayloadDir must point to the prepared offline App
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.1"
+  #error AppVersion must match the release VERSION
 #endif
 #ifndef OutputDir
   #define OutputDir "..\dist"
@@ -14,8 +14,8 @@
 AppId={{68770E3F-50EE-493F-8A23-6A82C5FFDA69}
 AppName=禪譯 Zen Bridge
 AppVersion={#AppVersion}
-AppPublisher=Breeze Live Room
-AppPublisherURL=https://github.com/aa0968111723-prog/breeze-live-room
+AppPublisher=Zen Bridge
+AppPublisherURL=https://github.com/aa0968111723-prog/zen-bridge
 DefaultDirName={localappdata}\Programs\Breeze Live Room
 DefaultGroupName=禪譯 Zen Bridge
 PrivilegesRequired=lowest
@@ -91,6 +91,10 @@ Type: files; Name: "{autodesktop}\Breeze Live Room.lnk"
 Type: files; Name: "{userprograms}\Breeze Live Room\Breeze Live Room.lnk"
 Type: files; Name: "{userprograms}\Breeze Live Room\Uninstall Breeze Live Room.lnk"
 Type: dirifempty; Name: "{userprograms}\Breeze Live Room"
+Type: files; Name: "{autodesktop}\禪譯聽眾房.lnk"
+Type: files; Name: "{userprograms}\禪譯聽眾房\禪譯聽眾房.lnk"
+Type: files; Name: "{userprograms}\禪譯聽眾房\移除禪譯聽眾房.lnk"
+Type: dirifempty; Name: "{userprograms}\禪譯聽眾房"
 
 [Icons]
 Name: "{autodesktop}\禪譯 Zen Bridge"; Filename: "{app}\Breeze.exe"; WorkingDir: "{app}"
