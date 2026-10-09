@@ -25,6 +25,7 @@ jobs:
       - run: node tests/breeze-gateway.mjs
       - run: node tests/zen-front.mjs
       - run: node tests/tencent-build.mjs
+      - run: node tests/dictionary-bootstrap.mjs
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

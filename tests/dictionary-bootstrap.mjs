@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {bootstrapDictionaries} from '../scripts/dictionary-bootstrap.mjs';
+let calls=0;
+const ready=await bootstrapDictionaries(async()=>({status:++calls<3?'import-in-progress':'ready'}),{delayMs:2});
+assert.equal(ready.status,'ready');assert.equal(calls,3);
+const controller=new AbortController();calls=0;
+const interrupted=bootstrapDictionaries(async()=>{calls++;return {status:'import-in-progress'};},{signal:controller.signal,delayMs:1000});
+setTimeout(()=>controller.abort(),3);
+assert.deepEqual(await interrupted,{status:'stopped'});assert.equal(calls,1);
+assert.deepEqual(await bootstrapDictionaries(async()=>{throw Error('must not run');},{signal:controller.signal}),{status:'stopped'});
+await assert.rejects(bootstrapDictionaries(async()=>{throw Error('invalid dataset');}),/invalid dataset/);
+console.log('PASS: interrupted rolling imports retry on lock contention, stop on shutdown, and preserve import errors');
