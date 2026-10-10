@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>示意圖 · Visual drafts</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f5f2; --fg:#1d1d1f; --muted:#6b6b70; --card:#ffffff; --line:#d9d6cf; --accent:#8a5a00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141416; --fg:#ececef; --muted:#9a9aa2; --card:#1f1f23; --line:#33333a; --accent:#f0b44c; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); }
+  header h1 { font-size:18px; margin:0; }
+  #status { font-size:13px; color:var(--muted); }
+  #status[data-state="live"] { color:var(--accent); }
+  form { margin-left:auto; display:flex; gap:6px; }
+  input { font:inherit; padding:4px 8px; width:10em; }
+  main { padding:16px; display:grid; gap:14px; max-width:960px; margin:0 auto; }
+  .empty { color:var(--muted); text-align:center; padding:48px 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .card h2 { margin:0 0 2px; font-size:20px; }
+  .card .en { color:var(--muted); margin:0 0 8px; }
+  .card .meta { font-size:12px; color:var(--muted); margin-bottom:8px; }
+  .card .body { white-space:pre-wrap; line-height:1.6; margin:6px 0; }
+  .card pre { background:rgba(127,127,127,.12); padding:10px; border-radius:6px; overflow:auto; font-size:13px; }
+  .terms { display:flex; flex-wrap:wrap; gap:6px; padding:0; margin:8px 0 0; list-style:none; }
+  .terms li { border:1px solid var(--line); border-radius:999px; padding:2px 10px; font-size:13px; }
+  .terms li.locked { border-color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>示意圖 <span lang="en">Visual drafts</span></h1>
+  <span id="status" data-state="idle" role="status" aria-live="polite">未連線</span>
+  <form id="room-form">
+    <label for="room-input">房間</label>
+    <input id="room-input" name="room" autocomplete="off" pattern="[A-Za-z0-9_-]{1,64}">
+    <button type="submit">切換</button>
+  </form>
+</header>
+<main id="drafts" aria-live="polite">
+  <p class="empty" id="empty">尚無示意圖。講者說滿約 30 秒的定稿字幕後會自動產生。</p>
+</main>
+<script type="module" src="/visual/visual.js"></script>
+</body>
+</html>
