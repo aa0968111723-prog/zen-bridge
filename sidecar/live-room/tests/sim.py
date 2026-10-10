@@ -459,6 +459,7 @@ class VirtualHost:
         self._all: list[asyncio.Task] = []
         self._active_posts = 0
         self.max_posts = 0
+        self.rebaselined = 0          # in-flight slices let finish outside the clock after a harness pause
 
     def _active_tasks(self) -> set[asyncio.Task]:
         self._tasks = {task for task in self._tasks if not task.done()}
@@ -801,6 +802,9 @@ def runqueue_wait_s() -> float:
     return total / 1e9
 
 
+PAUSE_SETTLE_MAX_S = 5.0   # real seconds; a server stuck longer than this still books the wait
+
+
 def _sample_server_memory() -> tuple[int, int, int]:
     """One collection with GC enabled, then server heap and process RSS.
 
@@ -939,6 +943,16 @@ async def _run_100min_async(*, trace: bool) -> SimReport:
                 active = host._active_tasks()
                 if active and stolen[0] > 0:
                     await asyncio.wait(active, timeout=stolen[0])
+                # Windows (laptop c2803ae run): the loop timer is ~15.6 ms wide and a stall also defers the
+                # server's own thread-pool callbacks, so "give back exactly stolen" can come up short and the
+                # first slot check after the very first (largest, whole-heap) pause booked ~40 ms = 4 v-s.
+                # Slices that straddle a harness pause are not a server measurement: let them finish
+                # outside the clock (bounded). Every later slice is measured as before, so a real
+                # backlog still shows up at the next slot.
+                active = host._active_tasks()
+                if active:
+                    host.rebaselined += len(active)
+                    await asyncio.wait(active, timeout=PAUSE_SETTLE_MAX_S)
             finally:
                 host.release_new_slices()
 
