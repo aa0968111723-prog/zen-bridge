@@ -214,6 +214,7 @@ def register(app, ctx, *, session_row, export_rows, event_list):
         rtf = rtf_number((m or {}).get("rtf"), m)   # live rtf may be the RtfMeter dict
         return {"components": components(), "live": m, "live_error": err, "live_age_s": age,
                 "stale": age is None or age > STALE_S, "rtf": rtf, "rtf_color": rtf_color(rtf),
+                "asr_gpu": (m or {}).get("asr_gpu"),            # opt-in GPU path state (app.asr_gpu)
                 "config": cfg, "ts": clock()}
 
     @app.get(f"{API}/overview/hardware")

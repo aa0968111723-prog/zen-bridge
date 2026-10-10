@@ -151,6 +151,7 @@ class ResidentAsr:
         self.ggml_shared_memory: int | None = None
         # round4 #9: whisper-server -nc unless BREEZE_RESIDENT_NO_CONTEXT=0
         self.no_context = (os.getenv("BREEZE_RESIDENT_NO_CONTEXT") or "1").strip() != "0"
+        self.extra_args: list[str] = []          # e.g. ["-nf"] from app.asr_gpu (GPU worker)
 
     def _drain_stderr(self, stream) -> None:
         carry = b""
@@ -229,6 +230,7 @@ class ResidentAsr:
                 cmd += ["--best-of", str(self.best_of)]
             if self.no_context:
                 cmd += ["-nc"]                      # round4 #9: no carried-over text context
+            cmd += [str(a) for a in self.extra_args]
             self.startup_output = b""
             self.capture_startup = True
             self.proc = opener(cmd, cwd=self.native_paths.cwd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,

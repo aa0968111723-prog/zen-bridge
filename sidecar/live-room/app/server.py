@@ -30,6 +30,8 @@ from app.hw_routes import make_router as make_hw_router
 from app.overlay_routes import router as overlay_router
 from app.visual_routes import VisualHub, build_visual_router
 from app.mt_backend import TargetLangError, validate_tgt_lang
+from app import hw_tune
+from app.asr_gpu import GpuWithCpuFallback, build_asr as build_gpu_or_cpu_asr, gpu_status as asr_gpu_status
 from app.auth import audience_origin_allowed, host_is_allowed, new_host_token, origin_is_allowed, require_host, require_local_host, same_secret
 from app.dispatch import ListenerSlot, RoomBus, for_listener
 from app.glossary_ja import validate_terms_ja   # round4 #7: ja/reading (glossary.py untouched)
@@ -898,10 +900,13 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
     visual_hub = VisualHub.from_env()          # V2 visuals (aitest): off unless BREEZE_VISUAL_LLM_* set
     if asr is None:
         if settings.asr_mode == "native":
-            asr = NativeResidentAsr(model, threads=settings.asr_threads,
-                startup_timeout_s=settings.resident_startup_s, inference_timeout_s=settings.asr_timeout_s,
-                audio_context=settings.asr_audio_context, beam_size=settings.asr_beam_size, best_of=settings.asr_best_of)
-            started = asr.start()
+            def _cpu_worker():
+                return NativeResidentAsr(model, threads=settings.asr_threads,
+                    startup_timeout_s=settings.resident_startup_s, inference_timeout_s=settings.asr_timeout_s,
+                    audio_context=settings.asr_audio_context, beam_size=settings.asr_beam_size,
+                    best_of=settings.asr_best_of)
+            # Opt-in GPU path (BREEZE_ASR_GPU=vulkan + BREEZE_WHISPER_DIR); self-test, CPU fallback.
+            asr, started = build_gpu_or_cpu_asr(_cpu_worker, model)
             if not started.ok:
                 resident_error = started.error
         elif settings.asr_mode == "resident":
@@ -1324,7 +1329,8 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
     app.mount("/static", static_files, name="static")
     # Teammate routers (integrator wiring, grok/integrate):
     app.include_router(overlay_router)                                   # fullstack: OBS /overlay
-    app.include_router(make_hw_router(lambda r: require_host(r, token, settings)))   # perf: /api/hw/status
+    app.include_router(make_hw_router(lambda r: require_host(r, token, settings),
+                                      status_fn=lambda **kw: {**hw_tune.status(**kw), "asr_gpu": asr_gpu_status()}))   # perf: /api/hw/status
 
     def _visual_ws_guard(ws, room_id):
         if not audience_origin_allowed(ws.headers.get("origin"), ws.headers.get("host", ""), settings,
@@ -1404,8 +1410,9 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         host_view = _host_authorized(request)
         url = share_for(room_id, include_key=host_view)
-        resident_ready = isinstance(asr, ResidentAsr) and await asyncio.to_thread(asr.health)
-        asr_ready = resident_ready if isinstance(asr, ResidentAsr) else (whisper.is_file() and model.is_file() if isinstance(asr, CliAsr) else True)
+        gpu_wrapped = isinstance(asr, GpuWithCpuFallback)
+        resident_ready = (isinstance(asr, ResidentAsr) or gpu_wrapped) and await asyncio.to_thread(asr.health)
+        asr_ready = resident_ready if (isinstance(asr, ResidentAsr) or gpu_wrapped) else (whisper.is_file() and model.is_file() if isinstance(asr, CliAsr) else True)
         payload = {
             "room": room_id,
             "listen_url": url,
@@ -1420,9 +1427,10 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "translate_configured": _translate_configured(translator) and settings.translate,
             "translate_verified": False,
             "translate_label": translator.status_label(),
-            "asr_mode": "native" if isinstance(asr, NativeResidentAsr) else ("resident" if isinstance(asr, ResidentAsr) else "cli"),
+            "asr_mode": ("native-gpu" if asr.on_gpu else "native") if gpu_wrapped else ("native" if isinstance(asr, NativeResidentAsr) else ("resident" if isinstance(asr, ResidentAsr) else "cli")),
             "asr_ready": asr_ready,
-            **(asr.restart_status() if isinstance(asr, NativeResidentAsr) else {"asr_degraded": False}),
+            **(asr.restart_status() if isinstance(asr, (NativeResidentAsr, GpuWithCpuFallback)) else {"asr_degraded": False}),
+            "asr_gpu": asr_gpu_status(),
             "model_reloads_each_segment": isinstance(asr, CliAsr),
             "resident_error": getattr(asr, "last_error", "") or resident_error,
             "host_token": None,
@@ -1989,6 +1997,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "listeners": _seated_listeners(book.rooms.values()),
             "rooms": book._active_count(),
             "rss_bytes": rss_bytes(),
+            "asr_gpu": asr_gpu_status(),           # opt-in GPU path: active / fell back / why
             "tokens_used": translator.tokens_used,
             "price": translator.price_note(),
             "store_errors": store.errors,
