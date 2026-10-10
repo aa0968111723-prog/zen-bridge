@@ -117,6 +117,7 @@ def check(
     *,
     battery=None,
     power_plan=None,
+    power_mode_overlay=None,
     battery_saver=None,
     cpu_percent=None,
     max_cpu_percent=25,
@@ -166,9 +167,13 @@ def check(
     ):
         reasons.append("power plan is Power saver")
 
-    power_mode_overlay, note = _read_power_mode_overlay()
-    if note:
-        add_unknown(note)
+    if power_mode_overlay is None:
+        power_mode_overlay, note = _read_power_mode_overlay()
+        if note:
+            add_unknown(note)
+    elif not isinstance(power_mode_overlay, str) or not power_mode_overlay.strip():
+        power_mode_overlay = None
+        add_unknown("power mode overlay unknown (invalid value)")
     details["power_mode_overlay"] = power_mode_overlay
     if (
         isinstance(power_mode_overlay, str)

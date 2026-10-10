@@ -15,6 +15,7 @@ def _good(**overrides):
     values = {
         "battery": False,
         "power_plan": "Balanced",
+        "power_mode_overlay": "00000000-0000-0000-0000-000000000000",
         "battery_saver": False,
         "cpu_percent": 25,
     }
@@ -48,6 +49,40 @@ def test_balanced_plan_and_cpu_at_threshold_are_trustworthy():
     assert result["details"]["cpu_percent"] == 25
 
 
+@pytest.mark.parametrize("windows", [False, True])
+def test_injected_inputs_do_not_probe_host(monkeypatch, windows):
+    monkeypatch.setattr(power_guard, "_is_windows", lambda: windows)
+
+    def unexpected_probe(*args):
+        pytest.fail("injected inputs must not probe the host")
+
+    for probe in (
+        "_read_battery",
+        "_read_power_plan",
+        "_read_power_mode_overlay",
+        "_read_battery_saver",
+        "_read_cpu_percent",
+    ):
+        monkeypatch.setattr(power_guard, probe, unexpected_probe)
+    result = _good()
+    assert result["trustworthy"] is True
+    assert result["reasons"] == []
+    assert result["unknown"] == []
+
+
+@pytest.mark.parametrize("overlay", ["", " \t", 123, False])
+def test_invalid_injected_overlay_is_reported_without_probing(monkeypatch, overlay):
+    def unexpected_probe():
+        pytest.fail("invalid injected overlay must not probe the host")
+
+    monkeypatch.setattr(power_guard, "_read_power_mode_overlay", unexpected_probe)
+    result = _good(power_mode_overlay=overlay)
+    assert result["trustworthy"] is True
+    assert result["details"]["power_mode_overlay"] is None
+    assert result["unknown"] == ["power mode overlay unknown (invalid value)"]
+    assert result["reasons"] == result["unknown"]
+
+
 def test_unknown_values_are_notes_not_failures(monkeypatch):
     monkeypatch.setattr(power_guard, "_is_windows", lambda: False)
 
@@ -79,6 +114,7 @@ def test_unknown_battery_source_and_empty_power_plan_are_reported():
     result = power_guard.check(
         battery=battery,
         power_plan="",
+        power_mode_overlay="",
         battery_saver=False,
         cpu_percent=0,
     )
@@ -95,10 +131,19 @@ def test_power_efficiency_overlay_is_untrustworthy(monkeypatch):
         "_read_power_mode_overlay",
         lambda: (power_guard.POWER_EFFICIENCY_OVERLAY_GUID, None),
     )
-    result = _good()
+    result = _good(power_mode_overlay=None)
     assert result["trustworthy"] is False
     assert result["details"]["power_mode_overlay"] == power_guard.POWER_EFFICIENCY_OVERLAY_GUID
     assert "power mode is Best power efficiency" in result["reasons"]
+
+
+def test_injected_power_efficiency_overlay_is_untrustworthy():
+    overlay = power_guard.POWER_EFFICIENCY_OVERLAY_GUID.upper()
+    result = _good(power_mode_overlay=overlay)
+    assert result["trustworthy"] is False
+    assert result["details"]["power_mode_overlay"] == overlay
+    assert "power mode is Best power efficiency" in result["reasons"]
+    assert result["unknown"] == []
 
 
 def test_cpu_threshold_and_interval_are_injectable(monkeypatch):
@@ -113,6 +158,7 @@ def test_cpu_threshold_and_interval_are_injectable(monkeypatch):
     result = power_guard.check(
         battery=False,
         power_plan="Balanced",
+        power_mode_overlay="00000000-0000-0000-0000-000000000000",
         battery_saver=False,
         cpu_interval=0,
         max_cpu_percent=30,
@@ -218,6 +264,7 @@ def test_cli_json_and_strict_exit_codes(monkeypatch, capsys):
 
 
 def test_cli_strict_succeeds_when_trustworthy(monkeypatch):
+    monkeypatch.setattr(power_guard, "_is_windows", lambda: False)
     monkeypatch.setattr(
         power_guard,
         "check",
