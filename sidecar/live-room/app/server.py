@@ -786,6 +786,16 @@ def _optional_ms(form, request: Request, name: str) -> int | None:
     return value
 
 
+def _wall_ms(form, request: Request, name: str) -> int | None:
+    """Host wall clock (epoch ms) for latency only. Out of a sane range = no sample."""
+    raw = _field(form, request, name)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if 1_500_000_000_000 < value < 4_000_000_000_000 else None
+
+
 def _public_result(done: Segment) -> JSONResponse:
     if done.status == "timeout":
         code = 408
@@ -1932,6 +1942,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                 seq=seq,
                 t0_ms=t0_ms,
                 t1_ms=t1_ms,
+                t1_wall_ms=_wall_ms(form, request, "t1_wall_ms"),     # round4 #3 (A2)
             )
             held = reserved
             reserved = False

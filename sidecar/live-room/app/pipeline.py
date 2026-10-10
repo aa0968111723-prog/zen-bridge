@@ -18,6 +18,7 @@ from pathlib import Path
 
 from app.aio import cancellation_pending, wait_bounded
 from app.audio import AudioError, riff_duration_seconds, wav_duration_seconds, wav_rms
+from app.latency import StageLatency, upload_ms
 from app.glossary import guarded_flags, missing_locked, normalize
 from app.rtf import RtfMeter
 from app.settings import Settings
@@ -82,6 +83,10 @@ class Segment:
     en_merged_from: list = field(default_factory=list)
     # Silero VAD speech share (0..1) when BREEZE_VAD=silero judged this slice. Ledger only.
     speech_ratio: float | None = None
+    # round4 #3: host wall clock at slice end (Date.now()), and per-stage latency in ms (A2-A6).
+    t1_wall_ms: int | None = None
+    recv_mono: float = field(default_factory=time.monotonic)
+    lat: dict = field(default_factory=dict)
 
     @property
     def key(self) -> tuple[str, str, int]:
@@ -208,6 +213,7 @@ class Pipeline:
         self.inflight = 0
         self.rejected = 0
         self.missing_count = 0
+        self.latency = StageLatency()                 # round4 #3
         self.oldest_wait_started: float | None = None
         self.last_process_s: float | None = None
         self.process_s: float | None = None
@@ -386,6 +392,7 @@ class Pipeline:
                            else round(time.monotonic() - self.last_activity, 1)),
         }
         payload.update(self._rtf.snapshot())
+        payload["latency"] = self.latency.snapshot()          # round4 #3: A2-A6 p50/p95 (ms)
         return payload
 
     def ensure_workers(self) -> None:
@@ -1465,6 +1472,8 @@ class Pipeline:
         self._reserved.discard(segment.key)
         work = self.tmp / uuid.uuid4().hex
         started = time.monotonic()
+        if "A2" not in segment.lat:
+            self.latency.note(segment, "A2", upload_ms(segment.t1_wall_ms, segment.received_at))
         decode_s = 0.0
         slot_wait_s = 0.0
         try:
@@ -1500,6 +1509,7 @@ class Pipeline:
             # RMS gate below still decides; with the VAD off this block is skipped entirely.
             vad_res = None
             gate = self.vad
+            vad_mark = time.perf_counter()
             if gate is not None:
                 vad_res = await asyncio.to_thread(gate.check, wav)
                 if vad_res is not None:
@@ -1531,6 +1541,7 @@ class Pipeline:
                 if trimmed is not None:
                     asr_wav = trimmed
                     self.vad_trimmed = getattr(self, "vad_trimmed", 0) + 1
+            self.latency.note(segment, "A4", (decode_s + time.perf_counter() - vad_mark) * 1000)
             segment.status = "transcribing"
             # Real WAVE length replaces the upload estimate. Non-WAVE stays estimated until ASR starts.
             # backlog_audio_s keeps that real length until recognition finishes (original definition).
@@ -1549,6 +1560,8 @@ class Pipeline:
                     self._rtf.clear_waiting(segment.key)
                     self._rtf.note_asr_active(segment.key, segment.room_id)
                     asr_started = time.monotonic()
+                    if "A3" not in segment.lat:          # a retry is not a new queue sample
+                        self.latency.note(segment, "A3", (asr_started - segment.recv_mono) * 1000)
                     try:
                         try:
                             asr = await wait_bounded(
@@ -1565,6 +1578,7 @@ class Pipeline:
                         self.fail_received(segment, "辨識逾時", status="timeout")
                         return segment
                     record_s = time.monotonic() - asr_started
+                    self.latency.note(segment, "A5", record_s * 1000)
                     blank = bool(getattr(asr, "blank", False))
                     asr_ok = bool(asr.ok) and not blank
             except Exception as exc:
@@ -2004,9 +2018,11 @@ class Pipeline:
             cancel = threading.Event()
             kwargs["cancel"] = cancel
         assert self._translate_pool is not None
+        mt_mark = time.monotonic()
         cfut = self._translate_pool.submit(partial(self.translator.translate, mt_text, **kwargs))
         try:
             translated: TranslateResult = await wait_bounded(asyncio.wrap_future(cfut), timeout=self.settings.translate_timeout_s)
+            self.latency.note(segment, "A6", (time.monotonic() - mt_mark) * 1000)
         except asyncio.TimeoutError:
             if cancel is not None:
                 cancel.set()
