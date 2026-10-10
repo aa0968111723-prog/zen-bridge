@@ -28,6 +28,13 @@ assert.equal(view.items.has("r:s:3"), false);
 view.apply({ type: "caption", id: "r:s:4", seq: 4, session_id: "s", version: 1, zh: "第四段" });
 view.apply({ type: "draft", id: "r:s:5", seq: 5, session_id: "s", zh: "第五" });
 assert.equal(liveTail(view.items).id, "r:s:5");
+// real finals carry session_ord (>=1); the draft has none and must still be the tail (screenshot bug)
+const ordView = createCaptionView(80);
+ordView.apply({ type: "caption", id: "r:t:1", seq: 1, session_id: "t", session_ord: 2, version: 1, zh: "一" });
+ordView.apply({ type: "caption", id: "r:t:2", seq: 2, session_id: "t", session_ord: 2, version: 1, zh: "二" });
+ordView.apply({ type: "draft", id: "r:t:3", seq: 3, session_id: "t", zh: "三的草稿" });
+assert.equal(liveTail(ordView.items).id, "r:t:3");
+assert.equal(ordView.items.get("r:t:3").session_ord, 2);
 // translation update after final keeps working
 view.apply({ type: "caption", id: "r:s:4", seq: 4, session_id: "s", version: 2, zh: "第四段", en: "Part four" });
 assert.equal(view.items.get("r:s:4").en, "Part four");

@@ -66,8 +66,14 @@ export function createCaptionView(limit = 80) {
       // (same seq) replaces it in place.
       const have = items.get(item.id);
       if (have && !have.draft) return;
+      // Drafts carry no session_ord; take the session's from its finals so the draft sorts after them
+      // (otherwise ord 0 sorts it before every final and it never reaches the stage line).
+      let ord = Number(item.session_ord) || 0;
+      if (!ord) for (const row of items.values()) {
+        if (row.session_id === item.session_id && Number(row.session_ord) > ord) ord = Number(row.session_ord);
+      }
       items.set(item.id, { id: item.id, seq: item.seq, session_id: item.session_id, room_id: item.room_id,
-        zh: String(item.zh || ""), en: "", status: "draft", draft: true, version: 0 });
+        session_ord: ord, zh: String(item.zh || ""), en: "", status: "draft", draft: true, version: 0 });
       while (items.size > limit) items.delete(items.keys().next().value);
       return;
     }
