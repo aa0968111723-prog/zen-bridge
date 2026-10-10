@@ -1,0 +1,25 @@
+{
+  "workers": [
+    {
+      "name": "Breeze ASR (final)",
+      "backend": "vulkan",
+      "threads": 4,
+      "model_ram_gb": 0.0,
+      "extra_ram_gb": 0.0
+    },
+    {
+      "name": "X-ASR int8 (draft)",
+      "backend": "cpu",
+      "threads": 1,
+      "model_ram_gb": 0.0,
+      "extra_ram_gb": 0.0
+    },
+    {
+      "name": "Hy-MT2 GGUF Q4",
+      "backend": "cpu",
+      "threads": 2,
+      "model_ram_gb": 0.0,
+      "extra_ram_gb": 0.0
+    }
+  ]
+}
