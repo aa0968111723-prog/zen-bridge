@@ -14,12 +14,12 @@ and reading speeds count ASCII as half a character, other characters as one.
 from __future__ import annotations
 
 import argparse
-import html
 import json
 import math
 import re
 import sys
 from pathlib import Path
+from html.parser import HTMLParser
 
 
 TRADITIONAL = set("這們說會個來時為與對還讓嗎呢吧")
@@ -41,6 +41,24 @@ def timestamp_ms(value: str) -> int:
 
 def character_count(text: str, lang: str) -> float:
     return sum(0.5 if lang == "ja" and ord(char) < 128 else 1 for char in text)
+
+
+class CaptionText(HTMLParser):
+    """Extract visible caption text without counting tags or comments."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+
+def visible_text(line: str) -> str:
+    parser = CaptionText()
+    parser.feed(line)
+    parser.close()
+    return "".join(parser.parts)
 
 
 def lint(text: str, fmt: str, lang: str, *, max_cps: float | None = None,
@@ -136,7 +154,7 @@ def lint(text: str, fmt: str, lang: str, *, max_cps: float | None = None,
 
     previous = None
     for index, timestamp, start, end, body in cues:
-        visible = [html.unescape(re.sub(r"<[^>]*>", "", line)) for line in body]
+        visible = [visible_text(line) for line in body]
         if not any(line.strip() for line in visible):
             issue(index, timestamp, "empty_text", "Cue text is empty.")
         if len(body) > 2:
