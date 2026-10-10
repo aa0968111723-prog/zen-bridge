@@ -131,15 +131,65 @@ class SherpaParaformerDraft:
         self.last = ""
 
 
+XASR_FILES = {"int8": ("encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"),
+              "fp32": ("encoder.onnx", "decoder.onnx", "joiner.onnx")}
+# round3/round4 endpoint rules (cer_eval.py): 2.4 s silence before any text, 0.8 s after text, 12 s cap.
+ENDPOINT_RULES = dict(rule1_min_trailing_silence=2.4, rule2_min_trailing_silence=0.8,
+                      rule3_min_utterance_length=12.0)
+
+
+def xasr_precision(model_dir: str | Path, prefer: str = "auto") -> str:
+    """int8 when its files are present (or asked for), else fp32. Raises if neither is complete."""
+    d = Path(model_dir or "")
+    order = {"auto": ("int8", "fp32"), "int8": ("int8",), "fp32": ("fp32",)}.get(prefer, ("int8", "fp32"))
+    for p in order:
+        if all((d / f).is_file() for f in XASR_FILES[p]) and (d / "tokens.txt").is_file():
+            return p
+    raise DraftAsrUnavailable(f"缺少 X-ASR 模型檔（{d}）；程式不會自動下載")
+
+
+class XAsrDraft(SherpaParaformerDraft):
+    """round4 #5: sherpa-onnx X-ASR 480 ms streaming zipformer transducer (zh-en, punct).
+
+    ``num_threads`` defaults to **1** (round4 D1: int8 at 4 threads - and once at 2 - gave
+    non-deterministic / garbled output on the box). ``precision`` auto picks int8 if present.
+    Nothing is downloaded: the folder comes from ``BREEZE_DRAFT_MODEL_DIR``.
+    """
+
+    def __init__(self, model_dir: str | Path | None = None, *, recognizer=None, convert=None,
+                 threads: int = 1, precision: str = "auto"):
+        self.precision = None
+        if recognizer is None:
+            try:
+                import sherpa_onnx  # type: ignore
+            except ImportError as exc:
+                raise DraftAsrUnavailable("sherpa-onnx 未安裝") from exc
+            d = Path(model_dir or "")
+            self.precision = xasr_precision(d, precision)
+            enc, dec, join = (str(d / f) for f in XASR_FILES[self.precision])
+            recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+                tokens=str(d / "tokens.txt"), encoder=enc, decoder=dec, joiner=join,
+                num_threads=max(1, int(threads)), sample_rate=SAMPLE_RATE, feature_dim=80,
+                enable_endpoint_detection=True, **ENDPOINT_RULES)
+        super().__init__(recognizer=recognizer, convert=convert, threads=threads)
+        self.threads = max(1, int(threads))
+
+
 def draft_from_env(env: dict | None = None) -> DraftAsr:
     env = os.environ if env is None else env
     mode = (env.get("BREEZE_DRAFT_ASR") or "off").strip().lower()
     if mode in ("", "off", "0"):
         return NullDraft()
-    if mode != "sherpa":
-        raise ValueError("BREEZE_DRAFT_ASR 只能是 off 或 sherpa")
+    if mode not in ("sherpa", "xasr"):
+        raise ValueError("BREEZE_DRAFT_ASR 只能是 off、xasr 或 sherpa")
     try:
-        return SherpaParaformerDraft(env.get("BREEZE_DRAFT_MODEL_DIR"),
-                                     threads=int(env.get("BREEZE_DRAFT_THREADS") or 1))
+        threads = max(1, int(env.get("BREEZE_DRAFT_THREADS") or 1))
+    except ValueError:
+        threads = 1
+    try:
+        if mode == "xasr":
+            return XAsrDraft(env.get("BREEZE_DRAFT_MODEL_DIR"), threads=threads,
+                             precision=(env.get("BREEZE_DRAFT_PRECISION") or "auto").strip().lower())
+        return SherpaParaformerDraft(env.get("BREEZE_DRAFT_MODEL_DIR"), threads=threads)
     except DraftAsrUnavailable:
         return NullDraft()        # fail soft: live captions keep working without drafts
