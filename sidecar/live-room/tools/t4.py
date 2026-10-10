@@ -76,7 +76,7 @@ def _check_row(row, keys: dict, where: str, required=("id",)) -> None:
 
 def load_plan(source, env=None) -> dict:
     env = os.environ if env is None else env
-    plan = json.loads(Path(source).read_text(encoding="utf-8")) if not isinstance(source, dict) else json.loads(json.dumps(source))
+    plan = json.loads(Path(source).read_text(encoding="utf-8-sig")) if not isinstance(source, dict) else json.loads(json.dumps(source))
     if not isinstance(plan, dict):
         raise PlanError("plan 必須是 JSON 物件")
     for k, t in TOP_REQUIRED.items():

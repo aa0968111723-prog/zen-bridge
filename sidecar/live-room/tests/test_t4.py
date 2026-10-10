@@ -214,3 +214,10 @@ def test_mt_row_may_pick_a_gpu_server_and_layers():
     with pytest.raises(t4.PlanError):
         t4.load_plan({"segments": 1, "segment_s": 6.0, "reps": 1,
                       "mt": [{"id": "x", "gguf": "a", "ngl": "all"}]})
+
+
+def test_plan_file_with_a_bom_loads(tmp_path):
+    # PowerShell 5.1 Set-Content -Encoding UTF8 writes a BOM; the laptop T4b run tripped on it.
+    p = tmp_path / "plan.json"
+    p.write_bytes(b"\xef\xbb\xbf" + json.dumps({"segments": 1, "segment_s": 6.0, "reps": 1}).encode())
+    assert t4.load_plan(p)["segments"] == 1
