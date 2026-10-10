@@ -10,7 +10,7 @@ from app.ja_linebreak import break_ja_ex
 _CHINESE_ONLY = frozenset(
     "，：；"
     "这个们说为头门车东长书爱"
-    "這個們說為頭門車東長書愛"
+    "這們說"
 )
 _JAPANESE_ENDINGS = frozenset("。？！」』）】〉》〕〗〙〛")
 
@@ -18,6 +18,9 @@ _HANDWRITTEN_MT_OUTPUTS = (
     ("今天是晴天，我们去公园吧。", "今日は晴れです。公園へ行きましょう！"),
     ("请现在开始。", "それでは、始めましょう。"),
     ("不要担心，我们会解决这个问题。", "心配しないでください。こちらで解決します。"),
+    ("去东京。", "東京へ行きます。"),
+    ("这是个人意见。", "個人の意見です。"),
+    ("坐电车来。", "電車で来ました。"),
 )
 
 
@@ -84,6 +87,7 @@ def test_caption_without_japanese_sentence_ending_is_rejected(caption: str) -> N
 
 def test_display_line_over_16_fullwidth_columns_is_rejected() -> None:
     caption = "ア" * 17 + "。"
+    # The breaker keeps this oversized katakana token and its closing punctuation together.
     with pytest.raises(AssertionError, match="display line exceeds 16"):
         _assert_caption_quality(caption)
 
