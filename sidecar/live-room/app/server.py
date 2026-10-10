@@ -747,9 +747,14 @@ async def _push_form(request: Request, settings: Settings):
         sent = True
         return {"type": "http.request", "body": body, "more_body": False}
 
-    capped = Request(request.scope, replay)
+    scope = request.scope
+    def parse_in_worker():
+        async def parse():
+            capped = Request(scope, replay)
+            return await capped.form(max_files=1, max_fields=16, max_part_size=_FIELD_MAX)
+        return asyncio.run(parse())
     try:
-        return await capped.form(max_files=1, max_fields=16, max_part_size=_FIELD_MAX)
+        return await asyncio.to_thread(parse_in_worker)
     except HTTPException:
         raise
     except Exception as exc:
