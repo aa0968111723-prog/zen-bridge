@@ -52,6 +52,13 @@ function diffCell(it) {
   else td.append(el("span", "（新增）"), " ");
   td.append(el("ins", it.tgt_text, {class: "st-new"}));
   if (it.aliases && it.aliases.length) td.append(el("div", "別名：" + it.aliases.join("、")));
+  if (it.kind === "term" && it.tgt_lang === "ja") {
+    const was = it.base && it.base.reading;
+    const r = el("div", "讀音：");
+    if (was && was !== it.reading) r.append(el("del", was, {class: "st-old"}), " → ");
+    r.append(it.reading ? el("ins", it.reading, {class: "st-new"}) : el("span", was ? "（沿用）" : "（無）"));
+    td.append(r);
+  }
   if (it.conflict) td.append(el("div", "⚠ 送審後目標已變動", {class: "st-conflict"}));
   if (it.note) td.append(el("div", "備註：" + it.note, {class: "hint"}));
   return td;
@@ -90,6 +97,16 @@ function row(it) {
         await decide(it, "reject", {reason}); await load();
       }));
     }
+    act.append(button("編輯", async () => {
+      const tgt = prompt("提議的譯文／譯詞", it.tgt_text); if (tgt === null) return;
+      const json = {tgt_text: tgt};
+      if (it.kind === "term" && it.tgt_lang === "ja") {
+        const rd = prompt("讀音（平假名／片假名；留空 = 不設定）", it.reading || ""); if (rd === null) return;
+        json.reading = rd.trim() ? rd.trim() : null;
+      }
+      await api(`/staging/${it.id}`, {method: "PATCH", headers: {"If-Match": it.etag}, json});
+      banner(`已更新 #${it.id}`, true); await load();
+    }));
     act.append(button("撤回", async () => { if (!confirm("撤回這筆提議？")) return; await decide(it, "withdraw"); await load(); }));
   }
   tr.append(act);

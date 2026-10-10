@@ -32,6 +32,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import unicodedata
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -53,6 +54,24 @@ JA_GLOSSARY = "日文詞表"  # same name app.admin.info uses for the lazily cre
 
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]|</?think\b|<\|", re.IGNORECASE)
 _CJK = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")
+# ja reading (ruby): hiragana, katakana, prolonged mark ー, middle dot ・, iteration marks, spaces.
+_KANA = re.compile(r"^[\u3041-\u3096\u309d\u309e\u30a1-\u30fa\u30fb\u30fc\u30fd\u30fe ]+$")
+READING_MAX = 80                       # same limit as admin_term_meta.reading (0003)
+
+
+def clean_reading(v, kind: str, tgt_lang: str):
+    """None = no reading. Only a ja term can carry one; for en / TM it is refused (422), not ignored,
+    so a caller never believes a reading was saved when it was not."""
+    if v is None:
+        return None
+    if kind != "term" or tgt_lang != "ja":
+        raise StagingError("reading（讀音）只用於日文詞條（kind=term、tgt_lang=ja）", code="invalid_reading")
+    if not isinstance(v, str):
+        raise StagingError("reading 必須是字串", code="invalid_reading")
+    s = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", v)).strip()    # half-width kana -> full-width
+    if not (1 <= len(s) <= READING_MAX) or not _KANA.match(s):
+        raise StagingError(f"reading 需 1–{READING_MAX} 字，只能用平假名／片假名（含ー・）", code="invalid_reading")
+    return s
 
 
 class StagingError(feedback.FeedbackError):
@@ -115,7 +134,7 @@ def _glossary_lookup(c: sqlite3.Connection, lang: str) -> int | None:
     return int(row[0]) if row else None
 
 
-def validate(kind: str, tgt_lang: str, src_text, tgt_text, aliases=None, note=None) -> dict:
+def validate(kind: str, tgt_lang: str, src_text, tgt_text, aliases=None, note=None, reading=None) -> dict:
     if kind not in KINDS:
         raise StagingError("kind 只能是 tm 或 term")
     if tgt_lang not in TGT_LANGS:
@@ -131,7 +150,8 @@ def validate(kind: str, tgt_lang: str, src_text, tgt_text, aliases=None, note=No
             from app.translate import validate_caption_en
             if validate_caption_en(tgt, zh=zh) is None:
                 raise StagingError("英譯必須是單行純英文（不能含中文、多段、控制字元或模型標記）")
-        return {"src_text": zh, "tgt_text": tgt, "aliases": [], "note": note}
+        clean_reading(reading, kind, tgt_lang)                  # always refuses a reading for TM
+        return {"src_text": zh, "tgt_text": tgt, "aliases": [], "note": note, "reading": None}
     zh = _clean(src_text, "zh", 1, 20)
     if _traditional(zh) != zh:
         # glossary.py: a simplified canonical never matches, so it would be a dead term.
@@ -148,7 +168,8 @@ def validate(kind: str, tgt_lang: str, src_text, tgt_text, aliases=None, note=No
         a = _clean(a, "別名", 1, 20)
         if a != zh and a not in al:
             al.append(a)
-    return {"src_text": zh, "tgt_text": tgt, "aliases": al, "note": note}
+    return {"src_text": zh, "tgt_text": tgt, "aliases": al, "note": note,
+            "reading": clean_reading(reading, kind, tgt_lang)}
 
 
 def target_key(c: sqlite3.Connection, kind: str, tgt_lang: str, src_text: str) -> str:
@@ -166,11 +187,13 @@ def snapshot(c: sqlite3.Connection, kind: str, tgt_lang: str, src_text: str):
     gid = _glossary_lookup(c, tgt_lang)       # read-only: a GET must never create the glossary
     if gid is None:
         return None
-    r = c.execute("SELECT id, en, aliases, locked, status, rev FROM glossary_terms WHERE glossary_id=? AND zh=?",
+    r = c.execute("SELECT t.id, t.en, t.aliases, t.locked, t.status, t.rev, m.reading FROM glossary_terms t "
+                  "LEFT JOIN admin_term_meta m ON m.term_id = t.id WHERE t.glossary_id=? AND t.zh=?",
                   (gid, src_text)).fetchone()
     if not r:
         return None
-    return {"id": r[0], "en": r[1], "aliases": json.loads(r[2] or "[]"), "locked": r[3], "status": r[4], "rev": r[5]}
+    return {"id": r[0], "en": r[1], "aliases": json.loads(r[2] or "[]"), "locked": r[3], "status": r[4], "rev": r[5],
+            "reading": r[6]}
 
 
 def item_out(r) -> dict:
@@ -206,7 +229,7 @@ def _audit(c, item_id: int, action: str, actor: dict, before=None, after=None, n
 
 def _public(r) -> dict:
     return {"state": r["state"], "rev": r["rev"], "tgt_text": r["tgt_text"],
-            "aliases": json.loads(r["aliases"] or "[]"), "note": r["note"]}
+            "aliases": json.loads(r["aliases"] or "[]"), "note": r["note"], "reading": r["reading"]}
 
 
 def check_etag(row, if_match: str | None) -> None:
@@ -238,11 +261,11 @@ def _may_touch(row, actor: dict) -> None:
 
 # ---------------------------------------------------------------- stage
 def stage(c: sqlite3.Connection, *, kind: str, tgt_lang: str = "en", src_text, tgt_text, aliases=None, note=None,
-          actor: dict, correction_id: int | None = None, segment_id: str | None = None,
+          actor: dict, reading=None, correction_id: int | None = None, segment_id: str | None = None,
           room_id: str | None = None) -> tuple[dict, bool]:
     """Create a pending item. Returns (item, created). An identical pending proposal for the same
     target is returned as is (created=False); a different one supersedes the older pending item."""
-    v = validate(kind, tgt_lang, src_text, tgt_text, aliases, note)
+    v = validate(kind, tgt_lang, src_text, tgt_text, aliases, note, reading)
     if segment_id is not None:
         seg = c.execute("SELECT room_id FROM segments WHERE id=?", (segment_id,)).fetchone()
         if not seg:
@@ -254,17 +277,19 @@ def stage(c: sqlite3.Connection, *, kind: str, tgt_lang: str = "en", src_text, t
     base = snapshot(c, kind, tgt_lang, v["src_text"])
     old = c.execute("SELECT * FROM staging_items WHERE kind=? AND tgt_lang=? AND target_key=? AND state='pending'",
                     (kind, tgt_lang, key)).fetchone()
-    if old is not None and old["tgt_text"] == v["tgt_text"] and json.loads(old["aliases"]) == v["aliases"]:
+    if (old is not None and old["tgt_text"] == v["tgt_text"] and json.loads(old["aliases"]) == v["aliases"]
+            and old["reading"] == v["reading"]):
         return item_out(old), False
     if old is not None:
         c.execute("UPDATE staging_items SET state='superseded', rev=rev+1, updated_at=unixepoch('subsec') WHERE id=?",
                   (old["id"],))
     c.execute(
         """INSERT INTO staging_items(kind, tgt_lang, src_text, tgt_text, aliases, note, target_key, base_json, base_sig,
-                                     correction_id, segment_id, room_id, author_id, author_via)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                     correction_id, segment_id, room_id, author_id, author_via, reading)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (kind, tgt_lang, v["src_text"], v["tgt_text"], json.dumps(v["aliases"], ensure_ascii=False), v["note"], key,
-         _dumps(base), _sig(base), correction_id, segment_id, room_id, actor.get("user_id"), actor.get("via")))
+         _dumps(base), _sig(base), correction_id, segment_id, room_id, actor.get("user_id"), actor.get("via"),
+         v["reading"]))
     new_id = int(c.execute("SELECT last_insert_rowid()").fetchone()[0])
     row = get_row(c, new_id)
     _audit(c, new_id, "create", actor, before=base, after=_public(row))
@@ -334,7 +359,8 @@ def stage_from_correction(c: sqlite3.Connection, corr_id: int, *, actor: dict, t
         lang = str(propose.get("tgt_lang") or "en")
         item, created = stage(c, kind="term", tgt_lang=lang, src_text=propose.get("zh"),
                         tgt_text=propose.get("en") if lang == "en" else (propose.get("target") or propose.get("en")),
-                        aliases=propose.get("aliases"), actor=actor, correction_id=corr_id, segment_id=seg,
+                        aliases=propose.get("aliases"), reading=propose.get("reading"), actor=actor,
+                        correction_id=corr_id, segment_id=seg,
                         note=f"from correction {corr_id}")
         out["term_staging_id"] = item["id"]
         if auto and created:
@@ -365,8 +391,10 @@ def _write_term(c, row, actor: dict) -> tuple[int, dict, int]:
     lang, zh, tgt = row["tgt_lang"], row["src_text"], row["tgt_text"]
     aliases = json.loads(row["aliases"] or "[]")
     gid = glossary_id_for(c, lang)
-    cur = c.execute("SELECT id, en, aliases, locked FROM glossary_terms WHERE glossary_id=? AND zh=?", (gid, zh)).fetchone()
-    if cur and cur[3] and cur[1] != tgt:
+    reading = row["reading"]
+    cur = c.execute("SELECT t.id, t.en, t.aliases, t.locked, m.reading FROM glossary_terms t "
+                    "LEFT JOIN admin_term_meta m ON m.term_id = t.id WHERE t.glossary_id=? AND t.zh=?", (gid, zh)).fetchone()
+    if cur and cur[3] and (cur[1] != tgt or (reading is not None and reading != cur[4])):
         raise StagingError("這個詞已鎖定；請先在詞表解除鎖定再核准", code="term_locked", status=409, term_id=cur[0])
     if cur is None:
         c.execute("INSERT INTO glossary_terms(glossary_id, zh, en, aliases, locked, source, status, note) "
@@ -382,6 +410,11 @@ def _write_term(c, row, actor: dict) -> tuple[int, dict, int]:
                 merged.append(a)
         c.execute("UPDATE glossary_terms SET en=?, aliases=?, status='active', rev=rev+1, updated_at=unixepoch('subsec') "
                   "WHERE id=?", (tgt, json.dumps(merged, ensure_ascii=False), term_id))
+    if reading is not None:
+        # round4 ja ruby: admin_term_meta.reading; 0003 triggers copy it to glossary_term_targets.reading.
+        # No reading on the item keeps the term's current reading.
+        c.execute("INSERT INTO admin_term_meta(term_id, reading) VALUES (?,?) "
+                  "ON CONFLICT(term_id) DO UPDATE SET reading=excluded.reading", (term_id, reading))
     c.execute("UPDATE glossaries SET version=version+1, updated_at=unixepoch('subsec') WHERE id=?", (gid,))
     version = int(c.execute("SELECT version FROM glossaries WHERE id=?", (gid,)).fetchone()[0])
     c.execute("INSERT INTO events(kind, actor_id, payload) VALUES ('glossary.active', ?, ?)",
@@ -458,7 +491,7 @@ def edit(c: sqlite3.Connection, item_id: int, *, actor: dict, if_match: str | No
     _may_touch(row, actor)
     check_etag(row, if_match)
     _transition(row, "pending")
-    allowed = {"tgt_text", "aliases", "note", "rebase"}
+    allowed = {"tgt_text", "aliases", "note", "rebase", "reading"}
     extra = set(body) - allowed
     if extra or not (set(body) & allowed):
         raise StagingError(f"只能修改 {sorted(allowed)}")
@@ -466,14 +499,15 @@ def edit(c: sqlite3.Connection, item_id: int, *, actor: dict, if_match: str | No
         raise StagingError("rebase 必須是 true/false")
     v = validate(row["kind"], row["tgt_lang"], row["src_text"], body.get("tgt_text", row["tgt_text"]),
                  body.get("aliases", json.loads(row["aliases"] or "[]")) if row["kind"] == "term" else None,
-                 body.get("note", row["note"]))
+                 body.get("note", row["note"]), body.get("reading", row["reading"]))
     base_json, base_sig = row["base_json"], row["base_sig"]
     if body.get("rebase") is True:
         base = snapshot(c, row["kind"], row["tgt_lang"], row["src_text"])
         base_json, base_sig = _dumps(base), _sig(base)
-    c.execute("UPDATE staging_items SET tgt_text=?, aliases=?, note=?, base_json=?, base_sig=?, rev=rev+1, "
+    c.execute("UPDATE staging_items SET tgt_text=?, aliases=?, note=?, reading=?, base_json=?, base_sig=?, rev=rev+1, "
               "updated_at=unixepoch('subsec') WHERE id=?",
-              (v["tgt_text"], json.dumps(v["aliases"], ensure_ascii=False), v["note"], base_json, base_sig, row["id"]))
+              (v["tgt_text"], json.dumps(v["aliases"], ensure_ascii=False), v["note"], v["reading"], base_json, base_sig,
+               row["id"]))
     new = get_row(c, row["id"])
     _audit(c, row["id"], "edit", actor, before=_public(row), after={**_public(new), "rebased": body.get("rebase") is True})
     return item_out(new)
@@ -485,7 +519,8 @@ def detail(c: sqlite3.Connection, item_id: int) -> dict:
     current = snapshot(c, row["kind"], row["tgt_lang"], row["src_text"])
     out["current"] = current
     out["conflict"] = row["state"] == "pending" and _sig(current) != row["base_sig"]
-    out["diff"] = {"before": current, "after": {"tgt_text": row["tgt_text"], "aliases": json.loads(row["aliases"])}}
+    out["diff"] = {"before": current, "after": {"tgt_text": row["tgt_text"], "aliases": json.loads(row["aliases"]),
+                                                "reading": row["reading"]}}
     out["audit"] = [{**dict(a), "before": json.loads(a["before_json"]) if a["before_json"] else None,
                      "after": json.loads(a["after_json"]) if a["after_json"] else None}
                     for a in c.execute("SELECT id, action, actor_id, actor_via, at, before_json, after_json, note, mode "
@@ -583,7 +618,8 @@ def build_router(ctx) -> APIRouter:
         key = ctx.idem_key(request)
         body, raw = await read_json(request)
         route = f"POST /staging|{caller(user)}"
-        unknown = set(body) - {"kind", "tgt_lang", "src_text", "tgt_text", "aliases", "note", "segment_id", "room_id"}
+        unknown = set(body) - {"kind", "tgt_lang", "src_text", "tgt_text", "aliases", "note", "segment_id", "room_id",
+                               "reading"}
         if unknown:
             raise Problem(422, "invalid", f"不認得的欄位：{sorted(unknown)}")
         seg = body.get("segment_id")
@@ -600,7 +636,8 @@ def build_router(ctx) -> APIRouter:
                     return replay
                 item, created = stage(c, kind=str(body.get("kind") or ""), tgt_lang=str(body.get("tgt_lang") or "en"),
                                       src_text=body.get("src_text"), tgt_text=body.get("tgt_text"),
-                                      aliases=body.get("aliases"), note=body.get("note"), actor=user,
+                                      aliases=body.get("aliases"), note=body.get("note"), reading=body.get("reading"),
+                                      actor=user,
                                       segment_id=seg, room_id=room)
                 status = 201 if created else 200
                 headers = {"Location": f"{ctx.api}/staging/{item['id']}", "ETag": item["etag"]}

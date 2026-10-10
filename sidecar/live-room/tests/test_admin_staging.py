@@ -72,7 +72,7 @@ def test_migration_up_from_existing_v3_db(tmp_path):
     c.execute("INSERT INTO tm_units(src_text, src_norm, tgt_text, src_hash) VALUES ('佛法', '佛法', 'Dharma', ?)",
               (ztm.src_hash("佛法"),))
     c.close()
-    assert db.migrate(p) == db.SCHEMA_VERSION == 11
+    assert db.migrate(p) == db.SCHEMA_VERSION == 12
     assert (tmp_path / "pre-migrate-v3.sqlite3").is_file()     # data existed -> verified snapshot first
     c = db.connect(p)
     try:
@@ -492,7 +492,8 @@ def test_staging_page_is_served_and_linked(env):
     assert "script-src 'self'" in r.headers["content-security-policy"]
     js = cl.get("/admin/staging/staging.js")
     assert js.status_code == 200 and "javascript" in js.headers["content-type"]
-    for needle in ('"X-Zen-CSRF"', '"If-Match"', '"Idempotency-Key"', "/staging/bulk-approve", "cursor"):
+    for needle in ('"X-Zen-CSRF"', '"If-Match"', '"Idempotency-Key"', "/staging/bulk-approve", "cursor", "reading",
+                   'method: "PATCH"'):
         assert needle in js.text, needle
     assert cl.get("/admin/staging/staging.css").headers["content-type"].startswith("text/css")
     bad = cl.get("/admin/staging/../server.py")
@@ -621,3 +622,64 @@ def test_self_auto_mode_refuses_someone_elses_item(env, roles):  # noqa: F811
         c.execute("ROLLBACK")
     finally:
         c.close()
+
+
+# ------------------------------------------------------------------ ja reading (round4 ruby)
+def test_reading_validation_rules(env, roles):  # noqa: F811
+    cl, ed = env["client"], roles["editor"]
+    base = {"kind": "term", "tgt_lang": "ja", "src_text": "公案", "tgt_text": "公案"}
+    for bad in ("", "kouan", "公案", "こう\u0000あん", "あ" * 81, 123):
+        r = cl.post(URL, json={**base, "reading": bad}, headers=ed)
+        assert r.status_code == 422 and r.json()["code"] == "invalid_reading", (bad, r.text)
+    for wrong in ({"kind": "term", "tgt_lang": "en", "src_text": "公案", "tgt_text": "koan"},
+                  {"kind": "tm", "tgt_lang": "ja", "src_text": "佛法", "tgt_text": "仏法"}):
+        r = cl.post(URL, json={**wrong, "reading": "こうあん"}, headers=ed)   # refused, never silently dropped
+        assert r.status_code == 422 and r.json()["code"] == "invalid_reading"
+    r = cl.post(URL, json={**base, "reading": " ｺｳｱﾝ "}, headers=ed)          # half-width -> NFKC full-width
+    assert r.status_code == 201 and r.json()["reading"] == "コウアン"
+    assert staging.clean_reading("ぶっ・ぽう ー", "term", "ja") == "ぶっ・ぽう ー"
+    c = db.connect(env["path"])
+    try:
+        with pytest.raises(sqlite3.IntegrityError):                     # DB CHECK backs the rule up
+            c.execute("UPDATE staging_items SET tgt_lang='en' WHERE reading IS NOT NULL")
+    finally:
+        c.close()
+
+
+def test_reading_carried_to_glossary_on_approve_and_editable(env, roles):  # noqa: F811
+    cl = env["client"]
+    it = new_item(cl, roles["editor"], tgt_lang="ja", src_text="公案", tgt_text="公案", reading="こうあん")
+    assert it["reading"] == "こうあん"
+    e = cl.patch(f"{URL}/{it['id']}", json={"reading": "コウアン"}, headers={**roles["editor"], "if-match": it["etag"]})
+    assert e.status_code == 200 and e.json()["reading"] == "コウアン"
+    assert cl.patch(f"{URL}/{it['id']}", json={"reading": "x"}, headers={**roles["editor"], "if-match": e.headers["etag"]}
+                    ).status_code == 422
+    d = cl.get(f"{URL}/{it['id']}", headers=roles["editor"]).json()
+    assert d["diff"]["after"]["reading"] == "コウアン" and d["audit"][-1]["after"]["reading"] == "コウアン"
+    r = approve(cl, it["id"], roles["admin"])
+    assert r.status_code == 200, r.text
+    tid = r.json()["target_id"]
+    assert q(env, "SELECT reading FROM admin_term_meta WHERE term_id=?", (tid,))[0][0] == "コウアン"
+    assert q(env, "SELECT tgt_lang, text, reading FROM glossary_term_targets WHERE term_id=?", (tid,))[0] == \
+        ("ja", "公案", "コウアン")                                         # 0003 trigger sync
+    assert r.json()["target"]["reading"] == "コウアン"
+    # a later item without reading keeps the stored one; a different reading on a locked term is refused
+    it2 = new_item(cl, roles["editor"], tgt_lang="ja", src_text="公案", tgt_text="こうあん")
+    assert approve(cl, it2["id"], roles["admin"]).status_code == 200
+    assert q(env, "SELECT reading FROM admin_term_meta WHERE term_id=?", (tid,))[0][0] == "コウアン"
+    c = db.connect(env["path"])
+    c.execute("UPDATE glossary_terms SET locked=1 WHERE id=?", (tid,))
+    c.close()
+    it3 = new_item(cl, roles["editor"], tgt_lang="ja", src_text="公案", tgt_text="こうあん", reading="こうあん")
+    r = approve(cl, it3["id"], roles["admin"], override_conflict=True)
+    assert r.status_code == 409 and r.json()["code"] == "term_locked"
+    assert q(env, "SELECT reading FROM admin_term_meta WHERE term_id=?", (tid,))[0][0] == "コウアン"
+
+
+def test_reading_from_correction_proposal(env, roles):  # noqa: F811
+    r = env["client"].post(f"{API}/corrections", headers=roles["editor"], json={
+        "segment_id": "s1-1", "target_type": "translation", "text": "Today, causes and conditions ripen.",
+        "propose_term": {"zh": "因緣", "tgt_lang": "ja", "target": "因縁", "reading": "いんねん"}})
+    assert r.status_code == 201, r.text
+    sid = r.json()["term_staging_id"]
+    assert q(env, "SELECT tgt_lang, tgt_text, reading FROM staging_items WHERE id=?", (sid,))[0] == ("ja", "因縁", "いんねん")
