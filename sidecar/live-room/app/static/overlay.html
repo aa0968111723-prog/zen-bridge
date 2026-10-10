@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>zen-bridge overlay</title>
+<style>
+html, body {
+  margin: 0; padding: 0; width: 100%; height: 100%;
+  background: transparent !important; overflow: hidden;
+}
+body { scrollbar-width: none; }
+body::-webkit-scrollbar { display: none; }
+#zen-overlay {
+  --zo-size: 48px; --zo-color: #ffffff; --zo-margin: 40px; --zo-maxw: 90vw; --zo-align: center;
+  --zo-shadow: -3px -3px 0 #000, 0 -3px 0 #000, 3px -3px 0 #000, -3px 0 0 #000, 3px 0 0 #000, -3px 3px 0 #000, 0 3px 0 #000, 3px 3px 0 #000;
+  position: fixed; left: 50%; transform: translateX(-50%);
+  width: var(--zo-maxw); box-sizing: border-box;
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 0.15em;
+  font-size: var(--zo-size); line-height: 1.3; font-weight: 700;
+  color: var(--zo-color); text-shadow: var(--zo-shadow); text-align: var(--zo-align);
+  /* Two caption lines, each up to two visual rows; older text is clipped at the top. */
+  max-height: calc(var(--zo-size) * 1.3 * 4 + 0.6em); overflow: hidden;
+  pointer-events: none; user-select: none;
+}
+#zen-overlay[data-pos="bottom"] { bottom: var(--zo-margin); }
+#zen-overlay[data-pos="top"] { top: var(--zo-margin); }
+#zen-overlay[data-pos="middle"] { top: 50%; transform: translate(-50%, -50%); }
+.zo-line { overflow-wrap: anywhere; }
+.zo-line [lang="en"] { word-break: normal; hyphens: manual; }
+.zo-line [lang="ja"] { line-break: strict; word-break: normal; }
+.zo-line [lang="zh-Hant"] { line-break: strict; }
+.zo-zh { font-size: 0.8em; }
+</style>
+</head>
+<body>
+<div id="zen-overlay" data-pos="bottom" data-lang="en" aria-live="polite"></div>
+<script type="module" src="/static/overlay.js"></script>
+</body>
+</html>
