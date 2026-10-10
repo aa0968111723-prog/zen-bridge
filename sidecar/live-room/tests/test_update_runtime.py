@@ -55,3 +55,22 @@ def test_compact_detects_modified_tools_even_with_unchanged_size(tmp_path):
     assert verify_files(tmp_path, expected['fingerprint'], expected['tools'])
     (tmp_path / 'tools/ffmpeg.exe').write_bytes(b'evil')
     assert not verify_files(tmp_path, expected['fingerprint'], expected['tools'])
+
+
+def test_compact_requires_matching_gpu_files_not_just_cpu_tools(tmp_path):
+    runtime(tmp_path)
+    native = tmp_path/'tools/whisper-vulkan'
+    native.mkdir()
+    files = {}
+    for name in ('whisper-server.exe','ggml-vulkan.dll'):
+        data = b'native fixture'
+        (native/name).write_bytes(data)
+        files[name] = {'size':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+    manifest = tmp_path/'desktop/desktop-manifest.json'
+    manifest.write_text(json.dumps({'whisper_vulkan':{'files':files}}))
+    expected = descriptor(tmp_path)
+    assert verify_files(tmp_path,expected['fingerprint'],expected['tools'])
+    (native/'ggml-vulkan.dll').write_bytes(b'x'*len(data))
+    assert not verify_files(tmp_path,expected['fingerprint'],expected['tools'])
+    (native/'ggml-vulkan.dll').unlink()
+    assert not verify_files(tmp_path,expected['fingerprint'],expected['tools'])

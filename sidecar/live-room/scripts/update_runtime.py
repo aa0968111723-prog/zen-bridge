@@ -60,6 +60,8 @@ def probably_compatible(root: Path, value: dict) -> bool:
     try:
         if not valid_descriptor(value) or fingerprint(root) != value['fingerprint']:
             return False
+        if not native_matches(root, full=False):
+            return False
         bootstrap = json.loads((root / 'bootstrap-manifest.json').read_text(encoding='utf-8-sig'))
         python = root / '.python' / bootstrap['python']['version'] / 'tools/python.exe'
         spec = json.loads((root / 'runtime-manifest.json').read_text(encoding='utf-8-sig'))['assets']['model']
@@ -71,8 +73,32 @@ def probably_compatible(root: Path, value: dict) -> bool:
         return False
 
 
+def native_matches(root: Path, *, full: bool) -> bool:
+    spec = json.loads((root/'desktop/desktop-manifest.json').read_text(encoding='utf-8-sig')).get('whisper_vulkan')
+    if spec is None:
+        return True  # Previously installed versions did not include this runtime.
+    files = spec.get('files') if isinstance(spec, dict) else None
+    if not isinstance(files, dict) or not 2 <= len(files) <= 128:
+        return False
+    for name, info in files.items():
+        if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9_.-]+',name) or name in ('.','..'):
+            return False
+        path = root/'tools/whisper-vulkan'/name
+        if not isinstance(info,dict) or not isinstance(info.get('size'),int) or not 0<info['size']<100*1024**2:
+            return False
+        if not isinstance(info.get('sha256'),str) or not re.fullmatch(r'[a-f0-9]{64}',info['sha256']):
+            return False
+        if not path.is_file() or path.stat().st_size != info['size']:
+            return False
+        if full and file_digest(path) != info['sha256']:
+            return False
+    return True
+
+
 def verify_files(root: Path, expected: str, tools: dict | None = None) -> bool:
     if not re.fullmatch('[a-f0-9]{64}', expected) or fingerprint(root) != expected:
+        return False
+    if not native_matches(root, full=True):
         return False
     spec = json.loads((root / 'runtime-manifest.json').read_text(encoding='utf-8-sig'))['assets']['model']
     name = spec['name']

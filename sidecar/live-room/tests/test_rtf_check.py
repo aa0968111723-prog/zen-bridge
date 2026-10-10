@@ -426,17 +426,29 @@ def test_two_workers_start_together_instead_of_waiting_out_each_slice():
     slices = [(Path(f"{index}.wav"), 0.2) for index in range(4)]
     starts: list[float] = []
     gate = threading.Lock()
+    both = threading.Event()
+    state = {"active": 0, "max_active": 0}
 
+    # Windows CI flake root cause: "second start < 0.15 s after the first" was a wall-clock proxy for
+    # concurrency (thread start + 15.6 ms ticks on a busy runner). Check the property itself: the second
+    # slice starts while the first is still inside transcribe. Serialised workers never reach 2 active.
     def transcribe(path, prompt):
         del path, prompt
         with gate:
             starts.append(time.monotonic())
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            if state["active"] >= 2:
+                both.set()
+        both.wait(timeout=2.0)
         time.sleep(0.2)
+        with gate:
+            state["active"] -= 1
         return AsrResult(ok=True, text="ok")
 
     report = rtf_check.pace_transcriptions(transcribe, slices, workers=2, pace_s=0.05)
     assert len(report["pairs"]) == 4
-    assert starts[1] - starts[0] < 0.15
+    assert state["max_active"] == 2
     assert report["max_backlog_s"] > 0
     assert report["cpu_source"] == "UNKNOWN"
 

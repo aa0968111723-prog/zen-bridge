@@ -28,7 +28,7 @@ log = logging.getLogger("zen.admin.db")
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 IDENTITY_SCHEMA_PATH = Path(__file__).with_name("identity_schema.sql")
 BASELINE_VERSION = 2          # schema.sql creates v2; never edit it (DBA D6) - add a migration
-SCHEMA_VERSION = 3            # round3 C3: = highest migrations/NNNN_*.sql
+SCHEMA_VERSION = 12           # round3 C3: = highest migrations/NNNN_*.sql (0004–0009 reserved; backend staging = 0010+)
 MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 IDENTITY_VERSION = 1
 MIN_SQLITE = (3, 42, 0)   # unixepoch('subsec'); FTS5 rank=1 integrity-check verified on 3.46
@@ -51,14 +51,23 @@ def to_uni(text: str) -> str:
 
 
 # ---------------------------------------------------------------- locations
+def _filesystem_path(value: str | Path) -> Path:
+    """Use Win32 extended local paths without requiring a system policy change."""
+    path = Path(value)
+    raw = str(path)
+    if os.name == 'nt' and len(raw) >= 240 and re.match(r'^[A-Za-z]:[\\/]', raw):
+        return Path('\\\\?\\' + os.path.abspath(raw))
+    return path
+
+
 def data_dir(env: dict | None = None) -> Path:
     env = os.environ if env is None else env
     explicit = (env.get("ZEN_DATA_DIR") or "").strip()
     if explicit:
-        return Path(explicit)
+        return _filesystem_path(explicit)
     local = (env.get("LOCALAPPDATA") or "").strip()
     if local:
-        return Path(local) / "ZenBridge"
+        return _filesystem_path(Path(local) / "ZenBridge")
     xdg = (env.get("XDG_DATA_HOME") or "").strip()
     base = Path(xdg) if xdg else Path.home() / ".local" / "share"
     return base / "ZenBridge"
@@ -67,24 +76,26 @@ def data_dir(env: dict | None = None) -> Path:
 def default_db_path(env: dict | None = None) -> Path:
     env = os.environ if env is None else env
     explicit = (env.get("ZEN_DB_PATH") or "").strip()
-    return Path(explicit) if explicit else data_dir(env) / "data" / "zen.sqlite3"
+    return _filesystem_path(explicit if explicit else data_dir(env) / "data" / "zen.sqlite3")
 
 
 def identity_db_path(env: dict | None = None) -> Path:
     env = os.environ if env is None else env
     explicit = (env.get("ZEN_IDENTITY_DB_PATH") or "").strip()
-    return Path(explicit) if explicit else data_dir(env) / "data" / "zen-identity.sqlite3"
+    return _filesystem_path(explicit if explicit else data_dir(env) / "data" / "zen-identity.sqlite3")
 
 
 def backup_dir(env: dict | None = None) -> Path:
     env = os.environ if env is None else env
     explicit = (env.get("ZEN_BACKUP_DIR") or "").strip()
-    return Path(explicit) if explicit else data_dir(env) / "backups"
+    return _filesystem_path(explicit if explicit else data_dir(env) / "backups")
 
 
 def check_db_location(path: str | Path) -> None:
     """Refuse UNC/network paths and cloud-synced folders for a WAL database (DBA §5.5)."""
     raw = str(path)
+    if re.match(r'^\\\\\?\\[A-Za-z]:\\', raw):
+        raw = raw[4:]
     if raw.startswith("\\\\") or raw.startswith("//"):
         raise SchemaError(f"資料庫不能放在網路路徑：{raw}")
     if _SYNCED.search(raw.replace("/", "\\") + "\\"):
@@ -129,7 +140,7 @@ def check_sqlite_version(version: str | None = None) -> None:
 # ---------------------------------------------------------------- connections
 def connect(path: str | Path, *, readonly: bool = False, timeout_ms: int = 5000) -> sqlite3.Connection:
     """Per-connection PRAGMAs every time (DBA §5.1). Autocommit; callers BEGIN IMMEDIATE."""
-    p = Path(path)
+    p = _filesystem_path(path)
     if readonly:
         conn = sqlite3.connect(f"{p.resolve().as_uri()}?mode=ro", uri=True, timeout=0,
                                check_same_thread=False, isolation_level=None)
@@ -286,11 +297,22 @@ def migrate(path: str | Path) -> int:
     """Create or verify zen.sqlite3 at schema v2. Idempotent and atomic. Returns user_version."""
     check_sqlite_version()
     check_db_location(path)
-    conn = connect(path, timeout_ms=30000)
-    try:
-        return migrate_conn(conn)
-    finally:
-        conn.close()
+    for attempt in range(6):
+        conn = connect(path, timeout_ms=30000)
+        try:
+            return migrate_conn(conn)
+        except sqlite3.OperationalError as exc:
+            # Concurrent first start (architect A3): another process can be creating the FTS5 tables while
+            # this connection prepares against them. FTS5's xConnect then fails as "vtable constructor
+            # failed" instead of waiting on busy_timeout. Each step is one BEGIN IMMEDIATE, so a fresh
+            # connection (fresh schema) retries safely and sees the other process's committed steps.
+            if "vtable constructor failed" not in str(exc) or attempt == 5:
+                raise
+            log.warning("migrate: %s; retrying with a fresh connection (%d)", exc, attempt + 1)
+            time.sleep(0.05 * (attempt + 1))
+        finally:
+            conn.close()
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 # ---------------------------------------------------------------- stepwise migrations (round3 C3)
@@ -298,16 +320,21 @@ _STEP_RE = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
 
 
 def migration_steps(directory: Path | None = None) -> list[tuple[int, str, Path]]:
-    """[(version, name, path)] for migrations/NNNN_name.sql, NNNN > baseline, contiguous."""
+    """[(version, name, path)] for migrations/NNNN_name.sql, NNNN > baseline, ascending.
+
+    The first step must be baseline+1. Later numbers may skip reserved ranges (zen-impl BRIEF:
+    each agent numbers from its own block, e.g. backend staging = 0010), but a number may appear
+    only once. run_migrations refuses a step numbered below the DB's version that was never applied,
+    so a late-merged lower number can never be skipped silently."""
     d = Path(directory or MIGRATIONS_DIR)
     steps = []
     for p in sorted(d.glob("*.sql")) if d.is_dir() else []:
         m = _STEP_RE.match(p.name)
         if m and int(m.group(1)) > BASELINE_VERSION:
             steps.append((int(m.group(1)), m.group(2), p))
-    want = list(range(BASELINE_VERSION + 1, BASELINE_VERSION + 1 + len(steps)))
-    if [v for v, _, _ in steps] != want:
-        raise SchemaError(f"遷移檔編號不連續：{[p.name for _, _, p in steps]}")
+    nums = [v for v, _, _ in steps]
+    if len(set(nums)) != len(nums) or (nums and nums[0] != BASELINE_VERSION + 1):
+        raise SchemaError(f"遷移檔編號重複或不是從 v{BASELINE_VERSION + 1} 開始：{[p.name for _, _, p in steps]}")
     return steps
 
 
@@ -317,7 +344,7 @@ def snapshot_before_migrate(conn: sqlite3.Connection, version: int) -> Path | No
     main_file = conn.execute("PRAGMA database_list").fetchone()[2]
     if not main_file:
         return None                        # :memory:
-    base = Path(main_file).with_name(f"pre-migrate-v{version}.sqlite3")
+    base = _filesystem_path(main_file).with_name(f"pre-migrate-v{version}.sqlite3")
     dest = base if not base.exists() else base.with_name(f"pre-migrate-v{version}-{int(time.time() * 1000)}.sqlite3")
     conn.execute("VACUUM INTO ?", (str(dest),))
     _verify_copy(dest)
@@ -346,6 +373,11 @@ def run_migrations(conn: sqlite3.Connection, *, target: int | None = None, direc
         raise SchemaError(f"資料庫 schema v{version} 比程式 v{target} 新，請更新程式；"
                           f"或用更新前的快照 pre-migrate-v{target}.sqlite3 還原（python -m app.admin.restore）")
     _verify_steps(conn, steps)
+    applied = {r[0] for r in conn.execute("SELECT version FROM schema_migrations WHERE version > ?", (BASELINE_VERSION,))}
+    late = [p.name for v, _, p in steps if v <= version and v not in applied]
+    if late:
+        raise SchemaError(f"遷移檔 {late} 的編號低於資料庫目前的 v{version} 卻從未套用；"
+                          f"不要插入比已發布版本更小的編號，請改成下一個未使用的號碼")
     todo = [st for st in steps if version < st[0] <= target]
     if not todo:
         return version

@@ -13,14 +13,16 @@ def test_migrate_cli_upgrades_v2_once_and_keeps_pre_migrate_snapshot(tmp_path, c
     snapshot = tmp_path / "pre-migrate-v2.sqlite3"
 
     assert migrate.main(["--db", str(path)]) == 0
-    assert db.SCHEMA_VERSION == 3
+    assert db.SCHEMA_VERSION == 12
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 12
     assert snapshot.is_file()
     with sqlite3.connect(snapshot) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
     assert migrate.main(["--db", str(path)]) == 0
     assert sorted(p.name for p in tmp_path.glob("pre-migrate-*")) == ["pre-migrate-v2.sqlite3"]
-    assert "schema v3 OK" in capsys.readouterr().out
+    assert "schema v12 OK" in capsys.readouterr().out
 
 
 def test_migrate_cli_reports_step_checksum_mismatch(tmp_path, capsys):
@@ -49,7 +51,11 @@ def test_windows_long_localappdata_path_can_migrate(tmp_path):
     local = tmp_path
     for index in range(4):
         local = local / (f"segment-{index}-" + "x" * 65)
-    local.mkdir(parents=True)
+    # The bundled interpreter must also work when OS LongPathsEnabled is off.
+    # Prepare the fixture with the Win32 prefix; the product normalizes the
+    # unprefixed LOCALAPPDATA input itself.
+    from pathlib import Path
+    Path('\\\\?\\' + str(local.resolve())).mkdir(parents=True)
     path = db.default_db_path({"LOCALAPPDATA": str(local)})
 
     assert len(str(path)) > 260

@@ -1,0 +1,177 @@
+/* room_a11y.css — 觀眾頁無障礙與可讀性補強（uiux-b）
+   規格：sidecar/live-room/docs/AUDIENCE_UX.zh-TW.md
+   掛法：在 room.html 第 79 行（內嵌 style 結束標籤）之後、第 80 行（預先繪製 script）之前加一行
+         <link rel="stylesheet" href="/static/room_a11y.css">
+   原則：
+   - 只用 room.html 現有的選擇器（#en #zh .en .zh .stage #stage-note #state #toast #drawer header …）
+     以及 html/body 上的 class：dark project zh-only en-only size-28/34/46/64。
+   - 未來的 .tgt（round4 T8 的別名）、<ruby>、<wbr>、.draft 先寫好，沒有出現時不會生效。
+   - 不載入任何外部字型或網路資源；新特性一律包在 @supports。
+   - 不用 color-mix()、不用 opacity 表示狀態（iOS < 16.2 沒有 color-mix）。 */
+
+/* 0. 跟 room.html:8 相同；重複宣告讓本檔單獨使用時也成立。 */
+[hidden] { display: none !important; }
+
+/* 1. 色票（與 room.html:9、13、36-38 相同，另加狀態色）。對比值見規格 §3，測試會重算。 */
+:root {
+  --a11y-fg-light: #2a2118;
+  --a11y-bg-light: #fbf6ee;
+  --a11y-muted-light: #6b5644;
+  --a11y-fg-dark: #f6f1e7;
+  --a11y-bg-dark: #16130f;
+  --a11y-muted-dark: #d9d0c3;
+  --a11y-btn-bg-light: #8a5424;
+  --a11y-btn-fg-light: #ffffff;
+  --a11y-btn-bg-dark: #c9843f;
+  --a11y-btn-fg-dark: #16130f;
+  --a11y-focus-light: #8a5424;
+  --a11y-focus-dark: #e8b878;
+  --a11y-stale-light: #6b5644;
+  --a11y-stale-dark: #d9d0c3;
+  --a11y-focus: var(--a11y-focus-light);
+  --a11y-stale: var(--a11y-stale-light);
+  color-scheme: light;
+}
+html.dark, html.project { --a11y-focus: var(--a11y-focus-dark); --a11y-stale: var(--a11y-stale-dark); color-scheme: dark; }
+
+/* 1b. 第一次進房（還沒存過偏好）且系統是深色：room.html:88 的預先繪製腳本會直接 return，
+       要等 module 跑完才加 .dark，中間會閃一下亮色。這裡先用 media query 補上。
+       一旦 applyAppearance() 在 html 加上 size-* class，本規則就不再生效，由 .dark 接手，
+       所以使用者明確選「亮色」時不會被覆蓋。 */
+@media (prefers-color-scheme: dark) {
+  html:not(.dark):not(.project):not([class*="size-"]) { --bg: #16130f; --fg: #f6f1e7; --muted: #d9d0c3; --line: rgba(255, 255, 255, .16); --a11y-focus: var(--a11y-focus-dark); --a11y-stale: var(--a11y-stale-dark); background: #16130f; color-scheme: dark; }
+  html:not(.dark):not(.project):not([class*="size-"]) body { --bg: #16130f; --fg: #f6f1e7; --muted: #d9d0c3; }
+}
+
+/* 2. 字型堆疊：只用系統內建字型，依 lang 選字形，避免日文用到中文字形。 */
+body { font-family: "Segoe UI", "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Hiragino Sans TC", "Noto Sans TC", "Noto Sans CJK TC", sans-serif; }
+:lang(zh) { font-family: "Segoe UI", "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Hiragino Sans TC", "Noto Sans TC", "Noto Sans CJK TC", sans-serif; }
+:lang(en) { font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif; }
+:lang(ja) { font-family: "Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", sans-serif; }
+/* Yu Gothic 在 Windows 預設字重偏細，字幕要粗一點。 */
+#en:lang(ja), .tgt:lang(ja) { font-weight: 700; }
+/* 按鈕、選單沿用介面語言（zh-Hant）。 */
+button, select, input { font-family: inherit; }
+
+/* 3. 行高與字距（依文字系統）。CJK 用ベタ組み（字距 0，W3C JLREQ basics_of_japanese_composition）。 */
+.en, .tgt { line-height: 1.4; letter-spacing: 0; }
+#en:lang(en), .tgt:lang(en) { letter-spacing: .01em; word-spacing: .02em; }
+.zh { line-height: 1.5; letter-spacing: 0; }
+#en:lang(ja), .tgt:lang(ja) { line-height: 1.6; letter-spacing: 0; }
+html.zh-only .zh, body.zh-only .zh { line-height: 1.5; }
+
+/* 4. 日文斷行：禁則（strict）、語節換行（auto-phrase），URL 等長字串可在任意處斷。 */
+#en:lang(ja), .tgt:lang(ja) { line-break: strict; word-break: normal; overflow-wrap: anywhere; }
+@supports (word-break: auto-phrase) {
+  #en:lang(ja), .tgt:lang(ja) { word-break: auto-phrase; }
+}
+/* 伺服器已用 BudouX 切好語節並插入 <wbr>（round4 T9）時，改用 keep-all 只在 <wbr>／標點斷。 */
+@supports selector(:has(wbr)) {
+  #en:lang(ja):has(wbr), .tgt:lang(ja):has(wbr) { word-break: keep-all; }
+}
+.zh, #zh { line-break: strict; overflow-wrap: anywhere; }
+#en:lang(en), .tgt:lang(en) { overflow-wrap: anywhere; hyphens: manual; }
+@supports (text-autospace: normal) {
+  .zh, #en:lang(ja), .tgt:lang(ja), #history li { text-autospace: normal; }
+}
+@supports (text-spacing-trim: trim-start) {
+  .zh, #en:lang(ja), .tgt:lang(ja) { text-spacing-trim: trim-start; }
+}
+
+/* 5. 振假名（ruby）。只標詞表裡有讀音的術語（round4 T10）。 */
+ruby { ruby-position: over; }
+@supports (ruby-align: center) {
+  ruby { ruby-align: center; }
+}
+rt { font-size: 50%; line-height: 1; font-weight: 500; letter-spacing: 0; color: inherit; }
+rp { display: none; }
+html.project rt, body.project rt { font-size: 45%; }
+/* 一行的上方預留量：行高 1.6 → 行與行之間有 0.6em 空間；rt 0.5em × 行高 1 = 0.5em，放得下，不會壓到上一行。
+   第一行上方另有 .en 的 padding-top（room.html:68 的 12px）＋下面這 0.5em 保險。 */
+#en:lang(ja):has(ruby), .tgt:lang(ja):has(ruby) { padding-top: max(12px, .5em); }
+/* 選用：關閉振假名（整合者在 html 或 body 加 .ruby-off；room_prefs.js 目前沒有這個選項）。 */
+html.ruby-off rt, body.ruby-off rt { display: none; }
+
+/* 6. 字級分級。
+   6a. 投影模式的上限（min(…vw, …vh)）：room.html:20-23 的 vh 上限不是遞增（10、9、8.57、9.444），
+       1280×720 時「中」61.2px→「大」61.7px 只差 0.8%。這裡改成每一級都 ≥ 10%。 */
+html.project body, body.project { --project-vw: 6.5vw; --project-vh: 8vh; }
+html.project.size-28 body, body.project.size-28 { --project-vw: 5.5vw; --project-vh: 7vh; }
+html.project.size-34 body, body.project.size-34 { --project-vw: 6.5vw; --project-vh: 8vh; }
+html.project.size-46 body, body.project.size-46 { --project-vw: 7.5vw; --project-vh: 9.5vh; }
+html.project.size-64 body, body.project.size-64 { --project-vw: 9vw; --project-vh: 11vh; }
+
+/* 6b. 手機橫式（矮螢幕）：room.html:14-17 的 --size 用 vw，844×390 時「特大」會到 64px，
+       一屏只剩不到 4 行。矮螢幕改用 vh，每級仍 ≥ 10%。投影模式也套用（投影字級以 --size 為下限，room.html:27）。 */
+@media (orientation: landscape) and (max-height: 500px) {
+  html body, html body.size-34, html.size-34 body { --size: clamp(1.5rem, 7.8vh, 2.125rem); }
+  html body.size-28, html.size-28 body { --size: clamp(1.15rem, 6.2vh, 1.75rem); }
+  html body.size-46, html.size-46 body { --size: clamp(1.75rem, 9vh, 2.875rem); }
+  html body.size-64, html.size-64 body { --size: clamp(2rem, 10.5vh, 4rem); }
+}
+
+/* 7. 最新一行永遠看得到：底部對齊，超出時從上方（較舊的行）裁掉。
+      room.html:56 已對非投影模式做；投影模式只有 ≤ 671px 才做（room.html:29-31），這裡補到所有寬度。 */
+html.project .en, body.project .en, html.project .zh, body.project .zh,
+html.project .tgt, body.project .tgt { display: flex; flex-direction: column; justify-content: flex-end; max-height: 100%; overflow: hidden; }
+html.project .stage, body.project .stage { max-height: 100%; }
+
+/* 7b. 有 <ruby>／<wbr> 等行內元素時，flex 會把每個元素變成獨立的一列（box 上 Chrome 154 截圖確認：
+       「般若」被擠成單獨一行）。改用 block 容器的 align-content（Chrome 123／Firefox 125／Safari 17.4），
+       行內排版不被打斷，仍然底部對齊、從上方裁掉。舊瀏覽器沒有可靠的功能查詢，這裡用同期上線的
+       transition-behavior＋content-visibility 當代理條件；條件不成立時維持 room.html 的 flex 行為。 */
+@supports (content-visibility: auto) and (transition-behavior: allow-discrete) {
+  html:not(.zh-only) #en:has(ruby, wbr, span), html:not(.zh-only) .tgt:has(ruby, wbr, span), html:not(.en-only) #zh:has(ruby, wbr, span) { display: block; align-content: unsafe end; }
+}
+
+/* 8. 安全區域：橫式 iPhone 的瀏海在左右兩側（room.html 只處理了 header、#drawer、ul、#toast）。 */
+.stage { padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+.sub, .stage-note, #hist-label { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+#hist-label { margin-left: 0; margin-right: 0; }
+html.project .stage, body.project .stage { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+#live { right: calc(12px + env(safe-area-inset-right)); min-height: 44px; min-width: 44px; }
+#toast { left: calc(12px + env(safe-area-inset-left)); right: calc(12px + env(safe-area-inset-right)); }
+
+/* 9. 觸控目標 44×44（WCAG 2.5.5／Apple HIG）。 */
+button, select, #drawer label { min-height: 44px; }
+button { min-width: 44px; }
+
+/* 10. 焦點：用顏色＋粗細，不靠透明度；深色時用淺色外框。 */
+button:focus-visible, select:focus-visible, input:focus-visible, #history:focus-visible { outline: 3px solid var(--a11y-focus); outline-offset: 2px; }
+
+/* 11. 過期／斷線字幕：除了變灰（room.html:53），再加一條非顏色的虛線標記（WCAG 1.4.1）。 */
+.stage.stale { border-left: 4px dashed var(--a11y-stale); }
+.stage.stale .en, .stage.stale .zh, .stage.stale .tgt { color: var(--muted); }
+/* 草稿（round4 兩段式 ASR，之後才會有 .draft 或 data-status="draft"）：用顏色和底線，不用斜體（CJK 沒有真斜體）。 */
+.draft, [data-status="draft"] { color: var(--muted); text-decoration: underline dotted; text-underline-offset: .2em; font-style: normal; }
+
+/* 12. 減少動態效果。 */
+@media (prefers-reduced-motion: reduce) {
+  html, body, body *, body *::before, body *::after { transition-duration: 0.01ms !important; transition-delay: 0s !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+}
+
+/* 13. Windows 高對比（forced-colors）：系統色接手，背景圖、陰影會被拿掉，所以補框線。 */
+@media (forced-colors: active) {
+  header, #drawer, .stage, #history, .banner, #toast { forced-color-adjust: auto; }
+  button, select { border: 2px solid ButtonText; }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid Highlight; }
+  #toast, .banner { border: 2px solid CanvasText; }
+  .stage.stale { border-left-color: GrayText; }
+  .stage.stale .en, .stage.stale .zh, .stage.idle .en, .stage.idle .zh { color: GrayText; }
+  .draft, [data-status="draft"] { color: GrayText; }
+  li.gap { color: GrayText; }
+}
+
+/* 14. 使用者要求更高對比（macOS／iOS 的「增加對比」）。 */
+@media (prefers-contrast: more) {
+  :root { --muted: #4a3a2c; }
+  html:not(.dark):not(.project) body { --muted: #4a3a2c; }
+  html.dark body, body.dark, html.project body, body.project { --muted: #f6f1e7; }
+  .stage.stale { border-left-width: 6px; }
+}
+
+/* 15. 列印（講後匯出不在此頁，這裡只確保字是深色）。 */
+@media print {
+  header, #drawer, #live, #toast, #retry { display: none !important; }
+  body { color: #000; background: #fff; }
+}
