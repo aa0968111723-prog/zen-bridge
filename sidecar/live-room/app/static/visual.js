@@ -10,9 +10,12 @@ export function pickRoom(search) {
   return ROOM_RE.test(room) ? room : "class";
 }
 
-export function visualSocketUrl(loc, room) {
+export function visualSocketUrl(loc, room, key) {
   var proto = loc.protocol === "https:" ? "wss:" : "ws:";
-  return proto + "//" + loc.host + "/ws/visual?room_id=" + encodeURIComponent(room);
+  var url = proto + "//" + loc.host + "/ws/visual?room_id=" + encodeURIComponent(room);
+  // Listen key (same ?k= as the audience page) so a ws_guard can reuse the room check.
+  if (key) url += "&k=" + encodeURIComponent(key);
+  return url;
 }
 
 export function start(doc, loc) {
@@ -78,7 +81,7 @@ export function start(doc, loc) {
 
   function connect() {
     setStatus("connecting", "連線中…（房間 " + room + "）");
-    socket = new WebSocket(visualSocketUrl(location, room));
+    socket = new WebSocket(visualSocketUrl(location, room, params.get("k") || ""));
     socket.onmessage = function (ev) {
       var msg;
       try { msg = JSON.parse(ev.data); } catch (e) { return; }
