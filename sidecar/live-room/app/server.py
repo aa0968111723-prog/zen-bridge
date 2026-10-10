@@ -32,6 +32,7 @@ from app.visual_routes import VisualHub, build_visual_router
 from app.mt_backend import TargetLangError, validate_tgt_lang
 from app.auth import audience_origin_allowed, host_is_allowed, new_host_token, origin_is_allowed, require_host, require_local_host, same_secret
 from app.dispatch import ListenerSlot, RoomBus, for_listener
+from app.glossary_ja import validate_terms_ja   # round4 #7: ja/reading (glossary.py untouched)
 from app.glossary import (
     GLOSSARY_MAX_BODY,
     LEGACY_BOX_LIMIT,
@@ -1839,7 +1840,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                 status_code=400,
                 content={"ok": False, "accepted": [], "rejected": [{"line": 0, "reason": "缺少 terms"}]},
             )
-        accepted, rejected = validate_terms(body.get("terms"))
+        accepted, rejected = validate_terms_ja(body.get("terms"))
         if rejected:
             return JSONResponse(
                 status_code=400,

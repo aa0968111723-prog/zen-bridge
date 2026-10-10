@@ -102,7 +102,7 @@ def test_ledger_archives_ja_session_as_ja(tmp_path):
 
 
 def test_room_glossary_accepts_ja_and_kana_reading():
-    from app.glossary import validate_terms
+    from app.glossary_ja import validate_terms_ja as validate_terms
     ok, bad = validate_terms([{"zh": "般若", "en": "prajna", "ja": "般若", "reading": "はんにゃ"},
                               {"zh": "法師", "en": "Dharma Master"}])
     assert bad == [] and ok[0]["ja"] == "般若" and ok[0]["reading"] == "はんにゃ"

@@ -23,8 +23,6 @@ MAX_ALIAS = 20
 MAX_EN = 80
 MAX_CATEGORY = 20
 MAX_NOTE = 80
-MAX_JA = 40
-_KANA = re.compile(r"[\u3041-\u309f\u30a0-\u30ff\u30fc\u30fb\s]+")
 PROMPT_LIMIT = 40
 # Host PUT body. 200 terms of the field limits fit; anything larger is refused.
 GLOSSARY_MAX_BODY = 256 * 1024
@@ -654,24 +652,6 @@ def _parse_term(item) -> tuple[dict | None, list[str]]:
             problems.append("鎖定必須是布林值")
         else:
             lock_value = parsed
-    # round4 #7: optional Japanese target and its kana reading (ja sessions; reading drives the ruby).
-    ja_extra: dict = {}
-    for key, limit in (("ja", MAX_JA), ("reading", MAX_JA)):
-        raw_value = item.get(key)
-        if raw_value is None or raw_value == "":
-            continue
-        if not isinstance(raw_value, str) or _has_control(raw_value):
-            problems.append(f"{'日文' if key == 'ja' else '讀音'}必須是單行文字")
-            continue
-        value = raw_value.strip()
-        if len(value) > limit:
-            problems.append(f"{'日文' if key == 'ja' else '讀音'}超過 {limit} 字")
-        elif key == "reading" and not _KANA.fullmatch(value):
-            problems.append("讀音只能是平假名或片假名")
-        elif value:
-            ja_extra[key] = value
-    if "reading" in ja_extra and "ja" not in ja_extra:
-        problems.append("有讀音時必須同時填日文")
     if problems or not zh_text or not en_text:
         term = {"_bad": True, "zh": zh_text, "aliases": aliases, "en": en_text, "lock": lock_value, "category": category, "note": note}
         return term, problems
@@ -682,7 +662,6 @@ def _parse_term(item) -> tuple[dict | None, list[str]]:
         "lock": lock_value,
         "category": category,
         "note": note,
-        **ja_extra,
     }, []
 
 
@@ -694,7 +673,6 @@ def _public_term(term: dict) -> dict:
         "lock": bool(term.get("lock", True)),
         "category": term.get("category") or "",
         "note": term.get("note") or "",
-        **{k: term[k] for k in ("ja", "reading") if term.get(k)},
     }
 
 
