@@ -194,7 +194,7 @@ sequenceDiagram
 
 ### 5.1 核心與執行緒（起始值，T4 驗證後再改）
 
-前提：6 實體核／12 邏輯處理器（HW §1）。**SMT 兄弟編號這台機器 UNKNOWN**（HW §4.1，通常相鄰 0/1、2/3…），下表假設相鄰，`hw_tune` 必須用 `GetLogicalProcessorInformationEx` 讀實際對應後再算 mask。
+前提：6 實體核／12 邏輯處理器（HW §1）。SMT 兄弟編號在 HW §4.1 是 UNKNOWN；perf 的 `NOTES.md`（`/workspace/zen-impl/perf/NOTES.md`，23:33）回報筆電 GLPI_EX 讀到**相鄰**對應 [0,1] [2,3] … [10,11]（perf 回報，arch 未驗證）。下表依此假設相鄰；`hw_tune` 仍必須每次用 `GetLogicalProcessorInformationEx` 讀實際對應後再算 mask。
 
 | 工作 | 執行緒 | 建議放置（假設 SMT 相鄰） | 優先權 | EcoQoS | 可否設 affinity | 控制（現有／**新增提議**） |
 |---|---|---|---|---|---|---|
@@ -238,7 +238,7 @@ sequenceDiagram
 
 | 項目 | 設計 | 來源 |
 |---|---|---|
-| 電源計畫 | 直播前提示主持人切到「最佳效能」並插電；**程式不替使用者改電源計畫**（只讀） | HW §6.1 第 1 點、§7 第 1 點；HW A14：Balanced 持續負載約損失 40%（引用 llama.cpp #8273） |
+| 電源計畫 | 直播前提示主持人切到「最佳效能」並插電；**程式不替使用者改電源計畫**（只讀）。perf NOTES 回報筆電目前是 Balanced 計畫＋Win11 電源模式「**Best power efficiency**」（插電中），這會拖慢 ASR；主持頁應依 `GET /api/hw/status`（perf `hw_routes.py`）的 `plan.warnings` 在開場前顯示提醒 | HW §6.1 第 1 點、§7 第 1 點；HW A14：Balanced 持續負載約損失 40%（引用 llama.cpp #8273） |
 | EcoQoS | Breeze worker、草稿執行緒**關**節流（`SetProcessInformation` ProcessPowerThrottling StateMask=0）；admin、示意圖可**開** | HW §5.2；現有 `asr_tuning.boost_current_process`（`asr_tuning.py:181-206`） |
 | 插電偵測 | `psutil.sensors_battery().power_plugged`（psutil 已是釘選依賴，commit `9aa178a`）。電池供電 → 直接進 §6 的 L2 並在主持頁顯示警告 | DEF D-006（bench 端已用 psutil 判斷電池） |
 | 降頻 | 事件 37 偵測目前只在 bench（`zbench`，DEF P0-2），App 端不做；以 RTF／A3 代理 | DEF P0-2 |
