@@ -51,14 +51,23 @@ def to_uni(text: str) -> str:
 
 
 # ---------------------------------------------------------------- locations
+def _filesystem_path(value: str | Path) -> Path:
+    """Use Win32 extended local paths without requiring a system policy change."""
+    path = Path(value)
+    raw = str(path)
+    if os.name == 'nt' and len(raw) >= 240 and re.match(r'^[A-Za-z]:[\\/]', raw):
+        return Path('\\\\?\\' + os.path.abspath(raw))
+    return path
+
+
 def data_dir(env: dict | None = None) -> Path:
     env = os.environ if env is None else env
     explicit = (env.get("ZEN_DATA_DIR") or "").strip()
     if explicit:
-        return Path(explicit)
+        return _filesystem_path(explicit)
     local = (env.get("LOCALAPPDATA") or "").strip()
     if local:
-        return Path(local) / "ZenBridge"
+        return _filesystem_path(Path(local) / "ZenBridge")
     xdg = (env.get("XDG_DATA_HOME") or "").strip()
     base = Path(xdg) if xdg else Path.home() / ".local" / "share"
     return base / "ZenBridge"
@@ -67,24 +76,26 @@ def data_dir(env: dict | None = None) -> Path:
 def default_db_path(env: dict | None = None) -> Path:
     env = os.environ if env is None else env
     explicit = (env.get("ZEN_DB_PATH") or "").strip()
-    return Path(explicit) if explicit else data_dir(env) / "data" / "zen.sqlite3"
+    return _filesystem_path(explicit if explicit else data_dir(env) / "data" / "zen.sqlite3")
 
 
 def identity_db_path(env: dict | None = None) -> Path:
     env = os.environ if env is None else env
     explicit = (env.get("ZEN_IDENTITY_DB_PATH") or "").strip()
-    return Path(explicit) if explicit else data_dir(env) / "data" / "zen-identity.sqlite3"
+    return _filesystem_path(explicit if explicit else data_dir(env) / "data" / "zen-identity.sqlite3")
 
 
 def backup_dir(env: dict | None = None) -> Path:
     env = os.environ if env is None else env
     explicit = (env.get("ZEN_BACKUP_DIR") or "").strip()
-    return Path(explicit) if explicit else data_dir(env) / "backups"
+    return _filesystem_path(explicit if explicit else data_dir(env) / "backups")
 
 
 def check_db_location(path: str | Path) -> None:
     """Refuse UNC/network paths and cloud-synced folders for a WAL database (DBA §5.5)."""
     raw = str(path)
+    if re.match(r'^\\\\\?\\[A-Za-z]:\\', raw):
+        raw = raw[4:]
     if raw.startswith("\\\\") or raw.startswith("//"):
         raise SchemaError(f"資料庫不能放在網路路徑：{raw}")
     if _SYNCED.search(raw.replace("/", "\\") + "\\"):
@@ -129,7 +140,7 @@ def check_sqlite_version(version: str | None = None) -> None:
 # ---------------------------------------------------------------- connections
 def connect(path: str | Path, *, readonly: bool = False, timeout_ms: int = 5000) -> sqlite3.Connection:
     """Per-connection PRAGMAs every time (DBA §5.1). Autocommit; callers BEGIN IMMEDIATE."""
-    p = Path(path)
+    p = _filesystem_path(path)
     if readonly:
         conn = sqlite3.connect(f"{p.resolve().as_uri()}?mode=ro", uri=True, timeout=0,
                                check_same_thread=False, isolation_level=None)
@@ -333,7 +344,7 @@ def snapshot_before_migrate(conn: sqlite3.Connection, version: int) -> Path | No
     main_file = conn.execute("PRAGMA database_list").fetchone()[2]
     if not main_file:
         return None                        # :memory:
-    base = Path(main_file).with_name(f"pre-migrate-v{version}.sqlite3")
+    base = _filesystem_path(main_file).with_name(f"pre-migrate-v{version}.sqlite3")
     dest = base if not base.exists() else base.with_name(f"pre-migrate-v{version}-{int(time.time() * 1000)}.sqlite3")
     conn.execute("VACUUM INTO ?", (str(dest),))
     _verify_copy(dest)

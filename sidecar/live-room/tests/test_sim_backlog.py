@@ -198,7 +198,9 @@ def test_100min_rss_bounded(report):
 
     Real growth is about 24 KB per segment. Each 250-segment window stays under
     10 MB, and the whole 1000-segment class stays under 40 MB. A traced run
-    cannot host this check: its RSS is mostly the tracer.
+    cannot host this check: its RSS is mostly the tracer. Each RSS point is the
+    median of sim.RSS_SAMPLES reads, each after gc.collect(), so one allocator
+    blip at a boundary does not decide a window.
     """
     windows = (
         report.rss_250 - report.rss_0,
