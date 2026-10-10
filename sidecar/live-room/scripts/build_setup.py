@@ -106,7 +106,8 @@ def build(payload: Path, output: Path, assets: Path, sdk: Path | None) -> Path:
     stage_bootstrapper(payload)
     stage_vc_runtime(payload)
     clean_user_paths(payload)
-    python = next((payload / ".python").glob("*/tools/python.exe"))
+    python_asset = json.loads((payload/'bootstrap-manifest.json').read_text())['python']
+    python = payload/'.python'/python_asset.get('directory',python_asset['version'])/'tools/python.exe'
     probe = subprocess.run([str(python), "-c", "import fastapi, uvicorn, pywhispercpp, numpy"], cwd=payload)
     if probe.returncode != 0:
         raise RuntimeError("Bundled Python cannot import the App dependencies")
@@ -121,7 +122,7 @@ def build(payload: Path, output: Path, assets: Path, sdk: Path | None) -> Path:
         "/Qp",
         "/DPayloadDir=" + str(payload),
         "/DAppVersion=" + version,
-        "/DPythonVersion=" + json.loads((payload / 'bootstrap-manifest.json').read_text())['python']['version'],
+        "/DPythonVersion=" + python_asset.get('directory',python_asset['version']),
         "/DOutputDir=" + str(output),
         str(ROOT / "desktop" / "setup.iss"),
     ]
