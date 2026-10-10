@@ -128,6 +128,7 @@ class Result:
     max_queue: int = 0
     checkpoint: dict = field(default_factory=dict)
     periodic_truncate: dict = field(default_factory=dict)
+    lock_probe: dict = field(default_factory=dict)
     wal_bytes_per_commit: float = 0.0
     elapsed_s: float = 0.0
     sim_span_s: float = 0.0
@@ -210,15 +211,36 @@ def run(sc: Scenario, workdir: Path) -> Result:
                 admin_locked += 1
             raise
 
+    lock_acquired = threading.Event()
+    lock_times: dict = {}
+
     def hold_lock():
         c = zdb.connect(db)
         try:
             c.execute("BEGIN IMMEDIATE")
             c.execute("INSERT INTO metrics(ts, name, value) VALUES (?,?,?)", (time.time(), "admin_import", 1.0))
+            lock_times["acquired"] = time.perf_counter()
+            lock_acquired.set()                  # coordination point: the write lock is now really held
             time.sleep(sc.lock_hold_s)
+            lock_times["release_start"] = time.perf_counter()   # taken before COMMIT releases the lock
             c.execute("COMMIT")
         finally:
+            lock_acquired.set()                  # never leave the main loop waiting on a failed holder
             c.close()
+
+    def probe_lock_wait() -> None:
+        # A dedicated writer that starts only after the holder owns the lock. It cannot get the
+        # lock before COMMIT, so its wait is measured against the holder's own timestamps instead
+        # of an absolute wall-clock threshold.
+        p = zdb.connect(db)
+        try:
+            t0 = time.perf_counter()
+            p.execute("BEGIN IMMEDIATE")
+            t1 = time.perf_counter()
+            p.execute("ROLLBACK")
+        finally:
+            p.close()
+        res.lock_probe = {"probe_start": t0, "probe_got_lock": t1, **lock_times}
 
     started = time.perf_counter()
     try:
@@ -267,6 +289,9 @@ def run(sc: Scenario, workdir: Path) -> Result:
             if sc.lock_hold_s and i == sc.segments // 2:
                 lock_thread = threading.Thread(target=hold_lock, daemon=True)
                 lock_thread.start()
+                assert lock_acquired.wait(30), "admin lock holder never acquired the lock"
+                if "acquired" in lock_times:
+                    probe_lock_wait()
             res.max_queue = max(res.max_queue, led._q.qsize())
             if led._q.qsize() > 1000:            # slow CI: back off instead of overflowing the 2000 queue
                 led.wait_idle(30)

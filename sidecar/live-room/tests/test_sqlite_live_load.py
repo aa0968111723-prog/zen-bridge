@@ -140,7 +140,15 @@ def test_gapped_reader_and_admin_lock(results, workdir):
     # The 1.2 s admin lock is absorbed by busy_timeout (5 s): no 'database is locked', one slow write.
     assert r["locked"]["ledger_locked_errors"] == 0, r["locked"]
     assert r["ledger_lat"]["p95_ms"] / 1000 < P95_BOUND_S, r["ledger_lat"]
-    assert r["ledger_lat"]["max_ms"] >= 1000 * 0.5, r["ledger_lat"]   # the wait is visible
+    # The wait is visible, judged relative to the holder's own timestamps (not wall-clock bounds):
+    lp = r["lock_probe"]
+    assert {"acquired", "release_start", "probe_start", "probe_got_lock"} <= lp.keys(), lp
+    held_s = lp["release_start"] - lp["acquired"]
+    assert lp["probe_start"] >= lp["acquired"], lp            # probe started while the lock was held
+    assert lp["probe_got_lock"] >= lp["release_start"], lp    # and only got it after the holder let go
+    remaining_s = lp["release_start"] - lp["probe_start"]
+    waited_s = lp["probe_got_lock"] - lp["probe_start"]
+    assert waited_s >= remaining_s, (waited_s, remaining_s, held_s)
     # Reader transactions with idle gaps let auto-checkpoint restart the WAL again.
     assert r["ckpt_resets"] >= 1, r
     assert r["wal_max"] < pinned["wal_max"] / 2, (r["wal_max"], pinned["wal_max"])
