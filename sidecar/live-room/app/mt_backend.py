@@ -126,6 +126,10 @@ class SessionTargets:
         return {"kind": "tgt_lang_changed", "room_id": room_id, "session_id": session_id,
                 "tgt_lang": lang, "from_seq": frm}
 
+    def known(self, room_id: str, session_id: str) -> bool:
+        with self._lock:
+            return (room_id, session_id) in self._by
+
     def lang_for(self, room_id: str, session_id: str, seq: int) -> str:
         with self._lock:
             cur = self._by.get((room_id, session_id))

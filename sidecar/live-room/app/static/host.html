@@ -58,6 +58,7 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 </div>
 <div class="card">
 <label>房間 <input id="room" value="class" autocomplete="off"></label>
+<label>譯成 <select id="tgt-lang"><option value="en">英文</option><option value="ja">日文</option></select></label>
 <label>麥克風 <select id="mic"><option value="">預設麥克風</option></select></label>
 <div class="meter" aria-hidden="true"><span id="level"></span></div>
 <div>
@@ -643,7 +644,7 @@ go.onclick = async () => {
   roomEl.disabled = true;
   go.disabled = true;
   try {
-    const opened = await hostFetch("/api/rooms/open", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: room }) });
+    const opened = await hostFetch("/api/rooms/open", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: room, tgt_lang: document.querySelector("#tgt-lang").value || "en" }) });
     if (opened.ok) rememberRoom(await opened.json());
     listenCaptions(room, true);
     await ctl.start();

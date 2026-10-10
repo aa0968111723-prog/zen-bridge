@@ -443,9 +443,10 @@ class Ledger:
                     (seg, v, str(ev.get("zh_raw") or zh), zh, to_uni(zh)),
                 )
         en = str(ev.get("en") or "")
+        lang = "ja" if ev.get("tgt_lang") == "ja" else "en"      # round4 #7: ja sessions archive as ja
         if en and (ev.get("translate_status") or "ok") == "ok":
             cur = c.execute(
-                "SELECT text, origin FROM translations WHERE segment_id=? AND tgt_lang='en' AND is_current=1", (seg,)
+                "SELECT text, origin FROM translations WHERE segment_id=? AND tgt_lang=? AND is_current=1", (seg, lang)
             ).fetchone()
             incoming = ev.get("en_origin") if ev.get("en_origin") in _TRANSLATION_ORIGINS else "mt"
             # QA 全端工程師 B1: machine output never becomes current over a human correction.
@@ -453,7 +454,7 @@ class Ledger:
                 log.info("ledger: kept human translation for %s (live sent %s)", seg, incoming)
             elif not cur or cur[0] != en:
                 v = c.execute(
-                    "SELECT COALESCE(MAX(version),0) FROM translations WHERE segment_id=? AND tgt_lang='en'", (seg,)
+                    "SELECT COALESCE(MAX(version),0) FROM translations WHERE segment_id=? AND tgt_lang=?", (seg, lang)
                 ).fetchone()[0] + 1
                 tr = c.execute("SELECT id FROM transcripts WHERE segment_id=? AND is_current=1", (seg,)).fetchone()
                 origin = ev.get("en_origin") if ev.get("en_origin") in _TRANSLATION_ORIGINS else "mt"
@@ -462,7 +463,7 @@ class Ledger:
                     """INSERT INTO translations(segment_id, transcript_id, tgt_lang, version, text, origin, engine, model,
                                                 glossary_version, term_flags, status)
                        VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                    (seg, tr[0] if tr else None, "en", v, en, origin, engine,
+                    (seg, tr[0] if tr else None, lang, v, en, origin, engine,
                      None if origin == "tm_exact" else (self.model or None), ev.get("glossary_version"),
                      json.dumps(ev.get("term_flags") or [], ensure_ascii=False),
                      # 全站 D4: EN covers earlier stale lines too; never pair it 1:1 with this zh.

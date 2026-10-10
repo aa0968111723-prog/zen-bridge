@@ -47,12 +47,12 @@ assert.equal(sanitizePrefs({ size: "64px" }).size, "34");
 
 const store = memoryStorage();
 const saved = writePrefs(store, { mode: "project", size: "64", theme: "dark", wake: true });
-assert.deepEqual(saved, { mode: "project", size: "64", theme: "dark", wake: true, project: true });
+assert.deepEqual(saved, { mode: "project", size: "64", theme: "dark", wake: true, project: true, ruby: true });
 assert.deepEqual(readPrefs(store), saved);
 assert.equal(store.getItem(PREFS_KEY).includes('"mode":"project"'), true);
 
 writePrefs(store, { mode: "nope", size: "12", theme: "neon", wake: false, project: true });
-assert.deepEqual(readPrefs(store), { mode: "both", size: "34", theme: "system", wake: false, project: false });
+assert.deepEqual(readPrefs(store), { mode: "both", size: "34", theme: "system", wake: false, project: false, ruby: true });
 
 store.setItem(PREFS_KEY, "{");
 assert.deepEqual(readPrefs(store), { ...DEFAULT_PREFS });
@@ -139,3 +139,12 @@ assert.ok(contrast("#f6f1e7", "#16130f") >= 4.5);
 assert.ok(contrast("#d9d0c3", "#16130f") >= 4.5);
 
 console.log("room prefs ok");
+
+// round4 T10: the 振假名 toggle is saved; only an explicit false turns it off.
+{
+  const box = new Map();
+  const st = { getItem: (k) => box.get(k) ?? null, setItem: (k, v) => box.set(k, v) };
+  assert.equal(writePrefs(st, { ...DEFAULT_PREFS, ruby: false }).ruby, false);
+  assert.equal(readPrefs(st).ruby, false);
+  assert.equal(writePrefs(st, { ...DEFAULT_PREFS, ruby: "no" }).ruby, true);
+}

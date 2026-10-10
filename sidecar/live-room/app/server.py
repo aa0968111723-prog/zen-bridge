@@ -23,6 +23,7 @@ from app.asr import CliAsr, ResidentAsr
 from app.native_asr import NativeResidentAsr
 from app.audio import AudioError, convert_to_wav, ffmpeg_bin, wav_duration_seconds
 from app.draft_hub import DraftHub
+from app.mt_backend import TargetLangError, validate_tgt_lang
 from app.auth import audience_origin_allowed, new_host_token, origin_is_allowed, require_host, require_local_host, same_secret
 from app.dispatch import ListenerSlot, RoomBus, for_listener
 from app.glossary import (
@@ -1369,6 +1370,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "listeners": _seated_listeners(book.rooms.values()),
             "storage": store.enabled,
             "draft_available": drafts_available,
+            "tgt_lang": (book.get(room_id) or {}).get("tgt_lang") or pipeline.targets.default,
             "storage_recovered": bool(getattr(store, "recovered", False)),
         }
         if host_view:
@@ -1404,11 +1406,20 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         require_host(request, token, settings)
         body = await _json(request)
         room_id = validate_room_id(str(body.get("room_id") or "class"))
+        lang = None
+        if body.get("tgt_lang") not in (None, ""):
+            try:
+                lang = validate_tgt_lang(str(body.get("tgt_lang")))     # round4 #7: en | ja per room
+            except TargetLangError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         room = ensure_room(room_id)
+        if lang:
+            room["tgt_lang"] = lang
         await ensure_hydrated(room_id)
         return {
             "ok": True,
             "room": room_id,
+            "tgt_lang": room.get("tgt_lang") or pipeline.targets.default,
             "listen_url": share_for(room_id, include_key=True),
             "listen_key": room.get("listen_key") or "",
             "paused": pipeline.is_paused(room_id),
@@ -1963,6 +1974,9 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                 t0_ms=t0_ms,
                 t1_ms=t1_ms,
                 t1_wall_ms=_wall_ms(form, request, "t1_wall_ms"),     # round4 #3 (A2)
+                # round4 #7: the session keeps the room's target language from its first slice
+                tgt_lang=pipeline.session_lang(room_id, session_id, seq,
+                                               (book.get(room_id) or {}).get("tgt_lang")),
             )
             held = reserved
             reserved = False

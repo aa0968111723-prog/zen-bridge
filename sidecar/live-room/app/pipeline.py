@@ -19,6 +19,7 @@ from pathlib import Path
 from app.aio import cancellation_pending, wait_bounded
 from app.audio import AudioError, riff_duration_seconds, wav_duration_seconds, wav_rms
 from app.latency import StageLatency, upload_ms
+from app.mt_backend import SessionTargets, TargetLangError, backend_from_env, validate_tgt_lang
 from app.glossary import guarded_flags, missing_locked, normalize
 from app.rtf import RtfMeter
 from app.settings import Settings
@@ -55,6 +56,48 @@ class PipelineError(Exception):
         self.detail = detail
 
 
+_JA_BREAK_AFTER = "、。，．！？!?）」』】〉》"
+_JA_SEG_MAX = 12
+
+
+def default_tgt_lang(env=None) -> str:
+    env = os.environ if env is None else env
+    try:
+        return validate_tgt_lang(env.get("BREEZE_TGT_LANG") or "en")
+    except TargetLangError:
+        return "en"
+
+
+def ja_segments(text: str) -> list[str]:
+    """round4 T9: phrase chunks for <wbr> (front end appends text nodes, never innerHTML).
+    Break after Japanese punctuation, and hard-split very long runs; joining gives the text back."""
+    out: list[str] = []
+    cur = ""
+    for ch in str(text or ""):
+        cur += ch
+        if ch in _JA_BREAK_AFTER or len(cur) >= _JA_SEG_MAX:
+            out.append(cur)
+            cur = ""
+    if cur:
+        out.append(cur)
+    return out
+
+
+def ja_ruby(text: str, terms) -> list[dict]:
+    """round4 T10: locked/known terms of this line that have a reading -> [{"text", "reading"}]."""
+    out: list[dict] = []
+    seen: set = set()
+    for t in terms or []:
+        if not isinstance(t, dict):
+            continue
+        target = str(t.get("ja") or "").strip()
+        reading = str(t.get("reading") or t.get("ja_reading") or "").strip()
+        if target and reading and target in text and target not in seen:
+            seen.add(target)
+            out.append({"text": target, "reading": reading})
+    return out
+
+
 @dataclass
 class Segment:
     room_id: str
@@ -87,6 +130,9 @@ class Segment:
     t1_wall_ms: int | None = None
     recv_mono: float = field(default_factory=time.monotonic)
     lat: dict = field(default_factory=dict)
+    # round4 #7 / testlead P0: the session's target language ("en" | "ja"), fixed at push time.
+    # The target text still travels in ``en`` (one field for one target language per session).
+    tgt_lang: str = "en"
 
     @property
     def key(self) -> tuple[str, str, int]:
@@ -119,6 +165,13 @@ class Segment:
             payload["glossary_version"] = self.glossary_version
         if self.term_flags:
             payload["term_flags"] = _copy_flags(self.term_flags)
+        if self.tgt_lang != "en":
+            payload["tgt_lang"] = self.tgt_lang
+            if self.en:
+                payload["segments"] = ja_segments(self.en)
+                ruby = ja_ruby(self.en, self.glossary_snapshot)
+                if ruby:
+                    payload["ruby"] = ruby
         return payload
 
 
@@ -214,6 +267,10 @@ class Pipeline:
         self.rejected = 0
         self.missing_count = 0
         self.latency = StageLatency()                 # round4 #3
+        # round4 #7: per-session target language; ja goes to the llama-server backend.
+        self.targets = SessionTargets(default_tgt_lang())
+        self._target_backend = None
+        self._target_backend_loaded = False
         self.oldest_wait_started: float | None = None
         self.last_process_s: float | None = None
         self.process_s: float | None = None
@@ -359,6 +416,23 @@ class Pipeline:
 
     def clear_reserved(self, key: tuple[str, str, int]) -> None:
         self._reserved.discard(key)
+
+    def target_backend(self):
+        """round4 #7: llama-server MT backend (BREEZE_MT_BACKEND), loaded once, None when off."""
+        if not self._target_backend_loaded:
+            self._target_backend_loaded = True
+            try:
+                self._target_backend = backend_from_env()
+            except Exception:
+                logging.getLogger("breeze.pipeline").exception("BREEZE_MT_BACKEND 設定無效")
+                self._target_backend = None
+        return self._target_backend
+
+    def session_lang(self, room_id: str, session_id: str, seq: int, room_lang: str | None = None) -> str:
+        """Target language of a slice: fixed for the session at its first slice."""
+        if not self.targets.known(room_id, session_id):
+            self.targets.start(room_id, session_id, room_lang)
+        return self.targets.lang_for(room_id, session_id, seq)
 
     def stats(self) -> dict:
         oldest = 0
@@ -1960,7 +2034,7 @@ class Pipeline:
         zh_for_flags = zh_snapshot if zh_snapshot is not None else segment.zh
         snapshot = segment.glossary_snapshot
         flags: list = []
-        if translated.status == "ok" and segment.en:
+        if translated.status == "ok" and segment.en and segment.tgt_lang == "en":
             missing = missing_locked(zh_for_flags, snapshot, segment.en)
             flags.extend(missing)
             if missing and self.locked_term_policy == "withhold":
@@ -2006,7 +2080,17 @@ class Pipeline:
         segment.glossary_version = self.room_glossary_version(segment.room_id)
         context = self._context(segment)
         kwargs = {}
-        params = inspect.signature(self.translator.translate).parameters
+        translator = self.translator
+        if segment.tgt_lang != "en":
+            # testlead P0: a ja session must reach a backend that takes tgt_lang (Hy-MT2 / Index
+            # via llama-server). The en translator (Ollama prompt) is never asked for Japanese.
+            translator = self.target_backend()
+            if translator is None:
+                self._fail_translation(segment, "off", "日文場次需要本機翻譯後端（BREEZE_MT_BACKEND=hymt），中文仍保留")
+                return
+            kwargs["tgt_lang"] = segment.tgt_lang
+            terms = [t for t in terms if isinstance(t, dict) and t.get("ja")]
+        params = inspect.signature(translator.translate).parameters
         if "glossary" in params:
             kwargs["glossary"] = terms
         if "context" in params:
@@ -2019,7 +2103,7 @@ class Pipeline:
             kwargs["cancel"] = cancel
         assert self._translate_pool is not None
         mt_mark = time.monotonic()
-        cfut = self._translate_pool.submit(partial(self.translator.translate, mt_text, **kwargs))
+        cfut = self._translate_pool.submit(partial(translator.translate, mt_text, **kwargs))
         try:
             translated: TranslateResult = await wait_bounded(asyncio.wrap_future(cfut), timeout=self.settings.translate_timeout_s)
             self.latency.note(segment, "A6", (time.monotonic() - mt_mark) * 1000)
