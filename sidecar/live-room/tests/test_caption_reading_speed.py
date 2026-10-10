@@ -159,7 +159,7 @@ def test_session_filter_is_parameterized(tmp_path, schema):
 
 
 def test_read_only_uri_and_database_integrity(tmp_path, monkeypatch, capsys):
-    path = _ledger_db(tmp_path / "字幕 ?#.sqlite3")
+    path = _ledger_db(tmp_path / "字幕 #%.sqlite3")
     before = _snapshot(path)
     connect = sqlite3.connect
     calls = []
