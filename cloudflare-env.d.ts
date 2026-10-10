@@ -11,6 +11,7 @@ declare namespace Cloudflare {
     SPEECH_PROVIDER?: string;
     SPEECH_MODE?: string;
     BREEZE_ASR_URL?: string;
+    BREEZE_AGENT_TOKEN?: string;
     PUBLIC_BASE_URL?: string;
     SHARE?: string;
     HOTWORD_LIMIT?: string;
@@ -21,5 +22,7 @@ declare namespace Cloudflare {
     HERMES_API_KEY?: string;
     HERMES_TRANSLATION_MODEL?: string;
     TRANSLATION_PROVIDER?: string;
+    OLLAMA_URL?: string;
+    OLLAMA_TRANSLATION_MODEL?: string;
   }
 }

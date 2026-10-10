@@ -6,6 +6,7 @@ type RawEnv = Partial<Record<
   'HOTWORD_LIMIT' | 'OPENAI_API_KEY' | 'OPENAI_TRANSCRIPTION_MODEL' |
   'OPENAI_TRANSLATION_MODEL' | 'DATABASE_URL' | 'DEPLOY_TARGET' | 'AUDIO_DIR' |
   'HERMES_API_URL' | 'HERMES_API_KEY' | 'HERMES_TRANSLATION_MODEL' | 'TRANSLATION_PROVIDER' |
+  'OLLAMA_URL' | 'OLLAMA_TRANSLATION_MODEL' |
   'BREEZE_ASR_URL' | 'BREEZE_AGENT_TOKEN' | 'PUBLIC_BASE_URL' | 'SHARE', string>>;
 const context = new AsyncLocalStorage<Cloudflare.Env>();
 export const QWEN_MODEL = 'qwen3.8-livetranslate-flash-realtime';
@@ -16,8 +17,8 @@ export function parseEnv(raw: RawEnv) {
     throw new Error('DEPLOY_TARGET 必須為 cloudflare 或 zeabur。');
   }
   const DEPLOY_TARGET: DeployTarget = raw.DEPLOY_TARGET ?? (raw.DATABASE_URL ? 'zeabur' : 'cloudflare');
-  if (raw.TRANSLATION_PROVIDER !== undefined && raw.TRANSLATION_PROVIDER !== 'hermes' && raw.TRANSLATION_PROVIDER !== 'openai') {
-    throw new Error('TRANSLATION_PROVIDER 必須為 hermes 或 openai。');
+  if (raw.TRANSLATION_PROVIDER !== undefined && raw.TRANSLATION_PROVIDER !== 'hermes' && raw.TRANSLATION_PROVIDER !== 'openai' && raw.TRANSLATION_PROVIDER !== 'ollama') {
+    throw new Error('TRANSLATION_PROVIDER 必須為 hermes、openai 或 ollama。');
   }
   if (raw.SPEECH_PROVIDER !== undefined && !['breeze', 'qwen-live', 'openai'].includes(raw.SPEECH_PROVIDER)) {
     throw new Error('SPEECH_PROVIDER 必須為 breeze、qwen-live 或 openai。');
@@ -66,6 +67,8 @@ export function parseEnv(raw: RawEnv) {
     HERMES_API_KEY: raw.HERMES_API_KEY,
     HERMES_TRANSLATION_MODEL: raw.HERMES_TRANSLATION_MODEL || 'hermes-agent',
     TRANSLATION_PROVIDER: raw.TRANSLATION_PROVIDER,
+    OLLAMA_URL: validateUrl(raw.OLLAMA_URL ?? (raw.TRANSLATION_PROVIDER === 'ollama' ? 'http://127.0.0.1:11434' : undefined), 'OLLAMA_URL', true),
+    OLLAMA_TRANSLATION_MODEL: raw.OLLAMA_TRANSLATION_MODEL || 'qwen3:1.7b',
     BREEZE_ASR_URL: validateUrl(raw.BREEZE_ASR_URL, 'BREEZE_ASR_URL', true),
     BREEZE_AGENT_TOKEN: raw.BREEZE_AGENT_TOKEN,
     PUBLIC_BASE_URL: validateUrl(raw.PUBLIC_BASE_URL, 'PUBLIC_BASE_URL'),
