@@ -243,7 +243,17 @@ def test_json_never_overwrites_or_creates_sqlite_sidecars(tmp_path, capsys, dest
         output = path.parent / "." / path.name
     elif destination == "symlink":
         output = tmp_path / "alias.json"
-        output.symlink_to(path)
+        try:
+            output.symlink_to(path)
+        except OSError as error:
+            if getattr(error,'winerror',None) != 1314:
+                raise
+            # Standard Windows users cannot create symbolic links. Use a real
+            # hard link to the same database instead: writing through this
+            # alias would still corrupt the original, so all integrity and
+            # timestamp assertions below stay required.
+            import os
+            os.link(path,output)
     elif destination in ("wal", "shm", "journal"):
         output = Path(str(path) + "-" + destination)
     elif destination == "existing":
