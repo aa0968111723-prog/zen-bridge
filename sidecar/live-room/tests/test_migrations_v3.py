@@ -37,7 +37,7 @@ def v2_db(path: Path) -> Path:
 
 def test_v2_upgrades_to_v3_with_snapshot_and_backfill(tmp_path):
     p = v2_db(tmp_path / "zen.sqlite3")
-    assert db.migrate(p) == 3 == db.SCHEMA_VERSION
+    assert db.migrate(p) == db.SCHEMA_VERSION == 12      # 0003 + backend staging 0010, 0011, 0012
     snap = tmp_path / "pre-migrate-v2.sqlite3"
     assert snap.is_file()
     with sqlite3.connect(snap) as s:
@@ -61,7 +61,7 @@ def test_running_twice_is_identical_and_no_second_snapshot(tmp_path):
     c = db.connect(p)
     before = c.execute("SELECT * FROM glossary_term_targets ORDER BY id").fetchall()
     c.close()
-    assert db.migrate(p) == 3
+    assert db.migrate(p) == db.SCHEMA_VERSION
     c = db.connect(p)
     assert c.execute("SELECT * FROM glossary_term_targets ORDER BY id").fetchall() == before
     c.close()
@@ -70,7 +70,7 @@ def test_running_twice_is_identical_and_no_second_snapshot(tmp_path):
 
 def test_fresh_db_goes_straight_to_v3_without_snapshot(tmp_path):
     p = tmp_path / "new" / "zen.sqlite3"
-    assert db.migrate(p) == 3
+    assert db.migrate(p) == db.SCHEMA_VERSION
     assert not list(p.parent.glob("pre-migrate-*"))
 
 
@@ -144,7 +144,7 @@ def test_newer_db_is_a_clear_error_pointing_at_the_snapshot(tmp_path):
     p = tmp_path / "zen.sqlite3"
     db.migrate(p)
     c = db.connect(p)
-    c.execute("PRAGMA user_version = 9")
+    c.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION + 1}")
     c.close()
     with pytest.raises(db.SchemaError, match="pre-migrate"):
         db.migrate(p)
@@ -175,12 +175,12 @@ def test_update_snapshot_and_rollback_detects_newer_db(tmp_path, monkeypatch, ca
     c.close()
     assert update.db_rollback_check(tmp_path, backup) == "newer"         # prompt, no overwrite
     out = capsys.readouterr().out
-    assert "v3" in out and "-RestoreDb" in out
-    assert update.db_version(p) == 3
+    assert f"v{db.SCHEMA_VERSION}" in out and "-RestoreDb" in out
+    assert update.db_version(p) == db.SCHEMA_VERSION
     assert update.db_rollback_check(tmp_path, backup, restore_db=True) == "restored"
     assert update.db_version(p) == 2
     aside = list(data.glob("zen.sqlite3.pre-restore-*"))
-    assert aside and update.db_version(aside[0]) == 3                    # post-update data kept
+    assert aside and update.db_version(aside[0]) == db.SCHEMA_VERSION                    # post-update data kept
 
 
 def test_update_snapshot_without_db_is_noop(tmp_path, monkeypatch):

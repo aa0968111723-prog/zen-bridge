@@ -16,7 +16,16 @@ NOT wired into the pipeline yet (18:30 work). What exists here:
 * ``validate_caption(text, tgt_lang)``: en uses the existing plain-English gate; ja has its
   own gate (kana/kanji allowed, no think/template tokens, one line, length cap).
 
-Env (all optional): BREEZE_MT_BACKEND=hymt|off (default off), BREEZE_MT_BASE_URL
+round4: ``IndexTranslateLlamaServer`` (Index-Translate-2B, Apache-2.0) is a second, opt-in
+profile (``BREEZE_MT_BACKEND=index``) - never the default. It uses the model card's prompts
+verbatim, temperature 0 and ``chat_template_kwargs={"enable_thinking": false}``.
+
+round4 #10 (D3): ja sessions default to the **Q8_0** GGUF (Hy-MT2 Q4_K_M loses instruction
+following: IFMTBench 69.36 -> 63.47; box Q8_0 12.3 tok/s vs Q4_K_M 19.2 tok/s). en stays
+Q4_K_M until the laptop T4 MT layer gives real numbers. ``gguf_for(lang)`` /
+``BREEZE_MT_GGUF_EN`` / ``BREEZE_MT_GGUF_JA`` say which file llama-server should load.
+
+Env (all optional): BREEZE_MT_BACKEND=hymt|index|off (default off), BREEZE_MT_BASE_URL
 (default http://127.0.0.1:8081/v1), BREEZE_MT_MODEL (default hy-mt2-1.8b), BREEZE_MT_PROMPT,
 BREEZE_MT_TEMPERATURE (0.2), BREEZE_MT_MAX_TOKENS (256), BREEZE_DEFAULT_TGT_LANG (en).
 """
@@ -45,6 +54,28 @@ CONTEXT_PROMPT = ("【背景信息】\n{background_text}\n\n请结合背景信�
 CONTEXT_LINES = 2
 DEFAULT_BASE = "http://127.0.0.1:8081/v1"
 
+# round4 #10 (D3): default quantisation per target language.
+DEFAULT_QUANT = {"en": "Q4_K_M", "ja": "Q8_0"}
+GGUF_NAME = {"hymt": "Hy-MT2-1.8B-{quant}.gguf", "index": "Index-Translate-2B-{quant}.gguf"}
+
+
+def gguf_for(lang: str, profile: str = "hymt", env=None) -> str:
+    """File name (or env override path) of the GGUF llama-server should serve for ``lang``."""
+    env = os.environ if env is None else env
+    lang = validate_tgt_lang(lang)
+    override = (env.get(f"BREEZE_MT_GGUF_{lang.upper()}") or "").strip()
+    if override:
+        return override
+    return GGUF_NAME.get(profile, GGUF_NAME["hymt"]).format(quant=DEFAULT_QUANT[lang])
+
+# Index-Translate-2B model card (HF IndexTeam/Index-Translate-2B README + bilibili/Index-Translate
+# inference/llm/translate.py build_prompt), verbatim. Chinese language names as in its LANG_NAMES.
+INDEX_PLAIN = "请将以下{src}文本翻译为{tgt}，直接输出翻译结果，不要进行任何解释。\n\n{text}"
+INDEX_CONSTRAINED = ("请将以下{src}{genre}翻译成{tgt}，并且严格遵循所有约束要求。\n\n"
+                     "【源文】\n{text}\n\n【约束要求】\n{reqs}\n\n只输出译文，不要有任何额外说明。")
+INDEX_TERMS = "【硬性要求】专名/术语对照: {pairs}"          # pairs joined by "、", each "A→B"
+INDEX_CONTEXT = "【注意】上文（仅供理解语境，不要翻译）：{lines}"   # our soft constraint - UNVERIFIED
+
 
 class TargetLangError(ValueError):
     pass
@@ -65,8 +96,11 @@ class _SessionLang:
     history: list = field(default_factory=list)     # [(from_seq, lang, at)]
 
 
+SESSION_LANG_LOCKED_MESSAGE = "這個場次的翻譯語言在開始時就固定了；要換語言，請先按「停止」，再用新的語言開始新場次。"
+
+
 class SessionTargets:
-    """One target language per session; a switch only applies from the next segment."""
+    """One target language per session, fixed at its start (PR #29); switching needs a new session."""
 
     def __init__(self, default: str = "en", clock=time.time):
         self.default = validate_tgt_lang(default)
@@ -81,19 +115,27 @@ class SessionTargets:
         return lang
 
     def switch(self, room_id: str, session_id: str, lang: str, *, last_seq: int) -> dict | None:
-        """Apply ``lang`` from ``last_seq + 1``. Returns the event to record, or None if unchanged."""
+        """One target language per session (PR #29 product rule): a running session never changes.
+
+        Before the session's first slice the choice is simply recorded. Once it has started, a different
+        language is refused (returns a ``tgt_lang_refused`` event the host UI shows); the same language
+        is a no-op (None). To translate into the other language, end the session and start a new one."""
         lang = validate_tgt_lang(lang)
         with self._lock:
             cur = self._by.get((room_id, session_id))
             if cur is None:
-                cur = self._by[(room_id, session_id)] = _SessionLang(self.default, 0, [(0, self.default, self._clock())])
-            if cur.history[-1][1] == lang:
+                self._by[(room_id, session_id)] = _SessionLang(lang, 0, [(0, lang, self._clock())])
                 return None
-            frm = max(int(last_seq) + 1, cur.history[-1][0])
-            cur.history.append((frm, lang, self._clock()))
-            cur.lang, cur.from_seq = lang, frm
-        return {"kind": "tgt_lang_changed", "room_id": room_id, "session_id": session_id,
-                "tgt_lang": lang, "from_seq": frm}
+            if cur.lang == lang:
+                return None
+            kept = cur.lang
+        return {"kind": "tgt_lang_refused", "room_id": room_id, "session_id": session_id,
+                "tgt_lang": kept, "requested": lang, "after_seq": int(last_seq),
+                "message": SESSION_LANG_LOCKED_MESSAGE}
+
+    def known(self, room_id: str, session_id: str) -> bool:
+        with self._lock:
+            return (room_id, session_id) in self._by
 
     def lang_for(self, room_id: str, session_id: str, seq: int) -> str:
         with self._lock:
@@ -201,6 +243,13 @@ class HyMtLlamaServer:
                 text = TERMS_HEADER + "\n".join(pairs) + "\n" + text
         return [{"role": "user", "content": text}]
 
+    def request_body(self, zh: str, lang: str, glossary=None, context=None) -> dict:
+        return {"model": self.model, "messages": self.build_messages(zh, lang, glossary, context),
+                "temperature": self.temperature, "max_tokens": self.max_tokens, "stream": False}
+
+    def postprocess(self, content: str) -> str:
+        return content
+
     def translate(self, zh: str, *, tgt_lang: str, glossary=None, context=None,
                   deadline: float | None = None, cancel: threading.Event | None = None) -> TranslateResult:
         if not zh:
@@ -216,8 +265,7 @@ class HyMtLlamaServer:
             timeout = deadline - time.monotonic()
             if timeout <= 0:
                 return TranslateResult("", "timeout", "翻譯逾時，中文仍保留")
-        body = {"model": self.model, "messages": self.build_messages(zh, lang, glossary, context),
-                "temperature": self.temperature, "max_tokens": self.max_tokens, "stream": False}
+        body = self.request_body(zh, lang, glossary, context)
         req = urllib.request.Request(self.base_url.rstrip("/") + "/chat/completions",
                                      data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
                                      headers={"Content-Type": "application/json"})
@@ -239,10 +287,53 @@ class HyMtLlamaServer:
             return TranslateResult("", "network", "連不到本機翻譯伺服器，中文仍保留")
         except (KeyError, IndexError, TypeError, ValueError):
             return TranslateResult("", "bad_response", "翻譯回應無法讀取，中文仍保留")
-        accepted = validate_caption(content, lang, zh=zh, glossary=glossary)
+        accepted = validate_caption(self.postprocess(content), lang, zh=zh, glossary=glossary)
         if accepted is None:
             return TranslateResult("", "bad_response", "譯文不符合字幕格式，中文仍保留")
         return TranslateResult(accepted, "ok")
+
+
+@dataclass
+class IndexTranslateLlamaServer(HyMtLlamaServer):
+    """Index-Translate-2B through llama-server (Qwen3.5 hybrid: not Ollama). Opt-in profile."""
+    model: str = "index-translate-2b"
+    prompt: str = INDEX_PLAIN
+    temperature: float = 0.0                    # card: greedy
+    name: str = "index"
+    source_name: str = "中文"                   # card {source-language}; "" = card's "auto"
+    genre: str = "文本"
+
+    def build_messages(self, zh: str, tgt_lang: str, glossary=None, context=None) -> list[dict]:
+        lang = validate_tgt_lang(tgt_lang)
+        tgt = LANG_NAMES[lang]
+        text = (zh or "").strip()
+        reqs = []
+        terms = [t for t in (glossary or []) if isinstance(t, dict) and t.get("zh")]
+        key = "en" if lang == "en" else "ja"
+        pairs = [f"{t['zh']}→{t.get(key) or t.get('tgt')}" for t in terms if t.get(key) or t.get("tgt")]
+        if pairs:
+            reqs.append(INDEX_TERMS.format(pairs="、".join(pairs)))
+        background = [str(x).strip() for x in (context or []) if str(x or "").strip()][-CONTEXT_LINES:]
+        if background:
+            reqs.append(INDEX_CONTEXT.format(lines=" / ".join(background)))
+        if reqs:
+            content = INDEX_CONSTRAINED.format(src=self.source_name, genre=self.genre, tgt=tgt, text=text,
+                                               reqs="\n".join(f"{i + 1}. {r}" for i, r in enumerate(reqs)))
+        else:
+            content = self.prompt.format(src=self.source_name, tgt=tgt, text=text)
+        return [{"role": "user", "content": content}]
+
+    def request_body(self, zh: str, lang: str, glossary=None, context=None) -> dict:
+        body = super().request_body(zh, lang, glossary, context)
+        body["chat_template_kwargs"] = {"enable_thinking": False}
+        return body
+
+    def postprocess(self, content: str) -> str:
+        # card client: drop anything up to </think>, then a leading <think>
+        text = content or ""
+        if "</think>" in text:
+            text = text.split("</think>", 1)[1]
+        return text.strip().removeprefix("<think>").strip()
 
 
 def backend_from_env(env=None, opener=None) -> MtBackend | None:
@@ -250,14 +341,18 @@ def backend_from_env(env=None, opener=None) -> MtBackend | None:
     mode = (env.get("BREEZE_MT_BACKEND") or "off").strip().lower()
     if mode in ("", "off", "0"):
         return None
-    if mode != "hymt":
-        raise ValueError("BREEZE_MT_BACKEND 只能是 off 或 hymt")
+    if mode not in ("hymt", "index"):
+        raise ValueError("BREEZE_MT_BACKEND 只能是 off、hymt 或 index")
 
     def num(name, default, cast):
         try:
             return cast((env.get(name) or "").strip() or default)
         except ValueError:
             return default
+    if mode == "index":
+        return IndexTranslateLlamaServer(base_url=env.get("BREEZE_MT_BASE_URL") or DEFAULT_BASE,
+                                         model=env.get("BREEZE_MT_MODEL") or "index-translate-2b",
+                                         max_tokens=num("BREEZE_MT_MAX_TOKENS", 256, int), opener=opener)
     return HyMtLlamaServer(base_url=env.get("BREEZE_MT_BASE_URL") or DEFAULT_BASE,
                            model=env.get("BREEZE_MT_MODEL") or "hy-mt2-1.8b",
                            prompt=env.get("BREEZE_MT_PROMPT") or DEFAULT_PROMPT,

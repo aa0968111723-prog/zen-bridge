@@ -19,3 +19,7 @@ tr.sel{outline:3px solid #36c}
 pre{white-space:pre-wrap;background:#fff;border:1px solid #ddd;padding:.5em;max-height:24em;overflow:auto}
 button:focus,a:focus,input:focus,select:focus,textarea:focus{outline:3px solid #f90;outline-offset:1px}
 textarea{width:100%;min-height:3em}
+
+/* zen-shi logo (柏能 chose /workspace/zen-logo) */
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand img { border-radius: 6px; }

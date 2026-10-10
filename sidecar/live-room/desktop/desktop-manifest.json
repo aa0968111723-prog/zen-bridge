@@ -17,5 +17,46 @@
     "url": "https://go.microsoft.com/fwlink/p/?LinkId=2124703",
     "sha256": "aa38a8cfce6179b87181609b1c730a29eaf26138fc833af5759e67576770f3a3",
     "size": 1850576
+  },
+  "whisper_vulkan": {
+    "name": "whisper-vulkan-2eeeba56-windows-x64.zip",
+    "url": "https://github.com/aa0968111723-prog/zen-bridge/releases/download/runtime-assets-v1/whisper-vulkan-2eeeba56-windows-x64.zip",
+    "source": "2eeeba56e9edd762b4b38467bab96c2517163158",
+    "size": 17714411,
+    "sha256": "63943d635df272e4d62202f453657bcc04c81248a7950f4b99e72d8dc4994eb0",
+    "files": {
+      "build-manifest.json": {
+        "size": 1082,
+        "sha256": "66dbac53a69d8a3afafdece21dcfb99ead55f3104eca1db0876382e4f65368f4"
+      },
+      "ggml-base.dll": {
+        "size": 551936,
+        "sha256": "2f059cc8c9a284626eb6097bab942a776107df541b0f6968d31c500a0e2b7cd7"
+      },
+      "ggml-cpu.dll": {
+        "size": 680448,
+        "sha256": "cce0414bc99e2e1152be5ca7f8b1aea8bd8b5c5a262f2902e277028fdb71a76e"
+      },
+      "ggml-vulkan.dll": {
+        "size": 55670272,
+        "sha256": "e996aac55d776df564232f75b4f8a546d7084eda5364b4c402d448a32d76ab3f"
+      },
+      "ggml.dll": {
+        "size": 68096,
+        "sha256": "fc789293897bc46d3ea4c991b42e70fb694e4aef1443c2e30acfd0c1a0a90776"
+      },
+      "LICENSE-whisper.txt": {
+        "size": 1099,
+        "sha256": "173fa96d2bc8be3fc3a29f98ae2a10d3bdcaafbbb66cd358110b863da71f9591"
+      },
+      "whisper-server.exe": {
+        "size": 718848,
+        "sha256": "cc13c43fa61102eca4f7b9402d381a7ea8388cd839f738f211c9a12564f33fd3"
+      },
+      "whisper.dll": {
+        "size": 1364480,
+        "sha256": "fd1be050077fa074801059258e80dd31d14552c955e9a98077cf7179e478bd62"
+      }
+    }
   }
 }

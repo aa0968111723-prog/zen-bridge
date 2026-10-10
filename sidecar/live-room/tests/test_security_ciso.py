@@ -31,10 +31,20 @@ def test_embedder_env_refuses_8645():
         embedder_from_env({"ZEN_EMBED_BASE_URL": "http://127.0.0.1:8645"})
 
 
+def _drain_body(handler) -> None:
+    """Read the request body before answering. Windows root cause of WinError 10053: replying to a POST
+    and closing with its body still unread makes the stack send RST, so the client sees "connection
+    aborted" instead of the 307 under test (Linux tolerates it)."""
+    n = int(handler.headers.get("Content-Length") or 0)
+    if n > 0:
+        handler.rfile.read(n)
+
+
 class _Redirector(http.server.BaseHTTPRequestHandler):
     target = ""
 
     def do_GET(self):
+        _drain_body(self)
         self.send_response(307)
         self.send_header("Location", self.target + self.path)
         self.end_headers()
@@ -49,6 +59,7 @@ class _Canary(http.server.BaseHTTPRequestHandler):
     hits = []
 
     def do_GET(self):
+        _drain_body(self)
         _Canary.hits.append(self.path)
         self.send_response(200)
         self.end_headers()
