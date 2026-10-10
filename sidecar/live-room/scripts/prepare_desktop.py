@@ -20,6 +20,7 @@ def prepare(output, assets, sdk=None):
     # enumerating source_files; the resulting installer works offline.
     subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_windows_runtime.py')], check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_silero_vad.py')], check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_vulkan_runtime.py')], check=True)
     output.mkdir(parents=True, exist_ok=True)
     for path in source_files():
         relative = path.relative_to(ROOT)
@@ -72,6 +73,11 @@ def prepare(output, assets, sdk=None):
         if not verified(tool_archive, tool_asset):
             tool_archive = download_verified(tool_asset, cache / tool_asset['name'])
         extract_binaries(tool_archive, output / 'tools')
+    # Vulkan server and every ggml backend come from a single verified build.
+    gpu = output / 'tools/whisper-vulkan'
+    shutil.copytree(ROOT / 'tools/whisper-vulkan', gpu, dirs_exist_ok=True)
+    for runtime_dll in (ROOT / 'app/vendor/msvc').glob('*.dll'):
+        shutil.copy2(runtime_dll, gpu / runtime_dll.name)
     command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(ROOT / 'desktop/build.ps1'), '-OutputDirectory', str(output)]
     if sdk:
         command += ['-SdkDirectory', str(sdk)]
