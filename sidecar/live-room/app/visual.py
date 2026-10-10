@@ -65,6 +65,7 @@ KINDS = ("concept_card", "mermaid_flow", "mermaid_mindmap", "compare_table")
 MERMAID_KINDS = {"mermaid_flow": ("flowchart", "graph"), "mermaid_mindmap": ("mindmap",)}
 MERMAID_WHITELIST = frozenset({"flowchart", "graph", "mindmap"})
 MERMAID_MAX = 2000
+MERMAID_MAX_LINES = 40   # laptop qwen3:1.7b looped p1-->p2 ... p99-->p100; a lecture sketch never needs more
 # Matched case-insensitively as substrings. "%%{" also covers "%%{init".
 MERMAID_FORBIDDEN = ("click", "href", "%%{init", "%%{", "callback", "<", "javascript:")
 ORIGINS = ("llm", "fallback")
@@ -215,6 +216,8 @@ def sanitize_mermaid(source: Any, kind: str | None = None) -> str | None:
         text = fenced.group(1)
     text = text.strip()
     if not text or len(text) > MERMAID_MAX:
+        return None
+    if sum(1 for ln in text.split("\n") if ln.strip()) > MERMAID_MAX_LINES:
         return None
     lowered = text.lower()
     for bad in MERMAID_FORBIDDEN:

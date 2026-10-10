@@ -126,3 +126,11 @@ async def test_server_feeds_visual_v2_final_captions():
         await stop(app)
     assert fed and all(ev["type"] == "final" and ev["zh"] for ev in fed)
     assert {ev["id"] for ev in fed} == {"class:s1:1"} and isinstance(fed[0]["t0_ms"], int)
+
+
+def test_degenerate_long_mermaid_is_rejected():
+    """Laptop screenshot: qwen3:1.7b produced a 100-edge p1-->p2 chain; sanitize_mermaid drops it."""
+    loop = "flowchart TD\n" + "\n".join(f"  p{i} --> p{i + 1}" for i in range(1, 100))
+    assert visual.sanitize_mermaid(loop) is None
+    ok = "flowchart TD\n  A[般若] --> B[智慧]\n  B --> C[看清楚]"
+    assert visual.sanitize_mermaid(ok) == ok
