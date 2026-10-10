@@ -49,7 +49,7 @@ def test_clean_formats_languages_and_encoding(tmp_path, capsys, fmt, lang, text,
     assert report["cue_count"] == 1
 
 
-@pytest.mark.parametrize("index", ["0", "2", "-1", "one", "1.0", ""])
+@pytest.mark.parametrize("index", ["0", "2", "-1", "one", "1.0", "", "9" * 5000])
 def test_bad_index(tmp_path, capsys, index):
     content = cue().split("\n", 1)[1]
     if index:
@@ -59,6 +59,14 @@ def test_bad_index(tmp_path, capsys, index):
     assert codes(report) == {"bad_index"}
     assert report["issues"][0]["cue_index"] == 1
     assert report["issues"][0]["timestamp"] == "00:00:00,000 --> 00:00:02,000"
+
+
+@pytest.mark.parametrize("text", ["Go --> home", "Hello\nGo --> home"])
+def test_literal_arrow_in_srt_text(tmp_path, capsys, text):
+    code, report = run(tmp_path, capsys, cue(text))
+    assert code == 0
+    assert report["cue_count"] == 1
+    assert report["issues"] == []
 
 
 @pytest.mark.parametrize("fmt,start", [

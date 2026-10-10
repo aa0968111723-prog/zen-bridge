@@ -61,6 +61,7 @@ def lint(text: str, fmt: str, lang: str, *, max_cps: float | None = None,
         rf"({STAMP[fmt]})[ \t]+-->[ \t]+({STAMP[fmt]})"
         + (r"(?:[ \t]+[^\r\n]+)?" if fmt == "vtt" else "")
     )
+    timing_candidate = re.compile(r"^[ \t]*(?:[0-9][0-9:.,]*[ \t]*)?-->")
     pos = 0
     header_error = False
     valid_header = False
@@ -98,10 +99,9 @@ def lint(text: str, fmt: str, lang: str, *, max_cps: float | None = None,
         if timestamp is not None:
             pos += 1
         if fmt == "srt":
-            if index_line is None or not re.fullmatch(r"[0-9]+", index_line) or int(index_line) != ordinal:
+            if (index_line is None or not re.fullmatch(r"[0-9]+", index_line)
+                    or index_line.lstrip("0") != str(ordinal)):
                 issue(index, timestamp, "bad_index", f"Expected SRT index {ordinal}.")
-            else:
-                index = int(index_line)
         match = timing_pattern.fullmatch(timestamp or "")
         start = end = None
         try:
@@ -114,10 +114,10 @@ def lint(text: str, fmt: str, lang: str, *, max_cps: float | None = None,
         body = []
         missing_blank = False
         while pos < len(lines) and lines[pos].strip():
-            if "-->" in lines[pos]:
+            if timing_candidate.match(lines[pos]):
                 missing_blank = True
                 break
-            if (pos + 1 < len(lines) and "-->" in lines[pos + 1]
+            if (pos + 1 < len(lines) and timing_candidate.match(lines[pos + 1])
                     and (body or (fmt == "srt" and re.fullmatch(r"[0-9]+", lines[pos].strip())))):
                 missing_blank = True
                 break
