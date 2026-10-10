@@ -13,6 +13,15 @@ class AgentRequests:
         self.asr_lane=asyncio.Semaphore(1);self.translation_lane=asyncio.Semaphore(1)
     def status(self):
         return {'metrics':self.metrics.snapshot(),'translation':self.translator.status(),'asr_ready':self.asr.health()}
+    async def _run_blocking(self, function, *args):
+        operation=asyncio.create_task(asyncio.to_thread(function,*args))
+        try:
+            return await asyncio.shield(operation)
+        except asyncio.CancelledError:
+            # A cancelled await cannot stop an inference thread. Keep its lane
+            # until it exits, so reconnecting does not start a second inference.
+            await operation
+            raise
     async def handle(self,request):
         kind=request.get('type');identifier=request.get('id')
         if kind not in ('transcribe','translate','status') or not isinstance(identifier,str) or len(identifier)>80:return None
@@ -22,7 +31,7 @@ class AgentRequests:
         try:
             if kind=='translate':
                 async with self.translation_lane:
-                    result=await asyncio.to_thread(self.translator.translate,request.get('instructions'),request.get('input'),request.get('mode'))
+                    result=await self._run_blocking(self.translator.translate,request.get('instructions'),request.get('input'),request.get('mode'))
                 route=result['route'];response.update(ok=True,result=result)
             else:
                 async with self.asr_lane:
@@ -36,13 +45,7 @@ class AgentRequests:
                             if (reader.getnchannels(),reader.getsampwidth(),reader.getframerate())!=(1,2,16000) or not 0<duration<=30:raise ValueError()
                         language=request.get('language','zh')
                         if language not in ('zh','en'):raise ValueError()
-                        operation=asyncio.create_task(asyncio.to_thread(self.asr.transcribe,wav,str(request.get('prompt',''))[:2000],language))
-                        try:
-                            result=await asyncio.shield(operation)
-                        except asyncio.CancelledError:
-                            # Keep the WAV and ASR lane alive until the native thread exits.
-                            await operation
-                            raise
+                        result=await self._run_blocking(self.asr.transcribe,wav,str(request.get('prompt',''))[:2000],language)
                         response.update(ok=result.ok,source=result.text if result.ok else '')
         except Exception:response['error']='Selected desktop operation failed'
         self.metrics.record(kind,(time.monotonic()-started)*1000,response['ok'],duration,route)
