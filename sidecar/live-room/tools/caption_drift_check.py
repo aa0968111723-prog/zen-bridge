@@ -184,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         report = analyze(args.db, args.session)
-        payload = json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+        payload = json.dumps(report, indent=2, allow_nan=False) + "\n"
         if args.json is not None:
             db = args.db.resolve()
             protected = {db, *(Path(str(db) + suffix) for suffix in ("-wal", "-shm", "-journal"))}

@@ -1,5 +1,6 @@
 import ast
 from contextlib import closing
+import io
 import json
 from pathlib import Path
 import re
@@ -254,6 +255,24 @@ def test_missing_database_is_not_created(tmp_path, capsys):
     captured = capsys.readouterr()
     assert "cannot analyze" in captured.err and "unable to open database" in captured.err
     assert not captured.out and not path.exists() and not output.exists()
+
+
+def test_unicode_identifiers_with_legacy_windows_stdout(tmp_path, monkeypatch):
+    path = _caption_db(tmp_path / "captions.sqlite3")
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute("UPDATE captions SET room_id='会議', session_id='日本語'")
+        conn.commit()
+    before = _snapshot(path)
+    with closing(io.TextIOWrapper(io.BytesIO(), encoding="cp1252")) as stdout:
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "stdout", stdout)
+            assert drift.main(["--db", str(path), "--session", "日本語"]) == 0
+            stdout.flush()
+            report = json.loads(stdout.buffer.getvalue().decode("ascii"))
+    assert report["sessions"][0]["room_id"] == "会議"
+    assert report["sessions"][0]["session_id"] == "日本語"
+    assert report["overall"]["segments"] == 3
+    assert _snapshot(path) == before
 
 
 @pytest.mark.parametrize("destination", ["db", "alias", "wal", "existing"])
