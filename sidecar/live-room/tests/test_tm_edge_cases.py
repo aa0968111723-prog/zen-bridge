@@ -1,7 +1,5 @@
 import difflib
 
-import pytest
-
 from app.admin import db
 from app import tm
 from tests.local_fakes import migrated_db
@@ -56,10 +54,6 @@ def test_disabled_quality_is_not_an_exact_match(tmp_path):
     assert memory.exact(source, "en") is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="TranslationMemory.fuzzy currently omits quality<3 disabled units from its SQL filter.",
-)
 def test_disabled_quality_is_not_a_fuzzy_example(tmp_path):
     source = "今天我們一起來學習因緣具足的道理"
     query = "今天我們一起來學習因緣具足的原理"
