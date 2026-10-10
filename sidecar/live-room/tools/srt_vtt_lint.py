@@ -79,7 +79,11 @@ def lint(text: str, fmt: str, lang: str, *, max_cps: float | None = None,
         rf"({STAMP[fmt]})[ \t]+-->[ \t]+({STAMP[fmt]})"
         + (r"(?:[ \t]+[^\r\n]+)?" if fmt == "vtt" else "")
     )
-    timing_candidate = re.compile(r"^[ \t]*(?:[0-9][0-9:.,]*[ \t]*)?-->")
+    def timing_candidate(line):
+        prefix, arrow, _ = line.partition("-->")
+        return bool(arrow) and (
+            not prefix.strip() or re.fullmatch(r"[0-9][0-9:.,]*", prefix.strip()) is not None
+        )
     pos = 0
     header_error = False
     valid_header = False
@@ -132,10 +136,10 @@ def lint(text: str, fmt: str, lang: str, *, max_cps: float | None = None,
         body = []
         missing_blank = False
         while pos < len(lines) and lines[pos].strip():
-            if timing_candidate.match(lines[pos]):
+            if timing_candidate(lines[pos]):
                 missing_blank = True
                 break
-            if (pos + 1 < len(lines) and timing_candidate.match(lines[pos + 1])
+            if (pos + 1 < len(lines) and timing_candidate(lines[pos + 1])
                     and (body or (fmt == "srt" and re.fullmatch(r"[0-9]+", lines[pos].strip())))):
                 missing_blank = True
                 break
