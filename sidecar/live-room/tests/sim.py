@@ -448,6 +448,7 @@ class VirtualHost:
         self._release_slice = asyncio.Event()
         self._release_slice.set()
         self.waiting: list[tuple[float, float]] = []
+        self.starved_v = 0.0   # virtual seconds the OS kept this runnable loop off the CPU while waiting
         self.responses: list[dict] = []
         self.retries: list[int] = []
         self.segment_end_mono: dict[int, float] = {}
@@ -528,11 +529,20 @@ class VirtualHost:
             start_ms = self.clock_ms
             # perf_counter, not monotonic: Windows 3.11 monotonic steps by ~15.6 ms.
             real = time.perf_counter()
+            queued = runqueue_wait_s()
             await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
             # Book every real pause, including those under one virtual second.
             # An immediate return (a free slot) never reaches this wait.
             # Round-to-zero is the scheduler, not a pause the clock can see.
-            spent_ms = int(round((time.perf_counter() - real) / self.scale * 1000))
+            wall_s = time.perf_counter() - real
+            # Root cause of the box/CI "waits": with time compressed by ``scale``, a few real ms in which
+            # the OS left this runnable loop off the CPU (other processes) become virtual seconds. That is
+            # host starvation, not server backlog. Subtract the kernel's run-queue delay for this thread
+            # (Linux schedstat; 0 elsewhere). Server CPU spent on the loop is still counted in full.
+            starved_s = min(wall_s, max(0.0, runqueue_wait_s() - queued))
+            if starved_s > 0:
+                self.starved_v += starved_s / self.scale
+            spent_ms = int(round((wall_s - starved_s) / self.scale * 1000))
             if spent_ms > 0:
                 self.clock_ms += spent_ms
                 self.waiting.append((start_ms / 1000, self.clock_ms / 1000))
@@ -665,6 +675,8 @@ class SimReport:
     rss_500: int = 0
     rss_750: int = 0
     rss_1000: int = 0
+    blocks: tuple = (0, 0, 0, 0, 0)
+    starved_v: float = 0.0
     pending_peak: int = 0
     storm_rejects: int = 0
     retries: list[int] = field(default_factory=list)
@@ -770,7 +782,26 @@ def _app_traced_bytes() -> int:
     return total
 
 
-def _sample_server_memory() -> tuple[int, int]:
+def runqueue_wait_s() -> float:
+    """Seconds this process's threads spent runnable but not running (Linux /proc schedstat), else 0.
+
+    Summed over threads (event loop, ASR/translate workers, sqlite writer): an upload finishes late
+    when any of them sits in the run queue. The caller caps the discount at the wall time waited.
+    """
+    total = 0
+    try:
+        for tid in os.listdir("/proc/self/task"):
+            try:
+                with open(f"/proc/self/task/{tid}/schedstat", "rb") as fh:
+                    total += int(fh.read().split()[1])
+            except (OSError, ValueError, IndexError):
+                continue
+    except OSError:
+        return 0.0
+    return total / 1e9
+
+
+def _sample_server_memory() -> tuple[int, int, int]:
     """One collection with GC enabled, then server heap and process RSS.
 
     The paced run leaves automatic GC off so a collection cannot be booked as
@@ -781,9 +812,12 @@ def _sample_server_memory() -> tuple[int, int]:
     gc.collect()
     traced = _app_traced_bytes()
     rss = rss_bytes()
+    # Live CPython blocks: the leak signal. RSS also moves with allocator arenas and the
+    # malloc high-water mark, which is what made the CI window check flaky (7.68 vs 7.37 MB).
+    blocks = sys.getallocatedblocks()
     if not was:
         gc.disable()
-    return traced, rss
+    return traced, rss, blocks
 
 
 def _class_plan(zh: str):
@@ -882,10 +916,29 @@ async def _run_100min_async(*, trace: bool) -> SimReport:
             assert host is not None
             host.hold_new_slices()
             try:
+                stolen = [0.0]
+
+                def timed(sample):
+                    def run():
+                        started = time.perf_counter()
+                        try:
+                            return sample()
+                        finally:
+                            stolen[0] = time.perf_counter() - started
+                    return run
+
                 if seq in rss_points:
-                    mem_at[seq] = await sample_after_translations(pipe, _sample_server_memory)
+                    mem_at[seq] = await sample_after_translations(pipe, timed(_sample_server_memory))
                 else:
-                    await sample_after_translations(pipe, gc.collect)
+                    await sample_after_translations(pipe, timed(gc.collect))
+                # Root cause of the base "waits": gc.collect() holds the loop, and its cost grows with
+                # the heap (6 ms at seq 50 -> 14+ ms at seq 950, measured). Uploads already in flight
+                # lose that loop time, and the next slot check booked it as server backlog. Give them
+                # back exactly the time the harness took, outside any measured wait; a real backlog
+                # outlasts this and is still booked.
+                active = host._active_tasks()
+                if active and stolen[0] > 0:
+                    await asyncio.wait(active, timeout=stolen[0])
             finally:
                 host.release_new_slices()
 
@@ -959,11 +1012,11 @@ async def _run_100min_async(*, trace: bool) -> SimReport:
                 for row in state
             ]
             pipe = app.state.pipeline
-            _, rss_0 = mem_at.get(0, (0, 0))
-            _, rss_250 = mem_at.get(250, (0, 0))
-            traced_500, rss_500 = mem_at.get(500, (0, 0))
-            traced_750, rss_750 = mem_at.get(750, (0, 0))
-            traced_1000, rss_1000 = mem_at.get(1000, (0, 0))
+            _, rss_0, blocks_0 = mem_at.get(0, (0, 0, 0))
+            _, rss_250, blocks_250 = mem_at.get(250, (0, 0, 0))
+            traced_500, rss_500, blocks_500 = mem_at.get(500, (0, 0, 0))
+            traced_750, rss_750, blocks_750 = mem_at.get(750, (0, 0, 0))
+            traced_1000, rss_1000, blocks_1000 = mem_at.get(1000, (0, 0, 0))
             report = SimReport(
                 segments=SEGMENTS,
                 room=room,
@@ -993,6 +1046,8 @@ async def _run_100min_async(*, trace: bool) -> SimReport:
                 rss_500=rss_500,
                 rss_750=rss_750,
                 rss_1000=rss_1000,
+                blocks=(blocks_0, blocks_250, blocks_500, blocks_750, blocks_1000),
+                starved_v=float(host.starved_v),
                 pending_peak=int(observed["pending"]),
                 storm_rejects=int(storm["rejects"]),
                 retries=list(host.retries),
