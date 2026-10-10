@@ -23,7 +23,11 @@ def phrase(q: str) -> str:
 def unigram_query(q: str) -> str:
     q = q.strip()
     if _CJK.search(q):
-        return phrase(" ".join(ch for ch in q if not ch.isspace()))
+        # DBA D9: one token per CJK char, Latin/digit runs as prefix tokens ("A翻" -> "A"* "翻").
+        toks = re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0003134f]|[^\s\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0003134f]+", q)
+        if all(_CJK.match(t) for t in toks):
+            return phrase(" ".join(toks))
+        return " ".join(phrase(t) if _CJK.match(t) else phrase(t) + "*" for t in toks)
     return phrase(q) + "*"
 
 
@@ -34,6 +38,8 @@ def route(q: str) -> str:
 
 def search_transcripts(c: sqlite3.Connection, q: str, *, limit: int = 20, after: tuple | None = None,
                        session_id: str | None = None) -> tuple[list[dict], str]:
+    # DBA D9: transcripts have no spaces between CJK characters; "因 緣 生" must find 因緣生.
+    q = "".join(q.split()) if _CJK.search(q) else " ".join(q.split())
     mode = route(q)
     if mode == "trigram":
         hits = ("SELECT t.id AS owner_id, t.segment_id, bm25(transcripts_fts) AS score, "
@@ -68,7 +74,7 @@ def search_translations(c: sqlite3.Connection, q: str, *, limit: int = 20, after
 
 def _page(c, hits_sql: str, args: list, owner_type: str, limit: int, after, session_id) -> list[dict]:
     sql = (f"WITH hits AS ({hits_sql}) SELECT '{owner_type}' AS owner_type, h.owner_id, h.segment_id, h.score, "
-           "h.snippet, g.session_id, g.t0_ms FROM hits h JOIN segments g ON g.id = h.segment_id WHERE 1=1")
+           "h.snippet, g.session_id, g.t0_ms FROM hits h JOIN segments g ON g.id = h.segment_id WHERE g.status <> 'deleted'")
     if after is not None:
         sql += " AND (h.score > ? OR (h.score = ? AND h.owner_id > ?))"
         args = args + [after[0], after[0], after[1]]

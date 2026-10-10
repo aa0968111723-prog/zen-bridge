@@ -55,13 +55,13 @@
 | `BREEZE_TRANSLATE_BASE_URL` | `http://127.0.0.1:11434/v1` | 只接受本機位址；非本機需另設 `BREEZE_TRANSLATE_ALLOW_REMOTE=1` |
 | `BREEZE_TRANSLATE_MODEL` | `qwen3:4b` | Ollama 的 `qwen3:4b` 即 Q4_K_M |
 | `BREEZE_TRANSLATE_PROTOCOL` | `auto` | 11434 埠自動用 Ollama 原生 `/api/chat`（只有它吃得到執行緒設定）；`openai` 強制 `/v1/chat/completions` |
-| `BREEZE_TRANSLATE_NUM_THREAD` | `4` | 翻譯生成執行緒（留核心給 ASR）；`0` = 交給 Ollama |
+| `BREEZE_TRANSLATE_NUM_THREAD` | `4`（`start_backend.ps1` 預設傳 `2`） | 翻譯生成執行緒，這才是真正限制 Ollama 吃 CPU 的設定。5600H 只有 6 個實體核心：建議 ASR 6 ＋ 翻譯 2（或 ASR 4 ＋ 翻譯 2），兩者相加不要超過實體核心數；用 benchmark 第 3 層的配置 A／B／C 比較後再定。`0` = 交給 Ollama |
 | `BREEZE_TRANSLATE_NUM_CTX` | `2048` | context 長度 |
 | `BREEZE_TRANSLATE_KEEP_ALIVE` | `-1` | 翻譯模型常駐 |
 | `BREEZE_TRANSLATE_QUEUE` | `4` | 翻譯佇列上限（滿了丟最舊的） |
 | `BREEZE_TRANSLATE_STALE_S` | `8` | 最舊待翻句等超過幾秒，且後面還有新句時… |
 | `BREEZE_TRANSLATE_STALE_POLICY` | `skip` | …`skip` 跳過（標 `skipped_backlog`，中文保留）、`merge` 併入下一句一起翻、`off` 不處理 |
-| `BREEZE_TRANSLATE_PRIORITY` | `below_normal` | 翻譯工作執行緒優先權低於 ASR（`idle`／`below_normal`／`normal`） |
+| `BREEZE_TRANSLATE_PRIORITY` | `below_normal` | 只降低 zen-bridge 裡「等翻譯回覆」的 Python 執行緒；**不會**降低 Ollama runner 的優先權，對 CPU 競爭幾乎沒有作用（`idle`／`below_normal`／`normal`） |
 | `ZEN_LEDGER` | `0` | `1` = 把字幕寫進 zen.sqlite3（失敗不影響字幕） |
 | `ZEN_DB_PATH` | `%LOCALAPPDATA%\ZenBridge\data\zen.sqlite3` | 主資料庫 |
 | `ZEN_IDENTITY_DB_PATH` | `...\data\zen-identity.sqlite3` | 個資／權杖庫（與主庫分開） |

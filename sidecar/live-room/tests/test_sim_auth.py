@@ -32,7 +32,8 @@ async def test_every_host_route_requires_token():
     async with serving(asr=TextAsr(0), settings=sim_settings(translate=False)) as (app, client, token):
         routes = _host_routes(app)
         # GET and PUT /api/rooms/{room_id}/glossary are host routes. The count moves when one is added.
-        assert len(routes) == 16
+        # round3: + POST /api/rooms/{room_id}/pause and /resume (private pause).
+        assert len(routes) == 18
         for route in routes:
             method = sorted(route.methods - {"HEAD", "OPTIONS"})[0]
             path = route.path.replace("{room_id}", "class")

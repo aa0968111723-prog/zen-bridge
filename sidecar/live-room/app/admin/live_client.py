@@ -13,13 +13,14 @@ Rules (backend-review §2.3)
 """
 from __future__ import annotations
 
+import http.client
 import json
 import random
 import threading
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from app.admin.security import guard_outbound_url
 
@@ -28,6 +29,24 @@ DEFAULT_LIVE_URL = "http://127.0.0.1:8780"
 
 class LiveDown(RuntimeError):
     """Live room unreachable or breaker open."""
+
+
+class LiveRefused(LiveDown):
+    """Nothing is listening on the live-room port (connection refused): the App is not running.
+
+    Only this subclass may be read as "live room is down". Timeouts, 5xx, an open breaker or
+    bad JSON are plain LiveDown / LiveError and must be treated as *busy* (QA 效能長 P0-7).
+    """
+
+
+def _is_refused(exc: BaseException) -> bool:
+    import errno
+    cur = getattr(exc, "reason", None) or exc
+    if isinstance(cur, ConnectionRefusedError):
+        return True
+    if isinstance(cur, OSError) and (cur.errno in (errno.ECONNREFUSED, 10061) or getattr(cur, "winerror", None) == 10061):
+        return True
+    return False
 
 
 class LiveError(RuntimeError):
@@ -67,6 +86,19 @@ class Breaker:
             self.opened_at = self._clock()
 
 
+def live_url_from_env(env=None) -> str:
+    """ZEN_LIVE_URL, else http://127.0.0.1:$BREEZE_PORT, else 8780 (QA 全端工程師 B3)."""
+    import os
+    env = os.environ if env is None else env
+    url = (env.get("ZEN_LIVE_URL") or "").strip()
+    if url:
+        return guard_outbound_url(url)
+    port = (env.get("BREEZE_PORT") or "").strip()
+    if port.isdigit():
+        return guard_outbound_url(f"http://127.0.0.1:{int(port)}")
+    return DEFAULT_LIVE_URL
+
+
 class LiveRoomClient:
     def __init__(self, base: str = DEFAULT_LIVE_URL, *, opener=None, clock=time.monotonic, sleeper=time.sleep):
         self.base = guard_outbound_url(base)
@@ -102,12 +134,28 @@ class LiveRoomClient:
             raw = exc.read() or b""
             status = exc.code
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
-            raise LiveDown(str(getattr(exc, "reason", exc))[:120]) from exc
+            kind = LiveRefused if _is_refused(exc) else LiveDown
+            raise kind(str(getattr(exc, "reason", exc))[:120]) from exc
+        except (http.client.HTTPException, ValueError) as exc:      # e.g. InvalidURL (資安長 #5)
+            raise LiveDown(type(exc).__name__) from exc
         try:
             parsed = json.loads(raw.decode("utf-8")) if raw else None
         except (UnicodeDecodeError, json.JSONDecodeError):
             parsed = None
         return status, parsed
+
+    def port_refused(self, timeout: float = 0.5) -> bool:
+        """True only when the live-room port actively refuses a TCP connection (App not running)."""
+        import socket
+        from urllib.parse import urlsplit
+        parts = urlsplit(self.base)
+        try:
+            with socket.create_connection((parts.hostname, parts.port or 80), timeout=timeout):
+                return False
+        except ConnectionRefusedError:
+            return True
+        except OSError as exc:
+            return _is_refused(exc)
 
     def _fetch_token(self) -> str:
         with self._token_lock:
@@ -152,6 +200,8 @@ class LiveRoomClient:
             self.breaker.ok()
             return status, data
         self.breaker.fail()
+        if isinstance(last_exc, LiveRefused):
+            raise LiveRefused(str(last_exc))
         raise LiveDown(str(last_exc) if last_exc else "live unavailable")
 
     # -------------------------------------------------------------- typed helpers
@@ -162,14 +212,14 @@ class LiveRoomClient:
         return data
 
     def room_glossary(self, room_id: str) -> dict:
-        status, data = self.call("GET", f"/api/rooms/{room_id}/glossary", timeout=3.0)
+        status, data = self.call("GET", f"/api/rooms/{quote(room_id, safe='')}/glossary", timeout=3.0)
         if status != 200 or not isinstance(data, dict):
             raise LiveError(status, data)
         return data
 
     def put_room_glossary(self, room_id: str, terms: list[dict], if_version: int):
         # Not retried automatically: if_version makes a blind retry unsafe to interpret.
-        return self.call("PUT", f"/api/rooms/{room_id}/glossary", body={"if_version": int(if_version), "terms": terms},
+        return self.call("PUT", f"/api/rooms/{quote(room_id, safe='')}/glossary", body={"if_version": int(if_version), "terms": terms},
                          timeout=5.0, idempotent=False)
 
     def retranslate(self, room_id: str, session_id: str, seq: int, zh: str | None = None):
@@ -178,3 +228,10 @@ class LiveRoomClient:
             body["zh"] = zh
         # Synchronous on the live side (runs the LLM): long read timeout, never retried.
         return self.call("POST", "/api/segment/retranslate", body=body, timeout=30.0, idempotent=False)
+
+    def push_correction(self, room_id: str, session_id: str, seq: int, en: str, zh: str | None = None):
+        """Publish a human English line to the room as-is (no LLM). QA 全端工程師 B1."""
+        body = {"room_id": room_id, "session_id": session_id, "seq": int(seq), "en": en}
+        if zh is not None:
+            body["zh"] = zh
+        return self.call("POST", "/api/segment/retranslate", body=body, timeout=10.0, idempotent=False)

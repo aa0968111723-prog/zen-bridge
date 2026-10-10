@@ -17,6 +17,7 @@ import logging
 import os
 from urllib.parse import urlsplit
 
+from app.net import RESERVED_PORTS, effective_port
 from app.translate import Translator
 
 DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1"
@@ -47,9 +48,12 @@ def validate_base_url(url: str, *, allow_remote: bool = False) -> str:
     try:
         parts = urlsplit(raw)
         host = parts.hostname or ""
-        parts.port  # noqa: B018 - raises ValueError on a bad port
+        port = effective_port(parts)   # raises ValueError on a bad port
     except ValueError as exc:
         raise TranslateConfigError("翻譯網址無法解析") from exc
+    if port in RESERVED_PORTS:
+        # 資安長 #1: 8645 is Hermes. Never call it, whatever the host spelling.
+        raise TranslateConfigError(f"埠 {port} 保留給 Hermes，禁止連線")
     if parts.scheme not in {"http", "https"}:
         raise TranslateConfigError("翻譯網址必須是 http 或 https")
     if not host:

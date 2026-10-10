@@ -48,6 +48,7 @@ except ImportError:  # pragma: no cover - bench_local.ps1 installs it into the b
 ROOT = Path(os.environ.get("ZBENCH_ROOT") or (Path.home() / "zen-bench"))
 OLLAMA = os.environ.get("ZBENCH_OLLAMA", "http://127.0.0.1:11434")
 LIVE_PORT, WHISPER_APP_PORT, OLLAMA_PORT, RESERVED = 8780, 8178, 11434, 8645
+BENCH_PRIO = os.environ.get("ZBENCH_PRIO", "normal")   # never "above": the App's ASR runs at NORMAL
 RESIDENT_PORT = 18178                      # our own whisper-server, never the app's 8178
 TH = {"bg_mean": 15.0, "bg_spike": 30.0, "bg_spike_frac": 0.25, "throttle_drop": 0.15, "throttle_s": 10.0}
 TIMING = re.compile(r"whisper_print_timings:\s+(\w+) time =\s+([\d.]+) ms")
@@ -99,8 +100,14 @@ def parse_timings(stderr: str) -> dict:
     return {k: float(v) for k, v in TIMING.findall(stderr or "")}
 
 
-def classify(samples: list[dict], perf: list[float], on_battery: bool, ev37_delta: int, rc: int,
-             devicelost: bool = False, th: dict = TH) -> str:
+def classify(samples: list[dict], perf: list[float], on_battery: bool, ev37_delta: int | None, rc: int,
+             devicelost: bool = False, th: dict = TH, *, perf_interval: float = 0.25, baseline_n: int = 40,
+             perf_required: bool = False) -> str:
+    """Run status. perf = % Processor Performance samples every perf_interval seconds.
+
+    perf_required (Windows): no perf samples / no event-37 count means we cannot tell whether
+    the run throttled, so it is UNKNOWN_NO_PERF instead of OK (QA 效能長 P0-2).
+    """
     if rc != 0 or devicelost:
         return "FAILED"
     if on_battery:
@@ -108,16 +115,19 @@ def classify(samples: list[dict], perf: list[float], on_battery: bool, ev37_delt
     bg = [s.get("bg_cpu", 0.0) for s in samples] or [0.0]
     if sum(bg) / len(bg) > th["bg_mean"] or sum(1 for x in bg if x > th["bg_spike"]) / len(bg) > th["bg_spike_frac"]:
         return "UNKNOWN_BG_LOAD"
-    if ev37_delta > 0:
+    if ev37_delta:
         return "THROTTLED"
-    if len(perf) > 40:
-        base = sum(perf[:40]) / 40
+    baseline_n = max(1, int(baseline_n))
+    if len(perf) > baseline_n:
+        base = sum(perf[:baseline_n]) / baseline_n
         run = best = 0
         for x in perf:
             run = run + 1 if x < base * (1 - th["throttle_drop"]) else 0
             best = max(best, run)
-        if best * 0.25 >= th["throttle_s"]:
+        if best * perf_interval >= th["throttle_s"]:
             return "THROTTLED"
+    if perf_required and (not perf or ev37_delta is None):
+        return "UNKNOWN_NO_PERF"
     return "OK"
 
 
@@ -159,11 +169,47 @@ def live_room_busy(get=http_json) -> tuple[bool, str]:
     return False, "live room idle"
 
 
-def on_battery() -> bool:
-    if psutil is None or not hasattr(psutil, "sensors_battery"):
+def _win_ac_line_status() -> int | None:
+    """GetSystemPowerStatus().ACLineStatus: 0 battery, 1 AC, 255 unknown; None if unavailable."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class SYSTEM_POWER_STATUS(ctypes.Structure):
+            _fields_ = [("ACLineStatus", wintypes.BYTE), ("BatteryFlag", wintypes.BYTE),
+                        ("BatteryLifePercent", wintypes.BYTE), ("SystemStatusFlag", wintypes.BYTE),
+                        ("BatteryLifeTime", wintypes.DWORD), ("BatteryFullLifeTime", wintypes.DWORD)]
+        st = SYSTEM_POWER_STATUS()
+        if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(st)):
+            return None
+        return st.ACLineStatus & 0xFF
+    except Exception:
+        return None
+
+
+def on_battery(psutil_mod=None, ac_status=None) -> bool:
+    """True unless we positively know the machine is on AC (D-006: fail closed).
+
+    psutil first; on Windows without psutil, GetSystemPowerStatus. A machine with no battery
+    at all (desktop) reports AC. If nothing can be determined on Windows we assume battery,
+    so the run stops unless --allow-battery is given. POSIX without psutil keeps the old
+    behaviour (assume AC) because CI boxes have no power API.
+    """
+    mod = psutil if psutil_mod is None else psutil_mod
+    if mod is not None and hasattr(mod, "sensors_battery"):
+        try:
+            b = mod.sensors_battery()
+            return bool(b is not None and not b.power_plugged)
+        except Exception:
+            pass
+    status = _win_ac_line_status() if ac_status is None else ac_status
+    if status == 1:
         return False
-    b = psutil.sensors_battery()
-    return bool(b is not None and not b.power_plugged)
+    if status in (0, 255):
+        return True
+    return os.name == "nt"
 
 
 def missing_files(matrix: dict) -> list[dict]:
@@ -184,28 +230,60 @@ def missing_files(matrix: dict) -> list[dict]:
 
 # ------------------------------------------------------------------ sampling
 class Sampler(threading.Thread):
-    """Every 250 ms: child-process tree (or named processes) + whole system."""
+    """Every 250 ms: child-process tree (or named processes) + this bench process + whole system.
 
-    def __init__(self, root_pid: int | None = None, names: tuple[str, ...] = (), interval: float = 0.25):
+    psutil.Process objects are cached per pid (QA 效能長 P0-1): cpu_percent(None) needs the
+    previous call *on the same object*, a fresh object always returns 0.0. A process seen for
+    the first time only primes its baseline and is not counted in that tick.
+    """
+
+    def __init__(self, root_pid: int | None = None, names: tuple[str, ...] = (), interval: float = 0.25,
+                 include_self: bool = True):
         super().__init__(daemon=True)
         self.root_pid, self.names, self.interval = root_pid, names, interval
+        self.include_self = include_self
         self.rows: list[dict] = []
         self.halt = threading.Event()
+        self._cache: dict[int, object] = {}
 
-    def procs(self):
-        if psutil is None:
-            return []
-        out = []
+    def _pids(self) -> set[int]:
+        pids: set[int] = set()
+        if self.include_self:
+            pids.add(os.getpid())
         if self.root_pid:
             try:
-                root = psutil.Process(self.root_pid)
-                out = [root] + root.children(recursive=True)
+                root = self._cache.get(self.root_pid) or psutil.Process(self.root_pid)
+                pids.add(self.root_pid)
+                pids.update(c.pid for c in root.children(recursive=True))
             except psutil.Error:
                 pass
         if self.names:
             for p in psutil.process_iter(["name"]):
                 if any(n in (p.info.get("name") or "").lower() for n in self.names):
-                    out.append(p)
+                    pids.add(p.pid)
+        return pids
+
+    def procs(self):
+        """[(Process, primed)] — primed=False on the first sighting (baseline only)."""
+        if psutil is None:
+            return []
+        out = []
+        pids = self._pids()
+        for pid in list(self._cache):
+            if pid not in pids:
+                self._cache.pop(pid, None)
+        for pid in pids:
+            p = self._cache.get(pid)
+            if p is None:
+                try:
+                    p = psutil.Process(pid)
+                    p.cpu_percent(None)          # baseline
+                except psutil.Error:
+                    continue
+                self._cache[pid] = p
+                out.append((p, False))
+            else:
+                out.append((p, True))
         return out
 
     def run(self):
@@ -215,15 +293,16 @@ class Sampler(threading.Thread):
         ncpu = psutil.cpu_count() or 1
         while not self.halt.is_set():
             own = rss = peak = priv = 0.0
-            for p in self.procs():
+            for p, primed in self.procs():
                 try:
                     mi = p.memory_info()
-                    own += p.cpu_percent(None) / ncpu
+                    if primed:
+                        own += p.cpu_percent(None) / ncpu
                     rss += mi.rss
                     peak += getattr(mi, "peak_wset", mi.rss)
                     priv += getattr(mi, "private", getattr(mi, "vms", 0))
                 except psutil.Error:
-                    pass
+                    self._cache.pop(p.pid, None)
             sys_cpu = psutil.cpu_percent(None)
             self.rows.append({"t": time.time(), "sys_cpu": sys_cpu, "own_cpu": own, "bg_cpu": max(0.0, sys_cpu - own),
                               "rss": rss, "peak_wset": peak, "private": priv,
@@ -235,6 +314,159 @@ class Sampler(threading.Thread):
         if self.is_alive():
             self.join(2)
         return self.rows
+
+
+# ------------------------------------------------------------------ throttling (QA 效能長 P0-2)
+class PerfSampler(threading.Thread):
+    """Windows: '\\Processor Information(_Total)\\% Processor Performance' once per second via
+    PDH (PdhAddEnglishCounterW, so localized counter names do not matter). Elsewhere: no data."""
+
+    PATH = "\\Processor Information(_Total)\\% Processor Performance"
+
+    def __init__(self, interval: float = 1.0):
+        super().__init__(daemon=True)
+        self.interval = interval
+        self.rows: list[tuple[float, float]] = []
+        self.halt = threading.Event()
+        self.available = False
+        self.error = ""
+
+    def _open(self):
+        import ctypes
+        from ctypes import wintypes
+        pdh = ctypes.WinDLL("pdh")
+        q, c = wintypes.HANDLE(), wintypes.HANDLE()
+        if pdh.PdhOpenQueryW(None, None, ctypes.byref(q)) != 0:
+            raise OSError("PdhOpenQueryW failed")
+        if pdh.PdhAddEnglishCounterW(q, self.PATH, None, ctypes.byref(c)) != 0:
+            raise OSError("PdhAddEnglishCounterW failed")
+        pdh.PdhCollectQueryData(q)
+
+        class FMT(ctypes.Structure):
+            _fields_ = [("CStatus", wintypes.DWORD), ("doubleValue", ctypes.c_double)]
+
+        def read():
+            if pdh.PdhCollectQueryData(q) != 0:
+                return None
+            v = FMT()
+            if pdh.PdhGetFormattedCounterValue(c, 0x00000200, None, ctypes.byref(v)) != 0:   # PDH_FMT_DOUBLE
+                return None
+            return float(v.doubleValue)
+        return read
+
+    def run(self):
+        if os.name != "nt":
+            self.error = "not windows"
+            return
+        try:
+            read = self._open()
+        except Exception as exc:          # pragma: no cover - Windows only
+            self.error = f"{type(exc).__name__}: {exc}"
+            return
+        self.available = True
+        while not self.halt.wait(self.interval):   # pragma: no cover - Windows only
+            v = read()
+            if v is not None:
+                self.rows.append((time.monotonic(), v))
+
+    def window(self, t0: float, t1: float) -> list[float]:
+        return [v for t, v in list(self.rows) if t0 <= t <= t1]
+
+    def stop(self):
+        self.halt.set()
+
+
+def ev37_since(seconds: float, runner=subprocess.run) -> int | None:
+    """Kernel-Processor-Power event 37 ('speed limited by firmware') in the last N seconds."""
+    if os.name != "nt" and runner is subprocess.run:
+        return None
+    ms = max(1000, int(seconds * 1000) + 2000)
+    q = ("*[System[Provider[@Name='Microsoft-Windows-Kernel-Processor-Power'] and (EventID=37) and "
+         f"TimeCreated[timediff(@SystemTime) <= {ms}]]]")
+    try:
+        out = runner(["wevtutil", "qe", "System", f"/q:{q}", "/f:xml", "/c:1000"], capture_output=True,
+                     text=True, timeout=20, check=False)
+    except Exception:
+        return None
+    if getattr(out, "returncode", 1) != 0:
+        return None
+    return (out.stdout or "").count("<Event ")
+
+
+# ------------------------------------------------------------------ abort (QA 效能長 P0-5, P1-1, P1-2)
+ABORT = threading.Event()
+ABORT_REASON = [""]
+_CHILDREN: set = set()
+_CHILD_LOCK = threading.Lock()
+
+
+def spawn(args, **kw) -> subprocess.Popen:
+    p = subprocess.Popen(args, **kw)
+    with _CHILD_LOCK:
+        _CHILDREN.add(p)
+    return p
+
+
+def forget(p) -> None:
+    with _CHILD_LOCK:
+        _CHILDREN.discard(p)
+
+
+def kill_children() -> None:
+    with _CHILD_LOCK:
+        procs = list(_CHILDREN)
+    for p in procs:
+        try:
+            if p.poll() is None:
+                if psutil is not None:
+                    try:
+                        for c in psutil.Process(p.pid).children(recursive=True):
+                            c.kill()
+                    except psutil.Error:
+                        pass
+                p.kill()
+        except Exception:
+            pass
+
+
+def request_abort(reason: str) -> None:
+    if not ABORT.is_set():
+        ABORT_REASON[0] = reason
+        ABORT.set()
+        print(f"\n中止：{reason}")
+    kill_children()
+
+
+class Watchdog(threading.Thread):
+    """Re-checks the live room (and power) every few seconds for the whole run."""
+
+    def __init__(self, interval: float = 3.0, allow_battery: bool = False, busy=None, battery=None):
+        super().__init__(daemon=True)
+        self.interval, self.allow_battery = interval, allow_battery
+        self.busy = busy or live_room_busy
+        self.battery = battery or on_battery
+        self.halt = threading.Event()
+        self.battery_seen = False
+
+    def tick(self) -> None:
+        busy, why = self.busy()
+        if busy:
+            request_abort("ABORTED_LIVE: " + why)
+            return
+        if self.battery():
+            self.battery_seen = True
+            if not self.allow_battery:
+                request_abort("ABORTED_BATTERY: 電源改成電池")
+
+    def run(self):
+        while not self.halt.wait(self.interval) and not ABORT.is_set():
+            try:
+                self.tick()
+            except Exception as exc:
+                request_abort(f"ABORTED_LIVE: watchdog error {type(exc).__name__}")
+
+    def stop(self):
+        self.halt.set()
 
 
 def mem_summary(rows: list[dict]) -> dict:
@@ -273,10 +505,12 @@ def whisper_args(cli: str, model: str, wav: Path, threads: int, ac: int, beam: i
     return args
 
 
-def run_whisper_cli(cli, model, wav, threads, ac, beam, *, nfa=True, no_gpu=True, prio="above", timeout=300) -> dict:
+def run_whisper_cli(cli, model, wav, threads, ac, beam, *, nfa=True, no_gpu=True, prio=None, timeout=300) -> dict:
+    # Never above the App's ASR (NORMAL): QA 效能長 P0-5.
+    prio = prio or BENCH_PRIO
     args = whisper_args(cli, model, wav, threads, ac, beam, nfa, no_gpu)
     t0 = time.perf_counter()
-    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+    p = spawn(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
     set_child_priority(p.pid, prio)
     s = Sampler(p.pid)
     s.start()
@@ -287,6 +521,10 @@ def run_whisper_cli(cli, model, wav, threads, ac, beam, *, nfa=True, no_gpu=True
         p.kill()
         out, err = p.communicate()
         rc = -9
+    finally:
+        forget(p)
+    if ABORT.is_set():
+        rc = rc or -15
     samples = s.stop()
     ms = (time.perf_counter() - t0) * 1000
     audio = wav_ms(wav)
@@ -298,19 +536,28 @@ def run_whisper_cli(cli, model, wav, threads, ac, beam, *, nfa=True, no_gpu=True
 class ResidentWhisper:
     """whisper-server started by us on RESIDENT_PORT (warm model, closest to the App)."""
 
-    def __init__(self, server: str, model: str, threads: int, ac: int, beam: int, prio: str = "above"):
+    def __init__(self, server: str, model: str, threads: int, ac: int, beam: int, prio: str | None = None,
+                 log_path: Path | None = None):
         self.args = [server, "-m", model, "-t", str(threads), "-l", "zh", "--host", "127.0.0.1",
                      "--port", str(RESIDENT_PORT), "-ac", str(ac), "-bs", str(beam), "-nt", "-ng", "-nfa"]
-        self.prio = prio
+        self.prio = prio or BENCH_PRIO
         self.proc = None
+        self.log_path = log_path
+        self._log = None
 
     def __enter__(self):
         if port_open(RESIDENT_PORT):
             raise RuntimeError(f"port {RESIDENT_PORT} is busy")
-        self.proc = subprocess.Popen(self.args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # QA 效能長 P0-3: stderr goes to a file, never an unread PIPE (a full pipe blocks the server).
+        if self.log_path is not None:
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._log = open(self.log_path, "ab")
+        self.proc = spawn(self.args, stdout=subprocess.DEVNULL, stderr=self._log or subprocess.DEVNULL)
         set_child_priority(self.proc.pid, self.prio)
         deadline = time.time() + 120
         while time.time() < deadline:
+            if ABORT.is_set():
+                raise RuntimeError("aborted")
             if self.proc.poll() is not None:
                 raise RuntimeError("whisper-server exited")
             if port_open(RESIDENT_PORT):
@@ -325,6 +572,11 @@ class ResidentWhisper:
                 self.proc.wait(10)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+        if self.proc:
+            forget(self.proc)
+        if self._log:
+            self._log.close()
+            self._log = None
 
     def transcribe(self, wav: Path) -> dict:
         boundary = uuid.uuid4().hex
@@ -394,17 +646,39 @@ def ollama_models(opener=None) -> list[str]:
 
 # ------------------------------------------------------------------ runner
 class Bench:
-    def __init__(self, matrix: dict, out: Path, reps: int, cooldown: float, opener=None, battery=False):
+    def __init__(self, matrix: dict, out: Path, reps: int, cooldown: float, opener=None, battery=False,
+                 perf: PerfSampler | None = None, watchdog: Watchdog | None = None, ev37=ev37_since):
         self.m, self.out, self.reps, self.cooldown, self.opener = matrix, out, reps, cooldown, opener
         self.battery = battery
+        self.perf = perf
+        self.watchdog = watchdog
+        self.ev37 = ev37
         self.runs: list[dict] = []
         self.segments: list[dict] = []
         self.samples: list[dict] = []
 
+    def _sleep(self, seconds: float) -> None:
+        ABORT.wait(max(0.0, seconds))
+
     def _record(self, run: dict, samples: list[dict], seg_rows: list[dict] | None = None):
-        run.setdefault("status", classify(samples, [], self.battery, 0, run.get("rc", 0), run.get("devicelost", False)))
+        # per-run throttle evidence (QA 效能長 P0-2): perf samples inside this run's window and the
+        # event-37 count over the run's duration.
+        mono_end = time.monotonic()
+        dur = float(run.get("duration_s") or 0.0)
+        if not dur and samples:
+            dur = max(0.0, samples[-1]["t"] - samples[0]["t"])
+        perf = self.perf.window(mono_end - dur - 1.0, mono_end) if (self.perf and self.perf.available) else []
+        ev37 = self.ev37(dur) if self.ev37 else None
+        run["perf_n"], run["ev37_delta"] = len(perf), ev37
+        battery_now = self.battery or bool(self.watchdog and self.watchdog.battery_seen)
+        if ABORT.is_set():
+            run["status"] = ABORT_REASON[0].split(":", 1)[0] or "ABORTED"
+        run.setdefault("status", classify(samples, perf, battery_now, ev37, run.get("rc", 0), run.get("devicelost", False),
+                                          perf_interval=self.perf.interval if self.perf else 1.0,
+                                          baseline_n=min(40, max(5, len(perf) // 4)),
+                                          perf_required=os.name == "nt"))
         run.update({k: v for k, v in mem_summary(samples).items() if k not in run})
-        run["power_source"] = "battery" if self.battery else "ac"
+        run["power_source"] = "battery" if battery_now else "ac"
         self.runs.append(run)
         for s in samples:
             self.samples.append({"run_id": run["run_id"], **s})
@@ -433,8 +707,10 @@ class Bench:
                             if mode == "cli" and not cli or mode == "resident" and not server:
                                 continue
                             for rep in range(0, self.reps + 1):    # rep 0 = warm-up
+                                if ABORT.is_set():
+                                    return
                                 self._asr_run(model, threads, ac, beam, mode, rep, wavs, refs)
-                                time.sleep(self.cooldown)
+                                self._sleep(self.cooldown)
 
     def _asr_run(self, model, threads, ac, beam, mode, rep, wavs, refs):
         rid = f"asr-{model['name']}-t{threads}-ac{ac}-b{beam}-{mode}-r{rep}"
@@ -443,6 +719,8 @@ class Bench:
         wl = wavs if rep else wavs[:3]
         if mode == "cli":
             for i, w in enumerate(wl):
+                if ABORT.is_set():
+                    break
                 r = run_whisper_cli(self.m["whisper_cli"], model["path"], w, threads, ac, beam)
                 samples += r.pop("samples")
                 rc, devlost = rc or r["rc"], devlost or r["devicelost"]
@@ -451,10 +729,13 @@ class Bench:
                              "cer": cer(refs[w], r["text"]) if refs.get(w) else None, "text": r["text"]})
         else:
             try:
-                with ResidentWhisper(self.m["whisper_server"], model["path"], threads, ac, beam) as srv:
+                with ResidentWhisper(self.m["whisper_server"], model["path"], threads, ac, beam,
+                                     log_path=self.out / "logs" / f"{rid}.server.log") as srv:
                     s = Sampler(srv.proc.pid)
                     s.start()
                     for i, w in enumerate(wl):
+                        if ABORT.is_set():
+                            break
                         r = srv.transcribe(w)
                         rows.append({"seg_idx": i, "audio_ms": r["audio_ms"], "asr_ms": r["asr_ms"], "rtf": r["rtf"],
                                      "cer": cer(refs[w], r["text"]) if refs.get(w) else None, "text": r["text"]})
@@ -487,11 +768,16 @@ class Bench:
             for threads in lm.get("threads", [4]):
                 for ctx in lm.get("ctx", [2048]):
                     for rep in range(0, self.reps + 1):
+                        if ABORT.is_set():
+                            return
                         rid = f"llm-{model}-t{threads}-c{ctx}-r{rep}"
                         s = Sampler(names=("ollama",))
                         s.start()
-                        res = [ollama_translate(model, zh, threads, ctx, self.opener)
-                               for zh in (sentences if rep else sentences[:2])]
+                        res = []
+                        for zh in (sentences if rep else sentences[:2]):
+                            if ABORT.is_set():
+                                break
+                            res.append(ollama_translate(model, zh, threads, ctx, self.opener))
                         samples = s.stop()
                         ok = [r for r in res if r["ok"]]
                         lat, ttft = pct([r["total_ms"] for r in ok]), pct([r["ttft_ms"] for r in ok])
@@ -506,7 +792,7 @@ class Bench:
                                       "prompt_eval_count_mean": (sum(r["prompt_eval_count"] or 0 for r in ok) / len(ok)) if ok else None},
                                      samples, [{"seg_idx": i, "en_latency_ms": r.get("total_ms"), "text": r.get("text", "")}
                                                for i, r in enumerate(res)])
-                        time.sleep(self.cooldown)
+                        self._sleep(self.cooldown)
 
     def layer_embed(self):
         em = self.m.get("embed", {})
@@ -521,6 +807,8 @@ class Bench:
         for batch in em.get("batches", [16, 64]):
             texts = (base * (batch // len(base) + 1))[:batch]
             for rep in range(0, self.reps + 1):
+                if ABORT.is_set():
+                    return
                 s = Sampler(names=("ollama",))
                 s.start()
                 r = ollama_embed(model, texts, int(em.get("threads", 2)), self.opener)
@@ -528,11 +816,22 @@ class Bench:
                 self._record({"run_id": f"emb-{model}-b{batch}-r{rep}", "layer": 2, "backend": "ollama", "model": model,
                               "batch": batch, "warmup": int(rep == 0), "rep": rep, "rc": 0 if r["ok"] else 1,
                               "lat_p50_ms": r.get("ms"), "per_s": r.get("per_s"), "dim": r.get("dim")}, samples)
-                time.sleep(min(self.cooldown, 5))
+                self._sleep(min(self.cooldown, 5))
 
-    def layer_concurrent(self):
-        """Layer 3: real-time feed (one slice per 6 s) through resident whisper + translate queue."""
-        c3 = self.m.get("concurrent", {})
+    def layer_concurrent(self, c3: dict | None = None):
+        """Layer 3: real-time feed (one slice per 6 s) through resident whisper + translate queue.
+
+        concurrent.configs = [{"config_id": "A", "llm_threads": 4}, {"config_id": "B", "llm_threads": 2}, ...]
+        runs every thread budget in turn (QA 效能長 P1-10: decide the default from measurements).
+        """
+        if c3 is None:
+            c3 = self.m.get("concurrent", {})
+            if c3.get("configs"):
+                for cfg in c3["configs"]:
+                    if ABORT.is_set():
+                        return
+                    self.layer_concurrent({**{k: v for k, v in c3.items() if k != "configs"}, **cfg})
+                return
         server, wavs = self.m.get("whisper_server"), self.wavs()
         if not c3.get("enabled", False) or not server or not wavs or not self.m.get("asr_models"):
             return
@@ -540,7 +839,9 @@ class Bench:
         minutes = float(c3.get("minutes", 10))
         llm_model = c3.get("llm_model", "qwen3:4b")
         for rep in range(1, self.reps + 1):
-            rid = f"l3-{model['name']}-{llm_model}-r{rep}"
+            if ABORT.is_set():
+                return
+            rid = f"l3-{c3.get('config_id', 'B')}-{model['name']}-{llm_model}-r{rep}"
             rows, q, lock = [], [], threading.Lock()
             stop = threading.Event()
             skipped = [0]
@@ -556,29 +857,39 @@ class Bench:
                         time.sleep(0.05)
                         continue
                     idx, zh, t_end = item
-                    if time.time() - t_end > float(c3.get("stale_s", 8)) and q:
+                    if ABORT.is_set():
+                        break
+                    if time.monotonic() - t_end > float(c3.get("stale_s", 8)) and q:
                         skipped[0] += 1
                         rows[idx]["en_status"] = "skipped_backlog"
                         continue
-                    r = ollama_translate(llm_model, zh or "。", int(c3.get("llm_threads", 4)), 2048, self.opener)
-                    rows[idx]["en_latency_ms"] = (time.time() - t_end) * 1000
+                    r = ollama_translate(llm_model, zh or "。", int(c3.get("llm_threads", 2)), 2048, self.opener)
+                    rows[idx]["en_latency_ms"] = (time.monotonic() - t_end) * 1000
                     rows[idx]["en_status"] = "ok" if r["ok"] else "error"
             try:
                 with ResidentWhisper(server, model["path"], int(c3.get("asr_threads", 6)), int(c3.get("audio_ctx", 640)),
-                                     int(c3.get("beam", 5))) as srv:
+                                     int(c3.get("beam", 5)), log_path=self.out / "logs" / f"{rid}.server.log") as srv:
                     s = Sampler(srv.proc.pid, names=("ollama",))
                     s.start()
                     th = threading.Thread(target=translator, daemon=True)
                     th.start()
-                    t_start, i = time.time(), 0
-                    while time.time() - t_start < minutes * 60:
+                    # QA 效能長 P0-4: latency is measured from the moment the slice's audio *ends*
+                    # on the real-time schedule (due), not from when ASR got to it, so a backlog
+                    # (RTF > 1) accumulates in zh_latency_ms instead of being hidden.
+                    t_start, i, audio_end = time.monotonic(), 0, 0.0
+                    while time.monotonic() - t_start < minutes * 60 and not ABORT.is_set():
                         w = wavs[i % len(wavs)]
-                        due = t_start + (i + 1) * wav_ms(w) / 1000
-                        time.sleep(max(0.0, due - time.time()))
-                        t_end = time.time()
+                        audio_end += wav_ms(w) / 1000
+                        due = t_start + audio_end
+                        ABORT.wait(max(0.0, due - time.monotonic()))
+                        if ABORT.is_set():
+                            break
+                        t_end = due
+                        asr_start = time.monotonic()
                         r = srv.transcribe(w)
                         rows.append({"seg_idx": i, "audio_ms": r["audio_ms"], "asr_ms": r["asr_ms"], "rtf": r["rtf"],
-                                     "zh_latency_ms": (time.time() - t_end) * 1000, "queue_wait_ms": None,
+                                     "zh_latency_ms": (time.monotonic() - t_end) * 1000,
+                                     "queue_wait_ms": max(0.0, asr_start - due) * 1000,
                                      "en_status": "queued", "text": r["text"]})
                         with lock:
                             q.append((i, r["text"], t_end))
@@ -592,7 +903,8 @@ class Bench:
                 samples, rc = [], 1
             zl = pct([r["zh_latency_ms"] for r in rows])
             el = pct([r["en_latency_ms"] for r in rows if r.get("en_latency_ms") is not None])
-            self._record({"run_id": rid, "layer": 3, "config_id": c3.get("config_id", "A"), "model": model["name"],
+            self._record({"run_id": rid, "layer": 3, "config_id": c3.get("config_id", "B"),
+                          "asr_threads": int(c3.get("asr_threads", 6)), "llm_threads": int(c3.get("llm_threads", 2)), "model": model["name"],
                           "rep": rep, "warmup": 0, "rc": rc, "seg_n": len(rows), "lat_p50_ms": zl["p50"],
                           "lat_p95_ms": zl["p95"], "lat_p99_ms": zl["p99"], "lat_max_ms": zl["max"],
                           "en_p50_ms": el["p50"], "en_p95_ms": el["p95"], "skipped": skipped[0],
@@ -675,22 +987,38 @@ def main(argv=None) -> int:
     out = args.out or (ROOT / "results" / time.strftime("%Y%m%d-%H%M%S"))
     out.mkdir(parents=True, exist_ok=True)
     env_info = collect_env(out)
-    bench = Bench(matrix, out, args.reps, args.cooldown, battery=battery)
-    if "asr" in layers:
-        print("[layer 1] ASR")
-        bench.layer_asr()
-    if "llm" in layers:
-        print("[layer 2] translation (Ollama)")
-        bench.layer_llm()
-    if "embed" in layers:
-        print("[layer 2] embeddings (Ollama)")
-        bench.layer_embed()
-    if "concurrent" in layers:
-        print("[layer 3] concurrent, real time")
-        bench.layer_concurrent()
-    path = bench.write(env_info)
-    print(f"結果：{path}")
-    return 0
+    ABORT.clear()
+    ABORT_REASON[0] = ""
+    perf = PerfSampler()
+    perf.start()
+    watchdog = Watchdog(interval=float(matrix.get("watchdog_s", 3.0)), allow_battery=args.allow_battery)
+    watchdog.start()
+    bench = Bench(matrix, out, args.reps, args.cooldown, battery=battery, perf=perf, watchdog=watchdog)
+    env_info["perf_counter"] = "pdh" if os.name == "nt" else "none"
+    try:
+        if "asr" in layers and not ABORT.is_set():
+            print("[layer 1] ASR")
+            bench.layer_asr()
+        if "llm" in layers and not ABORT.is_set():
+            print("[layer 2] translation (Ollama)")
+            bench.layer_llm()
+        if "embed" in layers and not ABORT.is_set():
+            print("[layer 2] embeddings (Ollama)")
+            bench.layer_embed()
+        if "concurrent" in layers and not ABORT.is_set():
+            print("[layer 3] concurrent, real time")
+            bench.layer_concurrent()
+    except KeyboardInterrupt:          # QA 效能長 P1-2: keep what was measured
+        request_abort("ABORTED_USER: Ctrl+C")
+    finally:
+        watchdog.stop()
+        perf.stop()
+        kill_children()
+        env_info["perf_error"] = perf.error
+        env_info["aborted"] = ABORT_REASON[0] or None
+        path = bench.write(env_info)
+        print(f"結果：{path}")
+    return 6 if ABORT.is_set() else 0
 
 
 if __name__ == "__main__":

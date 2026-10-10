@@ -267,7 +267,7 @@ def test_redacting_filter_on_records(caplog):
 # ------------------------------------------------------------------ API conventions
 def test_health_and_metrics(env):
     h = env["client"].get(f"{API}/health", headers=BEARER).json()
-    assert h["schema_version"] == 2 and h["live"] == "up" and h["db"] == "ok"
+    assert h["schema_version"] == db.SCHEMA_VERSION and h["live"] == "up" and h["db"] == "ok"
     m = env["client"].get(f"{API}/metrics", headers=BEARER).json()
     assert m["counts"]["segments"] == 2
 
@@ -348,14 +348,14 @@ def test_glossary_push_diffs_and_sends_if_version(env):
     dry = env["client"].post(url, json={"dry_run": True}, headers=BEARER).json()
     assert [a["zh"] for a in dry["added"]] == ["因緣"] and dry["updated"][0]["zh"] == "禪修"
     assert env["live"].puts == []
-    r = env["client"].post(url, json={}, headers=BEARER)
-    assert r.status_code == 200
+    r = env["client"].post(url, json={"if_room_version": 3}, headers=BEARER)
+    assert r.status_code == 200, r.text
     put = env["live"].puts[0]
     assert put["if_version"] == 3
     zhs = [t["zh"] for t in put["terms"]]
     assert "房間詞" in zhs and "因緣" in zhs and "提案" not in zhs     # room-only term kept
     env["live"].put_status = 409
-    assert env["client"].post(url, json={}, headers=BEARER).status_code == 409
+    assert env["client"].post(url, json={"if_room_version": 3}, headers=BEARER).status_code == 409
 
 
 def test_retranslate_is_synchronous_200(env):

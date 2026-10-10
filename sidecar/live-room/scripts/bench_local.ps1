@@ -1,4 +1,5 @@
 ﻿#Requires -Version 5.1
+
 <#
 .SYNOPSIS
   Run the zen-bridge local benchmark BEFORE enabling any local-backend feature (hardware.md §6).

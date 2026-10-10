@@ -6,26 +6,52 @@ import queue
 import subprocess
 import sys
 import threading
+import time
+from collections import deque
 from pathlib import Path
 from app.asr import AsrResult, ResidentAsr
+from app.asr_tuning import NativeTuning, default_log_path, rotating_logger
+
+RESTART_BACKOFF_S = (1.0, 5.0, 30.0)
+RESTART_WINDOW_S = 300.0
+MAX_RESTARTS = 3
+
 
 class NativeResidentAsr(ResidentAsr):
-    @staticmethod
-    def _discard(stream):
+    """round3 C2: a crashed or timed-out worker is restarted automatically on the next segment,
+    after a backoff of 1 -> 5 -> 30 s since the failure. A 4th failure within 5 minutes marks the
+    engine ``degraded`` (host page shows red) and stops restarting until ``reset_degraded()``
+    or an explicit ``start()``. The segment that failed is dropped and logged by name only."""
+    def _discard(self, stream):
+        """Drain worker stderr so a full pipe cannot block the model. With a log configured
+        (BREEZE_ASR_LOG, default <data>/logs/asr-worker.log) every line goes to a 5 MB x 3
+        rotating file: print_timings, system_info, BREEZE_TIMING. The worker prints no text."""
+        sink = self.worker_log
         try:
-            for _ in stream:
-                pass
+            for line in stream:
+                if sink is not None:
+                    sink.info(line.rstrip())
         finally:
             stream.close()
 
     def __init__(self, model, threads=6, startup_timeout_s=180, inference_timeout_s=120,
-                 audio_context=0, beam_size=0, best_of=0):
+                 audio_context=0, beam_size=0, best_of=0, tuning: NativeTuning | None = None,
+                 log_path=None, env=None):
         super().__init__(model=model, threads=threads, startup_timeout_s=startup_timeout_s,
             inference_timeout_s=inference_timeout_s, audio_context=audio_context,
             beam_size=beam_size, best_of=best_of)
         self.messages = queue.Queue()
         self.reader = None
         self.request_lock = threading.Lock()
+        self.tuning = tuning or NativeTuning.from_env(env)
+        self.worker_log = rotating_logger(log_path if log_path is not None else default_log_path(env))
+        self.last_stats = {}
+        self.clock = time.monotonic
+        self.failures: deque = deque()
+        self.degraded = False
+        self.restarts = 0
+        self._last_failure = None
+        self._current_clip = ""
 
     def _read_messages(self, stream):
         try:
@@ -43,7 +69,9 @@ class NativeResidentAsr(ResidentAsr):
             return self.messages.get(timeout=timeout)
         except queue.Empty:
             self.close()
-            return {'ok': False, 'error': '本機辨識逾時，已停止該程序。請重新啟動 App。'}
+            if self.worker_log is not None and self._current_clip:
+                self.worker_log.info("BREEZE_TIMEOUT clip=%s after %.0fs; segment dropped", self._current_clip, timeout)
+            return {'ok': False, 'error': '本機辨識逾時，這一段略過；辨識程序會自動重新啟動。'}
 
     def start(self):
         if self.health():
@@ -53,7 +81,7 @@ class NativeResidentAsr(ResidentAsr):
         root = Path(__file__).resolve().parents[1]
         command = [sys.executable, '-m', 'app.native_worker', '--model', str(self.model.resolve()),
             '--threads', str(self.threads), '--context', str(self.audio_context),
-            '--beam', str(self.beam_size), '--best', str(self.best_of)]
+            '--beam', str(self.beam_size), '--best', str(self.best_of)] + self.tuning.argv()
         try:
             self.proc = subprocess.Popen(command, cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', bufsize=1,
@@ -79,22 +107,71 @@ class NativeResidentAsr(ResidentAsr):
     def health(self):
         return bool(self.ready and self.proc is not None and self.proc.poll() is None)
 
+    # ------------------------------------------------------------------ auto restart (C2)
+    def _note_failure(self):
+        now = self.clock()
+        self._last_failure = now
+        self.failures.append(now)
+        while self.failures and now - self.failures[0] > RESTART_WINDOW_S:
+            self.failures.popleft()
+        if len(self.failures) > MAX_RESTARTS:
+            self.degraded = True
+
+    def reset_degraded(self):
+        self.degraded = False
+        self.failures.clear()
+        self._last_failure = float("-inf")     # restart on the very next segment
+
+    def restart_status(self) -> dict:
+        return {"asr_degraded": self.degraded, "asr_restarts": self.restarts,
+                "asr_recent_failures": len(self.failures)}
+
+    def _try_restart(self) -> AsrResult | None:
+        """None = worker healthy again. Otherwise the error for this (dropped) segment."""
+        if self.loads == 0:
+            return AsrResult(ok=False, error=self.last_error or '本機模型未就緒，請重新啟動 App。')
+        if self.degraded:
+            return AsrResult(ok=False, error='本機辨識程序 5 分鐘內失敗太多次，已停止自動重啟；請重新啟動 App。')
+        if self._last_failure is None:
+            self._note_failure()           # died between segments: count it now
+        n = max(1, len(self.failures))
+        wait = RESTART_BACKOFF_S[min(n, len(RESTART_BACKOFF_S)) - 1]
+        left = self._last_failure + wait - self.clock()
+        if left > 0:
+            return AsrResult(ok=False, error=f'本機辨識程序重新啟動中（{left:.0f} 秒後），這一段略過。')
+        loads = self.loads
+        started = self.start()
+        if not started.ok:
+            self._note_failure()
+            return AsrResult(ok=False, error=f'本機辨識程序重新啟動失敗：{started.error}')
+        self.loads = loads                 # a restart is not a first load
+        self.restarts += 1
+        self._last_failure = None
+        return None
+
     def transcribe(self, wav, prompt, language='zh'):
         with self.request_lock:
             if not self.health():
-                return AsrResult(ok=False, error=self.last_error or '本機模型未就緒，請重新啟動 App。')
+                failed = self._try_restart()
+                if failed is not None:
+                    return failed
+            self._current_clip = Path(wav).name
             self.calls += 1
             try:
                 self.proc.stdin.write(json.dumps({'path': str(Path(wav).resolve()), 'prompt': prompt, 'language': language}, ensure_ascii=True) + '\n')
                 self.proc.stdin.flush()
                 response = self._receive(self.inference_timeout_s)
                 ok = response.get('ok', False)
+                if not ok and not self.health():
+                    self._note_failure()       # timeout or worker exit: next segment restarts it
                 text = response.get('text', '')
+                self.last_stats = response.get('stats') or {}
                 return AsrResult(ok=ok, text=text, blank=bool(ok and not text.strip()),
                     error=response.get('error', ''), loaded_once=self.loads == 1)
             except (OSError, ValueError):
                 self.close()
-                return AsrResult(ok=False, error='本機辨識程序中斷，請重新啟動 App。')
+                self._note_failure()
+                return AsrResult(ok=False, error='本機辨識程序中斷，這一段略過；辨識程序會自動重新啟動。')
 
     def close(self):
         proc = self.proc

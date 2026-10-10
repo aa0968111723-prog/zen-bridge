@@ -36,6 +36,36 @@ class JobDeferred(Exception):
         self.reason = reason
 
 
+class JobRetryable(Exception):
+    """Raise (or wrap) a transient failure: the job is re-queued with backoff (QA 後端 B4)."""
+
+
+def is_retryable(exc: BaseException) -> bool:
+    import urllib.error
+    if isinstance(exc, (JobRetryable, TimeoutError, ConnectionError, urllib.error.URLError)):
+        return True
+    if isinstance(exc, sqlite3.OperationalError) and any(w in str(exc).lower() for w in ("locked", "busy")):
+        return True
+    try:
+        from app.admin.live_client import LiveDown
+        if isinstance(exc, LiveDown):
+            return True
+    except Exception:          # pragma: no cover
+        pass
+    try:
+        from app.embed import EmbedError
+        if isinstance(exc, EmbedError):
+            return True
+    except Exception:          # pragma: no cover
+        pass
+    return False
+
+
+def retry_delay_s(attempt: int, *, base: float = 5.0, cap: float = 300.0, jitter: float | None = None) -> float:
+    j = (secrets.randbelow(1000) / 1000.0) if jitter is None else jitter
+    return min(cap, base * (2 ** max(0, attempt - 1))) + j
+
+
 class JobCancelled(Exception):
     pass
 
@@ -145,6 +175,12 @@ class JobStore:
                          (now, err, now))
         return n
 
+    def heartbeat(self, jid: str, owner: str) -> bool:
+        """Extend the lease while the handler runs. False = this owner lost the job."""
+        now = self.clock()
+        return self._write("UPDATE jobs SET lease_until=?, heartbeat_at=? WHERE id=? AND lease_owner=? "
+                           "AND state IN ('running','cancel_requested')", (now + LEASE_S, now, jid, owner)) == 1
+
     def claim(self, owner: str) -> dict | None:
         now = self.clock()
         c = self._conn()
@@ -176,10 +212,30 @@ class JobStore:
         job = self.get(jid)
         return job["state"] if job else "cancelled"
 
-    def finish(self, jid: str, state: str, *, result=None, error=None) -> None:
-        self._write("UPDATE jobs SET state=?, finished_at=?, result_json=?, error_json=?, lease_owner=NULL, lease_until=NULL "
-                    "WHERE id=?", (state, self.clock(), json.dumps(result, ensure_ascii=False) if result is not None else None,
-                                   json.dumps(error, ensure_ascii=False) if error is not None else None, jid))
+    def finish(self, jid: str, state: str, *, result=None, error=None, owner: str | None = None) -> bool:
+        """owner given: only the current lease holder may finish (a stolen job is not overwritten)."""
+        sql = ("UPDATE jobs SET state=?, finished_at=?, result_json=?, error_json=?, lease_owner=NULL, lease_until=NULL "
+               "WHERE id=?")
+        args = [state, self.clock(), json.dumps(result, ensure_ascii=False) if result is not None else None,
+                json.dumps(error, ensure_ascii=False) if error is not None else None, jid]
+        if owner is not None:
+            sql += " AND lease_owner=?"
+            args.append(owner)
+        return self._write(sql, tuple(args)) == 1
+
+    def retry(self, jid: str, delay_s: float, error: dict) -> bool:
+        """Re-queue a running job after a transient error while attempts remain. False = no attempts left."""
+        now = self.clock()
+        c = self._conn()
+        try:
+            cur = c.execute(
+                "UPDATE jobs SET state='queued', lease_owner=NULL, lease_until=NULL, run_after=?, error_json=?, "
+                "progress_stage='retry_wait' WHERE id=? AND state='running' AND attempt<max_attempts",
+                (now + delay_s, json.dumps(error, ensure_ascii=False), jid))
+            c.commit()
+            return cur.rowcount == 1
+        finally:
+            c.close()
 
     def defer(self, jid: str, delay_s: float, reason: str = "") -> None:
         """Back to queued without spending an attempt; keeps progress so a UI can show why."""
@@ -228,8 +284,9 @@ class JobContext:
 class JobWorker:
     """Single asyncio worker. Handlers: {kind: callable(ctx) -> result dict} (sync or async)."""
 
-    def __init__(self, store: JobStore, handlers: dict, *, poll_s: float = 1.0):
+    def __init__(self, store: JobStore, handlers: dict, *, poll_s: float = 1.0, heartbeat_s: float | None = None):
         self.store = store
+        self.heartbeat_s = heartbeat_s if heartbeat_s is not None else LEASE_S / 4
         self.handlers = handlers
         self.poll_s = poll_s
         self.owner = f"admin-{os.getpid()}-{secrets.token_hex(3)}"
@@ -264,6 +321,23 @@ class JobWorker:
         self.state = f"running:{job['id']}"
         handler = self.handlers.get(job["kind"])
         ctx = JobContext(self.store, job)
+        # Lease heartbeat on its own thread, independent of the handler calling progress() and
+        # of the event loop, so a long job (VACUUM INTO, embeddings) is not recovered and re-run.
+        import threading
+        stop_hb = threading.Event()
+        lost = threading.Event()
+
+        def beat():
+            while not stop_hb.wait(self.heartbeat_s):
+                try:
+                    if not self.store.heartbeat(job["id"], self.owner):
+                        lost.set()
+                        log.warning("job %s lease lost; result will not be recorded", job["id"])
+                        return
+                except Exception:
+                    log.debug("heartbeat failed", exc_info=True)
+        hb = threading.Thread(target=beat, name=f"job-hb-{job['id']}", daemon=True)
+        hb.start()
         try:
             if handler is None:
                 raise NotImplementedError(f"沒有 {job['kind']} 的處理程式（後續版本加入）")
@@ -271,17 +345,25 @@ class JobWorker:
                 result = await handler(ctx)
             else:
                 result = await asyncio.to_thread(handler, ctx)
-            await asyncio.to_thread(self.store.finish, job["id"], "succeeded", result=result or {})
+            stop_hb.set()
+            await asyncio.to_thread(self.store.finish, job["id"], "succeeded", result=result or {}, owner=self.owner)
         except JobCancelled:
-            await asyncio.to_thread(self.store.finish, job["id"], "cancelled")
+            await asyncio.to_thread(self.store.finish, job["id"], "cancelled", owner=self.owner)
         except JobDeferred as exc:
             await asyncio.to_thread(self.store.defer, job["id"], exc.delay_s, exc.reason)
         except Exception as exc:
-            log.exception("job %s failed", job["id"])
             problem = {"type": "https://zen-bridge.local/problems/job-failed", "title": "job-failed", "status": 500,
                        "detail": str(exc)[:300] or type(exc).__name__}
-            await asyncio.to_thread(self.store.finish, job["id"], "failed", error=problem)
+            if is_retryable(exc):
+                delay = retry_delay_s(int(job.get("attempt") or 1))
+                if await asyncio.to_thread(self.store.retry, job["id"], delay, {**problem, "retry_in_s": round(delay, 1)}):
+                    log.warning("job %s transient failure (%s); retry in %.0fs", job["id"], type(exc).__name__, delay)
+                    return True
+            log.exception("job %s failed", job["id"])
+            await asyncio.to_thread(self.store.finish, job["id"], "failed", error=problem, owner=self.owner)
         finally:
+            stop_hb.set()
+            hb.join(timeout=2)
             self.state = "idle"
         return True
 
@@ -307,10 +389,16 @@ class JobWorker:
                     pass
 
 
-def backup_handler(db_path: Path, dest_dir_fn):
+def backup_handler(db_path: Path, dest_dir_fn, identity_path: Path | None = None,
+                   keep_daily: int = 14, keep_weekly: int = 8):
+    """zen.sqlite3 + zen-identity.sqlite3 + manifest, then rotation (CTO-03)."""
     def run(ctx: JobContext) -> dict:
-        ctx.progress(0, 1, "backup", "VACUUM INTO")
-        out = zdb.backup_to(db_path, dest_dir_fn())
-        ctx.progress(1, 1, "done", out.name)
-        return {"file": out.name, "bytes": out.stat().st_size}
+        ctx.progress(0, 2, "backup", "VACUUM INTO")
+        dest = dest_dir_fn()
+        out = zdb.backup_set(db_path, dest, identity_path)
+        ctx.progress(1, 2, "rotate", out["file"])
+        out["deleted"] = zdb.rotate_backups(dest, keep_daily=keep_daily, keep_weekly=keep_weekly)
+        out["same_disk"] = zdb.same_disk(db_path, dest)
+        ctx.progress(2, 2, "done", out["file"])
+        return out
     return run

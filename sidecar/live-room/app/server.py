@@ -101,7 +101,8 @@ DEFAULT_MODEL = ROOT / "models" / "ggml-breeze-asr-25-q5_0.bin"
 DEFAULT_WHISPER = ROOT / "tools" / "whisper-cli.exe"
 DEFAULT_SERVER = ROOT / "tools" / "whisper-server.exe"
 TMP = ROOT / "tmp"
-PROMPT = "以下是台灣國語的句子，請用繁體中文輸出。常見專有名詞：般若、菩提心、空性、因緣。這是提示偏置，不保證鎖詞。"
+PROMPT = "以下是台灣國語的句子，請用繁體中文輸出。常見專有名詞：般若、菩提心、空性、因緣。"
+# round3 C8: no note to humans inside the prompt; Whisper reads it as preceding speech.
 
 _TRACKED: list[FastAPI] = []
 # First 8 hex digits of the file's sha256. Long enough to bust a cache, short enough for a URL.
@@ -1083,7 +1084,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         # Ledger-only fields (not in the bus snapshot, never sent to listeners).
         try:
             if ledger.enabled:
-                extra = {k: event[k] for k in ("en_origin", "speech_ratio", "ids") if k in event}
+                extra = {k: event[k] for k in ("en_origin", "en_merged_from", "speech_ratio", "ids") if k in event}
                 ledger.submit({**snap, **extra} if extra else snap)
         except Exception:
             logging.getLogger("breeze.server").exception("ledger submit failed")
@@ -1343,6 +1344,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "translate_label": translator.status_label(),
             "asr_mode": "native" if isinstance(asr, NativeResidentAsr) else ("resident" if isinstance(asr, ResidentAsr) else "cli"),
             "asr_ready": asr_ready,
+            **(asr.restart_status() if isinstance(asr, NativeResidentAsr) else {"asr_degraded": False}),
             "model_reloads_each_segment": isinstance(asr, CliAsr),
             "resident_error": getattr(asr, "last_error", "") or resident_error,
             "host_token": None,
@@ -1440,6 +1442,37 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         _announce_live(room_id)
         return {"ok": True}
 
+    # round3 §1.3-1 private pause: drops queued + in-flight slices; listeners see "paused".
+    def _announce_pause(room_id: str, paused: bool) -> None:
+        room = book.get(room_id)
+        if room is None:
+            return
+        note = {"type": "paused" if paused else "resumed", "room_id": room_id}
+        dead = []
+        for conn in list(room["listeners"]):
+            if not conn.slot.offer(note):
+                dead.append(conn)
+        _drop_unsendable(room, dead)
+
+    @app.post("/api/rooms/{room_id}/pause")
+    async def room_pause(room_id: str, request: Request) -> dict:
+        require_host(request, token, settings)
+        room_id = validate_room_id(room_id)
+        if book.get(room_id) is None:
+            ensure_room(room_id)
+        out = pipeline.pause_room(room_id)
+        _announce_pause(room_id, True)
+        logging.getLogger("breeze.server").info("private pause room=%s voided=%d", room_id, out["voided"])
+        return {"ok": True, "paused": True, **out}
+
+    @app.post("/api/rooms/{room_id}/resume")
+    async def room_resume(room_id: str, request: Request) -> dict:
+        require_host(request, token, settings)
+        room_id = validate_room_id(room_id)
+        out = pipeline.resume_room(room_id)
+        _announce_pause(room_id, False)
+        return {"ok": True, "paused": False, **out}
+
     @app.post("/api/session/end")
     async def session_end(request: Request) -> dict:
         require_host(request, token, settings)
@@ -1504,10 +1537,18 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         session_id = validate_session_id(str(body.get("session_id") or ""))
         seq = int(body.get("seq") or 0)
         zh = body.get("zh")
+        en = body.get("en")
         # A long zh is normalized against every glossary span. Cap it before that work.
         if isinstance(zh, str) and len(zh.strip()) > _RETRANSLATE_ZH_MAX:
             raise HTTPException(status_code=413, detail=f"中文超過 {_RETRANSLATE_ZH_MAX} 字，已拒絕")
+        if en is not None and (not isinstance(en, str) or not en.strip() or len(en) > _RETRANSLATE_ZH_MAX * 4):
+            raise HTTPException(status_code=400, detail="en 必須是非空字串")
         try:
+            if isinstance(en, str):
+                # Human correction pushed from the admin backend: publish as-is, no LLM (QA 全端 B1).
+                segment = await pipeline.override_translation(room_id, session_id, seq, en.strip(),
+                                                              zh if isinstance(zh, str) else None)
+                return host_segment_payload(segment, ok=True)
             segment = await pipeline.retranslate(room_id, session_id, seq, zh if isinstance(zh, str) else None)
         except PipelineError as exc:
             raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
@@ -1811,6 +1852,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             pipeline.delete_segment(room_id, parsed_session, parsed_seq)
             event = bus.delete_caption(room_id, segment_id, parsed_session, parsed_seq)
             _fanout(event)
+            _ledger_submit(event, event)         # QA 全站測試長 D1
             return {"ok": True, "deleted": int(removed or 0), "id": segment_id}
         # The same lock as a glossary PUT, held until memory is cleared, so a
         # write that read the old version cannot land after this reset.
@@ -1830,6 +1872,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             pipeline.invalidate_room(room_id)
         event = bus.clear_room(room_id)
         _fanout(event)
+        _ledger_submit(event, event)             # QA 全站測試長 D1
         room = book.get(room_id)
         if room is not None:
             room["history"] = []

@@ -34,7 +34,7 @@ SEGMENT_S = 6.0
 MATRIX_THREADS = (4, 6, 8)
 MATRIX_WORKERS = (1, 2)
 UNVERIFIED = "實機結果尚未驗證。請在真正的主持機上執行後，才把數字當成那一台的測量。"
-PROMPT = "以下是台灣國語的句子，請用繁體中文輸出。常見專有名詞：般若、菩提心、空性、因緣。這是提示偏置，不保證鎖詞。"
+PROMPT = "以下是台灣國語的句子，請用繁體中文輸出。常見專有名詞：般若、菩提心、空性、因緣。"
 
 
 def _open(url: str, token: str | None, timeout: float) -> tuple[int, bytes]:

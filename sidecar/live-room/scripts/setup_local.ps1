@@ -1,4 +1,5 @@
 ﻿#Requires -Version 5.1
+
 <#
 .SYNOPSIS
   One-time setup for the zen-bridge local backend (Ollama translation, ledger, TM, VAD, admin).
@@ -35,24 +36,46 @@ if (-not (Test-Path $venvPy)) {
   if ($LASTEXITCODE -ne 0) { throw 'Python venv creation failed' }
 }
 & $venvPy -c "import sys; assert sys.version_info[:2] >= (3, 11), sys.version"
-if ($LASTEXITCODE -ne 0) { throw 'Python version check failed' }
+if ($LASTEXITCODE -ne 0) { throw 'venv Python 版本檢查失敗（需要 3.11 以上）' }
 & $venvPy -m pip install --disable-pip-version-check -q -r requirements-lock.txt
-if ($LASTEXITCODE -ne 0) { throw 'Core requirements installation failed' }
+if ($LASTEXITCODE -ne 0) { throw 'pip install -r requirements-lock.txt failed' }
 & $venvPy -m pip install --disable-pip-version-check -q -r requirements-local.txt
-if ($LASTEXITCODE -ne 0) { throw 'pip install failed' }
+if ($LASTEXITCODE -ne 0) { throw 'pip install -r requirements-local.txt failed' }
+# Codex 2569a06: byte-pinned app-local Microsoft runtime (no system DLL changes)
 & $venvPy scripts\fetch_windows_runtime.py
 if ($LASTEXITCODE -ne 0) { throw 'App-local Microsoft runtime preparation failed' }
 
+# D-001: the per-user Ollama installer puts ollama.exe in %LOCALAPPDATA%\Programs\Ollama and
+# only adds it to the *user* PATH, so shells started before the install (or by agents/
+# services) do not see it. Look in the standard install folders before giving up.
+function Resolve-Ollama {
+  $cmd = Get-Command ollama -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $candidates = @()
+  if ($env:OLLAMA_EXE) { $candidates += $env:OLLAMA_EXE }
+  if ($env:LOCALAPPDATA) { $candidates += (Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe') }
+  if ($env:ProgramFiles) { $candidates += (Join-Path $env:ProgramFiles 'Ollama\ollama.exe') }
+  foreach ($c in $candidates) { if ($c -and (Test-Path -LiteralPath $c)) { return $c } }
+  return $null
+}
+
 Step '2/4 Ollama models'
 if ($SkipOllama) { Write-Host 'skipped (-SkipOllama)' }
-elseif (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
-  Write-Warning 'ollama 不在 PATH。請先從 https://ollama.com/download 安裝，再重跑本腳本。'
-} else {
-  & ollama pull $TranslateModel
-  if ($LASTEXITCODE -ne 0) { throw 'Translation model download failed' }
-  & ollama pull $EmbedModel
-  if ($LASTEXITCODE -ne 0) { throw 'Embedding model download failed' }
-  & ollama list
+else {
+  $ollama = Resolve-Ollama
+  if (-not $ollama) {
+    Write-Warning '找不到 ollama.exe（PATH、%LOCALAPPDATA%\Programs\Ollama、%ProgramFiles%\Ollama 都沒有）。請先從 https://ollama.com/download 安裝，或設 OLLAMA_EXE，再重跑本腳本。'
+  } else {
+    Write-Host "ollama: $ollama"
+    $failed = @()
+    foreach ($m in @($TranslateModel, $EmbedModel)) {
+      & $ollama pull $m
+      if ($LASTEXITCODE -ne 0) { $failed += $m }
+    }
+    & $ollama list
+    # Codex 2569a06: a failed model pull fails setup instead of only warning.
+    if ($failed.Count) { throw ("ollama pull 失敗：{0}。請確認網路後重跑本腳本。" -f ($failed -join ', ')) }
+  }
 }
 
 Step '3/4 Silero VAD model'

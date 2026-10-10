@@ -1,0 +1,32 @@
+import assert from "node:assert/strict";
+import {backoff, fmtBytes, fmtMs, isStale, pageFromHash, parseSse, problemMessage, rtfColor, workbenchKey, PAGES} from "../app/admin/static/admin_logic.js";
+
+assert.match(problemMessage(401), /重新登入/);
+assert.match(problemMessage(403, {code: "forbidden", detail: "權限不足"}), /權限不足/);
+assert.match(problemMessage(403, {code: "csrf"}), /CSRF/);
+assert.match(problemMessage(412), /修改/);
+assert.match(problemMessage(428), /If-Match/);
+assert.match(problemMessage(409, {detail: "已鎖定"}), /已鎖定/);
+assert.match(problemMessage(503), /暫時無法/);
+assert.match(problemMessage(500), /伺服器/);
+assert.equal(problemMessage(418, {detail: "x"}), "x");
+assert.equal(backoff(0), 1000); assert.equal(backoff(3), 8000); assert.equal(backoff(50), 30000); assert.equal(backoff(-1), 1000);
+assert.equal(isStale(null, 100), true); assert.equal(isStale(95, 100), false); assert.equal(isStale(80, 100), true);
+assert.equal(rtfColor(0.2), "green"); assert.equal(rtfColor(0.6), "amber"); assert.equal(rtfColor(1.5), "red"); assert.equal(rtfColor(NaN), "unknown");
+assert.equal(fmtMs(65000), "1:05"); assert.equal(fmtMs(3725000), "1:02:05"); assert.equal(fmtMs(undefined), "—");
+assert.equal(fmtBytes(1536), "1.5 KB"); assert.equal(fmtBytes(10), "10 B");
+assert.deepEqual(workbenchKey({key: "j"}, 0, 3), {action: "move", index: 1});
+assert.deepEqual(workbenchKey({key: "ArrowDown"}, 2, 3), {action: "move", index: 2});
+assert.deepEqual(workbenchKey({key: "k"}, 0, 3), {action: "move", index: 0});
+assert.deepEqual(workbenchKey({key: "Enter"}, 1, 3), {action: "edit", index: 1});
+assert.deepEqual(workbenchKey({key: "Enter", ctrlKey: true, editing: true}, 1, 3), {action: "save", index: 1});
+assert.deepEqual(workbenchKey({key: "z", metaKey: true}, 1, 3), {action: "undo", index: 1});
+assert.deepEqual(workbenchKey({key: "j", editing: true}, 1, 3), {action: "none", index: 1});
+assert.deepEqual(workbenchKey({key: "Escape", editing: true}, 1, 3), {action: "cancel", index: 1});
+assert.deepEqual(workbenchKey({key: "p"}, 1, 3), {action: "push", index: 1});
+assert.deepEqual(workbenchKey({key: "t"}, 1, 3), {action: "toggle-target", index: 1});
+assert.deepEqual(parseSse("event: metrics\ndata: {\"a\":1}\n\nretry: 5\n\nevent: logout\ndata: {}\n\n"),
+  [{event: "metrics", data: "{\"a\":1}"}, {event: "logout", data: "{}"}]);
+assert.equal(pageFromHash("#review/s1"), "review"); assert.equal(pageFromHash("#nope"), "overview"); assert.equal(pageFromHash(""), "overview");
+assert.equal(PAGES[0], "overview");
+console.log("admin_logic ok");

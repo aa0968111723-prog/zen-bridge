@@ -1,4 +1,5 @@
 ﻿#Requires -Version 5.1
+
 <#
 .SYNOPSIS
   Start the live room with the local backend flags, and/or the admin backend (127.0.0.1:8791).
@@ -12,10 +13,12 @@
   and refuses port 8645.
 #>
 param(
-  [switch]$Live, [switch]$Admin, [switch]$OpenAdmin,
+  [switch]$Live, [switch]$Admin, [switch]$OpenAdmin, [switch]$HideAdminWindow,
   [switch]$Local, [switch]$Ledger, [switch]$TM, [switch]$Vad, [switch]$NoEmbed,
   [string]$Model = "qwen3:4b",
-  [int]$Threads = 4,
+  # Thread budget (QA 效能長 P1-10): ASR -t 6 + LLM 2 on the 5600H's 6 physical cores.
+  # -TranslatePriority only lowers zen-bridge's waiting thread, NOT the Ollama runner.
+  [int]$Threads = 2,
   [int]$QueueMax = 4,
   [double]$StaleSeconds = 8,
   [ValidateSet('skip', 'merge', 'off')][string]$StalePolicy = 'skip',
@@ -54,8 +57,18 @@ $env:ZEN_ADMIN_PORT = "$AdminPort"
 
 if ($Admin) {
   if ($OpenAdmin) { $env:ZEN_ADMIN_OPEN_BROWSER = '1' }
-  Write-Host "啟動後台 http://127.0.0.1:$AdminPort/admin （新視窗）"
-  Start-Process -FilePath $py -ArgumentList '-m', 'app.admin.run' -WorkingDirectory $root -WindowStyle Hidden
+  # D-005: the admin console prints the one-time login URL and, on the very first start, the
+  # CLI token (shown once, only its hash is stored). A hidden window would lose both, so the
+  # window is only hidden when asked for, the browser opens the login URL, and a token exists.
+  $tokenFile = Join-Path $(if ($env:ZEN_DATA_DIR) { $env:ZEN_DATA_DIR } else { Join-Path $env:LOCALAPPDATA 'ZenBridge' }) 'admin.token'
+  $style = 'Normal'
+  if ($HideAdminWindow) {
+    if (-not $OpenAdmin) { Write-Warning '-HideAdminWindow 需要搭配 -OpenAdmin（否則看不到一次性登入網址），改用一般視窗。' }
+    elseif (-not (Test-Path -LiteralPath $tokenFile)) { Write-Warning '第一次啟動會顯示只出現一次的 CLI 權杖，這次不隱藏視窗。' }
+    else { $style = 'Hidden' }
+  }
+  Write-Host "啟動後台 http://127.0.0.1:$AdminPort/admin （新視窗：$style）"
+  Start-Process -FilePath $py -ArgumentList '-m', 'app.admin.run' -WorkingDirectory $root -WindowStyle $style
 }
 if ($Live) {
   Write-Host ("啟動直播服務：engine={0} model={1} threads={2} queue={3} stale={4}s/{5} ledger={6} tm={7} vad={8}" -f `

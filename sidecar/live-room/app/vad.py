@@ -122,12 +122,52 @@ class VadGate:
         return res is not None and res.chunks > 0 and res.speech_ratio < self.min_speech_ratio
 
 
-def _float(env: dict, name: str, default: float) -> float:
+def trim_wav(wav: Path, res: VadResult | None, *, pad_ms: int = 200, min_save_ms: int = 500,
+             out: Path | None = None) -> Path | None:
+    """optimization-round2 #6: cut leading/trailing silence before decoding.
+
+    Returns the path of a trimmed copy (16 kHz mono s16), or None when there is nothing worth
+    trimming (no VAD opinion, no speech found, or it would save < min_save_ms). Never raises.
+    """
+    if res is None or res.first_ms is None or res.last_ms is None:
+        return None
     try:
-        return float((env.get(name) or "").strip() or default)
+        with wave.open(str(wav), "rb") as w:
+            if w.getframerate() != SR or w.getnchannels() != 1 or w.getsampwidth() != 2:
+                return None
+            n = w.getnframes()
+            total_ms = n * 1000 // SR
+            start_ms = max(0, res.first_ms - pad_ms)
+            end_ms = min(total_ms, res.last_ms + pad_ms)
+            if end_ms <= start_ms or total_ms - (end_ms - start_ms) < min_save_ms:
+                return None
+            w.setpos(start_ms * SR // 1000)
+            frames = w.readframes((end_ms - start_ms) * SR // 1000)
+        target = out or Path(str(wav) + ".trim.wav")
+        with wave.open(str(target), "wb") as o:
+            o.setnchannels(1)
+            o.setsampwidth(2)
+            o.setframerate(SR)
+            o.writeframes(frames)
+        return target
+    except (wave.Error, EOFError, OSError):
+        log.debug("vad trim failed", exc_info=True)
+        return None
+
+
+def _float(env: dict, name: str, default: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    """全站 D11: NaN or out-of-range values fall back to the default (a ratio > 1 or threshold NaN
+    would mark every clip silent and wipe all Chinese captions)."""
+    import math
+    try:
+        v = float((env.get(name) or "").strip() or default)
     except ValueError:
         log.warning("%s is not a number; using %s", name, default)
         return default
+    if not math.isfinite(v) or not lo <= v <= hi:
+        log.warning("%s=%s is outside %s..%s; using %s", name, v, lo, hi, default)
+        return default
+    return v
 
 
 def vad_from_env(env: dict | None = None, session_factory=None) -> VadGate | None:
@@ -140,8 +180,8 @@ def vad_from_env(env: dict | None = None, session_factory=None) -> VadGate | Non
         log.warning("BREEZE_VAD=%s is unknown; using RMS", mode)
         return None
     path = Path((env.get("BREEZE_VAD_MODEL") or "").strip() or MODEL)
-    threshold = _float(env, "BREEZE_VAD_THRESHOLD", 0.5)
-    ratio = _float(env, "BREEZE_VAD_MIN_SPEECH_RATIO", 0.05)
+    threshold = _float(env, "BREEZE_VAD_THRESHOLD", 0.5, 0.01, 0.99)
+    ratio = _float(env, "BREEZE_VAD_MIN_SPEECH_RATIO", 0.05, 0.0, 0.9)
     if session_factory is None:
         if not path.is_file():
             log.warning("silero model missing at %s; run scripts/fetch_silero_vad.py. Using RMS", path)

@@ -21,7 +21,7 @@ def cap(seq=1, zh="因緣具足", en="", status="zh_ready", **kw):
 # ------------------------------------------------------------------ db / schema
 def test_migrate_is_idempotent_and_v2(tmp_path):
     path = migrated_db(tmp_path)
-    assert db.migrate(path) == 2
+    assert db.migrate(path) == db.SCHEMA_VERSION
     c = db.connect(path)
     assert c.execute("PRAGMA recursive_triggers").fetchone()[0] == 1
     assert c.execute("PRAGMA foreign_keys").fetchone()[0] == 1
@@ -131,7 +131,8 @@ def test_ledger_failure_never_raises(tmp_path):
     led.submit(cap())
     led.wait_idle(2)
     led.close()
-    assert led.stats()["ledger_errors"] >= 1
+    st = led.stats()
+    assert st["ledger_errors"] + st["ledger_spooled"] >= 1      # kept on disk (spool), never raised
 
 
 def test_ledger_full_queue_drops_without_blocking(tmp_path):
@@ -279,6 +280,11 @@ def test_correction_feeds_tm_and_proposes_term(tmp_path):
     c.execute("COMMIT")
     assert out["tm_id"] and out["term_id"] and again == out
     mem = tm.TranslationMemory(lambda: db.connect(path, readonly=True))
+    # QA AI代理 P1-4: an editor's fix waits for review before TM serves it.
+    assert mem.exact("因緣具足") is None
+    c.execute("BEGIN IMMEDIATE")
+    feedback.review_tm_unit(c, out["tm_id"], True)
+    c.execute("COMMIT")
     assert mem.exact("因緣具足").tgt == "Conditions are complete."
     assert c.execute("SELECT origin FROM translations WHERE is_current=1").fetchone()[0] == "human"
     c.close()

@@ -26,7 +26,23 @@ log = logging.getLogger("zen.embed")
 
 DEFAULT_MODEL = "qwen3-embedding:0.6b"
 DEFAULT_BASE = "http://127.0.0.1:11434"
-BUSY_KEYS = ("pending", "inflight", "translate_queued", "translate_busy")
+BUSY_KEYS = ("pending", "inflight", "translate_queued", "translate_busy", "listeners")
+
+
+def _refused(exc: BaseException) -> bool:
+    """Connection refused = the live room is not running. Everything else is 'state unknown'."""
+    import errno
+    if isinstance(exc, ConnectionRefusedError):
+        return True
+    try:
+        from app.admin.live_client import LiveRefused
+        if isinstance(exc, LiveRefused):
+            return True
+    except Exception:          # pragma: no cover
+        pass
+    if isinstance(exc, OSError) and (exc.errno in (errno.ECONNREFUSED, 10061) or "refused" in str(exc).lower()):
+        return True
+    return False
 
 
 class EmbedError(RuntimeError):
@@ -50,7 +66,8 @@ class OllamaEmbedder:
             body["options"] = {"num_thread": self.num_thread}
         req = urllib.request.Request(self.base_url.rstrip("/") + "/api/embed", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
-        open_url = self.opener or urllib.request.urlopen
+        from app.net import safe_opener
+        open_url = self.opener or safe_opener()           # 資安長 #1: no redirects, no proxy
         try:
             with open_url(req, timeout=self.timeout_s) as resp:
                 data = json.loads(resp.read().decode())
@@ -81,25 +98,43 @@ class IdleGate:
     probe: object
     idle_s: float = 10.0
     clock: object = time.monotonic
+    poll_s: float = 1.0
+    sleep: object = time.sleep
     _busy_at: float | None = field(default=None, init=False)
 
-    @staticmethod
-    def busy(metrics: dict) -> bool:
+    def busy(self, metrics: dict) -> bool:
+        if not isinstance(metrics, dict):
+            return True
         if any(int(metrics.get(k) or 0) > 0 for k in BUSY_KEYS):
             return True
+        idle = metrics.get("asr_idle_s")
+        if idle is not None and float(idle) < self.idle_s:
+            return True                     # an upload / ASR result happened inside the window
         return float(metrics.get("backlog_s") or 0) > 0
+
+    def _sample(self):
+        """('down'|'busy'|'quiet'|'error', reason)."""
+        try:
+            metrics = self.probe()
+        except Exception as exc:
+            if _refused(exc):
+                return "down", "live_down"
+            return "error", f"probe_error_{type(exc).__name__}"
+        if metrics is None:
+            return "down", "live_down"
+        if self.busy(metrics):
+            return "busy", "asr_or_translate_busy"
+        return "quiet", "idle"
 
     def check(self) -> tuple[bool, str]:
         now = self.clock()
-        try:
-            metrics = self.probe()
-        except Exception:
-            metrics = None
-        if metrics is None:
-            return True, "live_down"
-        if self.busy(metrics):
+        kind, why = self._sample()
+        if kind == "down":
+            return True, why
+        if kind in ("busy", "error"):
+            # Fail closed (QA 效能長 P0-7): timeout / 5xx / breaker open count as busy.
             self._busy_at = now
-            return False, "asr_or_translate_busy"
+            return False, why if kind == "error" else "asr_or_translate_busy"
         if self._busy_at is None:
             # First look: require a full quiet window before the first batch.
             self._busy_at = now
@@ -107,6 +142,29 @@ class IdleGate:
         if quiet >= self.idle_s:
             return True, "idle"
         return False, f"quiet_{quiet:.0f}s_of_{self.idle_s:.0f}s"
+
+    def confirm(self) -> tuple[bool, str]:
+        """check(), then keep polling every poll_s for a whole idle_s window (QA 效能長 P0-6).
+
+        A single instant sample can land in the gap between two 6-s slices; this sustained
+        window catches any busy moment (or probe error) and defers. When the live room is not
+        running, one re-check after poll_s is enough (it cannot be busy without starting).
+        """
+        ok, why = self.check()
+        if not ok:
+            return ok, why
+        polls = 1 if why == "live_down" else max(1, int(-(-self.idle_s // max(self.poll_s, 0.01))))
+        for _ in range(polls):
+            self.sleep(self.poll_s)
+            kind, reason = self._sample()
+            if kind in ("busy", "error"):
+                self._busy_at = self.clock()
+                return False, reason
+            if why == "live_down" and kind == "quiet":
+                # the App just started: require a full quiet window from now on
+                self._busy_at = self.clock()
+                return False, "live_started"
+        return True, why
 
 
 def gate_from_env(probe, env=None) -> IdleGate:
@@ -123,7 +181,7 @@ def text_sha1(text: str) -> str:
 
 def pending_transcripts(c, model: str, limit: int, session_id: str | None = None) -> list[tuple[int, str]]:
     sql = ("SELECT t.id, t.text FROM transcripts t JOIN segments g ON g.id = t.segment_id "
-           "WHERE t.is_current = 1 AND length(t.text) > 0 AND NOT EXISTS ("
+           "WHERE t.is_current = 1 AND length(t.text) > 0 AND g.status <> 'deleted' AND NOT EXISTS ("
            "  SELECT 1 FROM embeddings e WHERE e.owner_type='transcript' AND e.owner_id = CAST(t.id AS TEXT) AND e.model = ?)")
     args: list = [model]
     if session_id:
@@ -159,7 +217,7 @@ def backfill_handler(connect, embedder: OllamaEmbedder, gate: IdleGate, *, batch
         session_id = (ctx.job.get("target") or {}).get("session_id")
         done = 0
         for _ in range(max_batches):
-            ok, why = gate.check()
+            ok, why = gate.confirm()
             if not ok:
                 if done:
                     ctx.progress(done, None, "waiting", why)

@@ -86,6 +86,7 @@ async def _run(monkeypatch, policy: str):
 
 @pytest.mark.anyio
 async def test_stale_oldest_is_skipped_when_newer_lines_wait(monkeypatch):
+    monkeypatch.setenv("BREEZE_TRANSLATE_LATE_POLICY", "publish")   # tests the dequeue rule only
     app, translator, rows = await _run(monkeypatch, "skip")
     assert rows[2]["translate_status"] == "skipped_backlog" and rows[2]["en"] == ""
     assert rows[2]["zh"] == "舊句"                      # Chinese caption is kept
@@ -96,6 +97,7 @@ async def test_stale_oldest_is_skipped_when_newer_lines_wait(monkeypatch):
 
 @pytest.mark.anyio
 async def test_stale_oldest_is_merged_into_next_request(monkeypatch):
+    monkeypatch.setenv("BREEZE_TRANSLATE_LATE_POLICY", "publish")   # tests the dequeue rule only
     app, translator, rows = await _run(monkeypatch, "merge")
     assert rows[2]["translate_status"] == "skipped_backlog"
     assert rows[3]["zh"] == "新句"                      # caption text itself is untouched

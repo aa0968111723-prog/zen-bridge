@@ -121,7 +121,9 @@ def add_unit(conn: sqlite3.Connection, zh: str, en: str, *, tgt: str = "en", ori
     conn.execute(
         """INSERT INTO tm_units(src_lang, tgt_lang, src_text, src_norm, tgt_text, src_hash, origin, quality, room_id, segment_id)
            VALUES ('zh-TW', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(src_hash, tgt_text) DO UPDATE SET quality=MIN(5, quality+1), updated_at=unixepoch('subsec')""",
+           ON CONFLICT(src_hash, tgt_text) DO UPDATE SET
+             quality=CASE WHEN excluded.quality >= 3 AND quality > 1 THEN MIN(5, quality+1) ELSE quality END,
+             updated_at=unixepoch('subsec')""",
         (tgt, zh, norm(zh), en, h, origin, max(1, min(5, int(quality))), room_id, segment_id),
     )
     return int(conn.execute("SELECT id FROM tm_units WHERE src_hash=? AND tgt_text=?", (h, en)).fetchone()[0])
@@ -165,7 +167,10 @@ class MemoryTranslator:
             self.tm_errors += 1
             log.debug("tm exact lookup failed", exc_info=True)
         if hit is not None:
-            if not locked_term_issues(zh, glossary, hit.tgt):
+            from app.translate import validate_caption_en
+            if validate_caption_en(hit.tgt, zh=zh, glossary=glossary) is None:
+                self.tm_errors += 1                      # P1-4 (3): defence in depth
+            elif not locked_term_issues(zh, glossary, hit.tgt):
                 self.tm_exact_hits += 1
                 self._notify(hit)
                 return TranslateResult(hit.tgt, "ok", origin="tm_exact")

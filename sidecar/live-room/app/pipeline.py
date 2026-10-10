@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import contextlib
 import hashlib
 import inspect
 import logging
@@ -76,6 +78,8 @@ class Segment:
     glossary_snapshot: list = field(default_factory=list)
     # "" for a model translation; "tm_exact" when translation memory answered. Ledger only.
     en_origin: str = ""
+    # 全站 D4: seqs whose (stale) zh was merged into this line's MT request; ledger marks it.
+    en_merged_from: list = field(default_factory=list)
     # Silero VAD speech share (0..1) when BREEZE_VAD=silero judged this slice. Ledger only.
     speech_ratio: float | None = None
 
@@ -121,6 +125,17 @@ def _translate_thread_init():
         return None
 
 
+def _vad_trim_enabled() -> bool:
+    return (os.environ.get("BREEZE_VAD_TRIM") or "1").strip().lower() not in ("0", "off", "false")
+
+
+def _vad_trim_pad_ms() -> int:
+    try:
+        return max(0, min(1000, int((os.environ.get("BREEZE_VAD_TRIM_PAD_MS") or "200").strip())))
+    except ValueError:
+        return 200
+
+
 def _vad_from_env():
     try:
         from app.vad import vad_from_env
@@ -141,8 +156,17 @@ class Pipeline:
         from app import runtime_tuning
         self.translate_stale_s = runtime_tuning.stale_s()
         self.translate_stale_policy = runtime_tuning.stale_policy()
+        self.translate_late_policy = runtime_tuning.late_policy()
+        self.translate_late_s = runtime_tuning.late_s()
+        self.locked_term_policy = runtime_tuning.locked_term_policy()
+        self.translate_late_dropped = 0
+        self.locked_withheld = 0
         self.translate_merged = 0
-        self._merge_carry: dict[tuple[str, str], tuple[int, str]] = {}
+        # (last merged seq, joined zh text, number of merged lines). QA 效能長 P1-15: chained
+        # stale lines are concatenated, never overwritten.
+        self._merge_carry: dict[tuple[str, str], tuple[int, str, int]] = {}
+        self._last_merged_seqs: list[int] = []
+        self._merge_seqs: dict[tuple[str, str], list[int]] = {}
         self.prompt = prompt
         self.tmp = tmp
         self.tmp.mkdir(parents=True, exist_ok=True)
@@ -174,6 +198,9 @@ class Pipeline:
         self._room_gen: dict[str, int] = {}
         self._index: dict[tuple[str, str, int], dict] = {}
         self._sealed: dict[str, set[str]] = {}
+        # round3 private pause: room -> paused_at / resume_at (time.time())
+        self._paused: dict[str, float] = {}
+        self._resume_at: dict[str, float] = {}
         self._braced: dict[str, set[str]] = {}
         self._braced_dropped: dict[str, dict] = {}
         self._muted: set[str] = set()
@@ -351,7 +378,12 @@ class Pipeline:
             "translate_errors": self.translate_errors,
             "translate_waiter_timeouts": self.translate_waiter_timeouts,
             "translate_merged": self.translate_merged,
+            "translate_late_dropped": self.translate_late_dropped,
+            "locked_withheld": self.locked_withheld,
             "translate_busy": self._translate_busy,
+            # Seconds since the last upload or ASR result (monotonic). None = nothing yet.
+            "asr_idle_s": (None if getattr(self, "last_activity", None) is None
+                           else round(time.monotonic() - self.last_activity, 1)),
         }
         payload.update(self._rtf.snapshot())
         return payload
@@ -413,6 +445,7 @@ class Pipeline:
 
         A later host open uses a new generation, so late jobs cannot refill captions.
         """
+        self._clear_merge_carry(room_id)  # 全站 D3
         self._room_gen[room_id] = self._room_gen.get(room_id, 1) + 1
         keys = {key for key in self.results if key[0] == room_id}
         keys.update(key for key in self._flight if key[0] == room_id)
@@ -578,6 +611,7 @@ class Pipeline:
         segment.status = "cancelled"
         segment.translate_status = ""
         segment.en_origin = ""
+        segment.en_merged_from = []
         segment.error = "已清除"
         return segment
 
@@ -643,6 +677,7 @@ class Pipeline:
 
     def invalidate_room(self, room_id: str) -> None:
         """Drop this room's captions and its glossary. The live session keeps its seq counter."""
+        self._clear_merge_carry(room_id)  # 全站 D3
         self.clear_room_glossary(room_id)
         self._room_gen[room_id] = self._room_gen.get(room_id, 1) + 1
         sealed = self._sealed.setdefault(room_id, set())
@@ -721,6 +756,97 @@ class Pipeline:
         held = self._held.get((room_id, session_id))
         if held is not None:
             held.pop(seq, None)
+
+    # ------------------------------------------------------------------ private pause (round3 §1.3-1)
+    PAUSE_RESUME_GRACE_S = 1.0
+    DEFAULT_SLICE_S = 6.0
+
+    def is_paused(self, room_id: str) -> bool:
+        return room_id in self._paused
+
+    def pause_room(self, room_id: str, now: float | None = None) -> dict:
+        """Private pause. Nothing captured before the press may surface afterwards unless it was
+        already on screen: every queued, reserved, decoding or order-held slice of the room is
+        voided (sealed - its ASR result is thrown away, never published, never reaches the
+        ledger or TM), every waiting or running translation is dropped (English stays blank on
+        the lines already shown), merge carry is cleared. New uploads are refused until resume."""
+        now = time.time() if now is None else now
+        self._paused[room_id] = now
+        self._resume_at.pop(room_id, None)
+        self._clear_merge_carry(room_id)
+        sealed = self._sealed.setdefault(room_id, set())
+        keys = set()
+        keys.update(k for k, f in self._flight.items() if k[0] == room_id and not f.done())
+        keys.update(k for k in self._active if k[0] == room_id)
+        keys.update(k for k in self._reserved if k[0] == room_id)
+        for group, held in self._held.items():
+            if group[0] == room_id:
+                keys.update((group[0], group[1], seq) for seq in held)
+        pending_en = []
+        for key, seg in self.results.items():
+            if key[0] != room_id:
+                continue
+            if key not in self._emitted_segs:
+                keys.add(key)
+            elif seg.translate_queued or seg.status == "zh_ready":
+                pending_en.append(seg)
+        for key in keys:
+            sealed.add(f"{key[0]}:{key[1]}:{key[2]}")
+            self._drop_epoch(key)
+            self._drop_queued(key)
+            self._gap_since.pop(key, None)
+        for seg in pending_en:                       # zh already shown; its English is dropped
+            self._drop_epoch(seg.key)
+            self._drop_queued(seg.key)
+            sealed.add(seg.id)
+            seg.translate_queued = False
+            seg.translate_status = "paused"
+            self._wake(seg.key, seg)
+        dropped = 0
+        for group in [g for g in self._held if g[0] == room_id]:
+            for seq, seg in list(self._held.pop(group, {}).items()):
+                self._abandon(seg).error = "私密暫停"
+                self._wake(seg.key, seg)
+                dropped += 1
+        for key in [k for k in self.results if k[0] == room_id and k not in self._emitted_segs]:
+            seg = self.results.pop(key)
+            self._abandon(seg).error = "私密暫停"
+            self._wake(key, seg)
+            dropped += 1
+        tops: dict = {}
+        for (rid, sid), max_seq in self._max_seq.items():
+            if rid == room_id:
+                tops[(rid, sid)] = int(max_seq)
+        for key in keys:                             # in-flight seqs are not noted yet
+            tops[key[:2]] = max(tops.get(key[:2], 0), int(key[2]))
+        for group, top in tops.items():              # order must not wait for voided seqs
+            self._next[group] = max(self._next.get(group, 1), top + 1)
+        for key in [k for k in self._emit_waiters if k[0] == room_id]:
+            self._release_emit_waiters(key)
+        return {"paused_at": now, "voided": len(keys), "dropped": dropped, "english_dropped": len(pending_en)}
+
+    def resume_room(self, room_id: str, now: float | None = None) -> dict:
+        now = time.time() if now is None else now
+        self._paused.pop(room_id, None)
+        self._resume_at[room_id] = now
+        return {"resume_at": now}
+
+    def _pause_blocks(self, segment: Segment, now: float | None = None) -> bool:
+        """Paused, or the slice began capturing before resume + grace (captured while paused)."""
+        if segment.room_id in self._paused:
+            return True
+        resumed = self._resume_at.get(segment.room_id)
+        if resumed is None:
+            return False
+        now = time.time() if now is None else now
+        dur = self.DEFAULT_SLICE_S
+        if segment.t0_ms is not None and segment.t1_ms is not None and segment.t1_ms > segment.t0_ms:
+            dur = (segment.t1_ms - segment.t0_ms) / 1000.0
+        if now - dur < resumed + self.PAUSE_RESUME_GRACE_S:
+            return True
+        if now - resumed > 600:
+            self._resume_at.pop(segment.room_id, None)
+        return False
 
     def mute_room(self, room_id: str) -> None:
         """Hold publishes while a room delete is waiting on the store."""
@@ -801,6 +927,7 @@ class Pipeline:
             self._wake(key, self.results.get(key, segment))
 
     def delete_segment(self, room_id: str, session_id: str, seq: int) -> None:
+        self._clear_merge_carry(room_id, session_id)  # 全站 D3
         key = (room_id, session_id, seq)
         ident = f"{room_id}:{session_id}:{seq}"
         braced = self._braced.get(room_id)
@@ -871,6 +998,8 @@ class Pipeline:
             event["term_flags"] = flags
         if segment.en_origin and segment.en:
             event["en_origin"] = segment.en_origin
+        if segment.en_merged_from and segment.en:
+            event["en_merged_from"] = list(segment.en_merged_from)
         if segment.speech_ratio is not None:
             event["speech_ratio"] = segment.speech_ratio
         self.events.append(dict(event))
@@ -1141,11 +1270,20 @@ class Pipeline:
 
     async def submit(self, segment: Segment, audio: bytes, decoder, *, slot_held: bool, retry: bool = False, owner: bool = False, wait_translation: bool = True) -> Segment:
         del owner  # Admission is synchronous; the flight future replaces the old owner spin.
+        self.last_activity = time.monotonic()      # asr_idle_s for the embedding gate (QA 效能長 P0-6)
         self.ensure_workers()
         if segment.id in self._sealed.get(segment.room_id, ()):
             if slot_held:
                 self.release_slot()
             raise PipelineError(409, "這段已刪除")
+        if self._pause_blocks(segment):
+            # Private pause: the audio is discarded unheard; the seq is voided so order moves on.
+            self._sealed.setdefault(segment.room_id, set()).add(segment.id)
+            if slot_held:
+                self.release_slot()
+            self._abandon(segment).error = "私密暫停"
+            self._release(segment)
+            raise PipelineError(409, "私密暫停中，這段不辨識")
         group = (segment.room_id, segment.session_id)
         if group in self._closed and group not in self._flushing:
             if slot_held:
@@ -1385,6 +1523,14 @@ class Pipeline:
                     self._rtf.note_silent_skip((segment.room_id, segment.session_id))
                     self._release(segment)
                     return segment
+            # optimization-round2 #6: trim leading/trailing silence (VAD on, BREEZE_VAD_TRIM=1).
+            asr_wav = wav
+            if vad_res is not None and _vad_trim_enabled():
+                from app.vad import trim_wav
+                trimmed = await asyncio.to_thread(trim_wav, wav, vad_res, pad_ms=_vad_trim_pad_ms())
+                if trimmed is not None:
+                    asr_wav = trimmed
+                    self.vad_trimmed = getattr(self, "vad_trimmed", 0) + 1
             segment.status = "transcribing"
             # Real WAVE length replaces the upload estimate. Non-WAVE stays estimated until ASR starts.
             # backlog_audio_s keeps that real length until recognition finishes (original definition).
@@ -1404,10 +1550,15 @@ class Pipeline:
                     self._rtf.note_asr_active(segment.key, segment.room_id)
                     asr_started = time.monotonic()
                     try:
-                        asr = await wait_bounded(
-                            asyncio.to_thread(self.asr.transcribe, wav, self.prompt),
-                            timeout=self.settings.asr_timeout_s,
-                        )
+                        try:
+                            asr = await wait_bounded(
+                                asyncio.to_thread(self.asr.transcribe, asr_wav, self.prompt),
+                                timeout=self.settings.asr_timeout_s,
+                            )
+                        finally:
+                            if asr_wav is not wav:
+                                with contextlib.suppress(OSError):
+                                    os.unlink(asr_wav)
                     except asyncio.TimeoutError:
                         # A timeout is not a speed sample. ~120s of asr_ms would own p95.
                         self._rtf.note_timeout((segment.room_id, segment.session_id))
@@ -1436,6 +1587,7 @@ class Pipeline:
             # Original last_process_ms: start of _process through ASR return, including slot wait.
             # process_s uses the two explicit spans so the silence scan and the queue stay out.
             self.last_process_s = time.monotonic() - started
+            self.last_activity = time.monotonic()
             self.process_s = max(0.0, decode_s + (record_s or 0.0))
             if segment.key in self._cancel:
                 self.fail_received(segment, "主持端取消這段", status="cancelled")
@@ -1663,6 +1815,7 @@ class Pipeline:
         segment.translate_queued = False
         segment.en = ""
         segment.en_origin = ""
+        segment.en_merged_from = []
         segment.term_flags = []
         segment.translate_status = translate_status
         segment.error = error
@@ -1794,7 +1947,16 @@ class Pipeline:
         snapshot = segment.glossary_snapshot
         flags: list = []
         if translated.status == "ok" and segment.en:
-            flags.extend(missing_locked(zh_for_flags, snapshot, segment.en))
+            missing = missing_locked(zh_for_flags, snapshot, segment.en)
+            flags.extend(missing)
+            if missing and self.locked_term_policy == "withhold":
+                # AI-P1-3 (configurable, default flag): do not show English that breaks a locked term.
+                self.locked_withheld += 1
+                segment.en = ""
+                segment.en_origin = ""
+                segment.translate_status = "term_violation"
+                segment.status = "translate_failed"
+                segment.error = "譯文沒有使用鎖定詞，依設定不顯示英文（中文保留）"
         flags.extend(guarded_flags(zh_for_flags, snapshot))
         segment.term_flags = flags
         self.results[segment.key] = segment
@@ -1814,10 +1976,9 @@ class Pipeline:
             self._fail_translation(segment, "skipped", "英譯排隊太久，中文仍保留")
             return
         if (self.translate_stale_policy != "off" and self.translate_stale_s > 0 and waited > self.translate_stale_s
-                and self._translate_q is not None and self._translate_q.qsize() > 0):
+                and self._newer_queued(segment)):
             # Newer speech is waiting. English for a line this old is no longer useful live.
-            if self.translate_stale_policy == "merge" and segment.zh:
-                self._merge_carry[(segment.room_id, segment.session_id)] = (segment.seq, segment.zh)
+            if self.translate_stale_policy == "merge" and segment.zh and self._add_merge_carry(segment):
                 self.translate_merged += 1
                 self._fail_translation(segment, "skipped_backlog", "英譯積壓，這句併入下一句一起翻譯")
             else:
@@ -1825,6 +1986,7 @@ class Pipeline:
             return
         zh_snapshot = segment.zh
         mt_text = self._take_merge_carry(segment, zh_snapshot)
+        segment.en_merged_from = list(self._last_merged_seqs)
         terms = self.terms_for(segment.room_id)
         segment.glossary_snapshot = terms
         segment.glossary_version = self.room_glossary_version(segment.room_id)
@@ -1867,7 +2029,24 @@ class Pipeline:
             else:
                 self._suppress_attempt(segment, epoch, None)
             return
+        # CTO-12 (configurable, default drop): English that arrives after the stale limit is
+        # not shown live; zh stays and the line can be re-translated after class.
+        late = time.monotonic() - enqueued_at
+        if (translated.status == "ok" and self.translate_late_policy == "drop" and self.translate_late_s > 0
+                and self.translate_stale_policy != "off" and late > self.translate_late_s
+                and self._epoch_current(segment, epoch) and (zh_snapshot is None or segment.zh == zh_snapshot)
+                and self._has_newer_line(segment)):
+            self.translate_late_dropped += 1
+            self._fail_translation(segment, "skipped_backlog",
+                                   f"英譯 {late:.0f} 秒才回來，超過時限，不即時顯示（中文保留，課後可補翻）")
+            return
         self._finish_translation(segment, translated, epoch, zh_snapshot)
+
+    def _has_newer_line(self, segment: Segment) -> bool:
+        """A later line of the same room+session already has Chinese on screen. The very last line
+        is never dropped as late: showing it cannot push anything else further behind."""
+        rows = self._recent_zh.get((segment.room_id, segment.session_id), ())
+        return any(seq > segment.seq for seq, _text in rows)
 
     def _remember_zh(self, segment: Segment) -> None:
         if not segment.zh or self._stale(segment):
@@ -1886,20 +2065,66 @@ class Pipeline:
                 return
         rows.append((segment.seq, segment.zh))
 
+    MERGE_MAX_LINES = 2
+    MERGE_MAX_CHARS = 80
+
+    @staticmethod
+    def _join_zh(a: str, b: str) -> str:
+        joiner = "" if a[-1:] in "，。！？；、,.!?;" else "，"
+        return a + joiner + b
+
+    def _clear_merge_carry(self, room_id: str, session_id: str | None = None) -> None:
+        """QA 全站測試長 D3: deleted/cleared text must not ride along into the next line's MT."""
+        for key in [k for k in self._merge_carry if k[0] == room_id and (session_id is None or k[1] == session_id)]:
+            self._merge_carry.pop(key, None)
+            self._merge_seqs.pop(key, None)
+
+    def _newer_queued(self, segment: Segment) -> bool:
+        """QA 全站測試長 D2: only a newer line of the SAME room+session makes this one stale;
+        a line queued for another room must never cost this room its last English."""
+        q = self._translate_q
+        if q is None:
+            return False
+        for item in list(getattr(q, "_queue", ())):
+            other = item[2] if isinstance(item, tuple) and len(item) >= 3 else None
+            if (other is not None and other.room_id == segment.room_id
+                    and other.session_id == segment.session_id and other.seq > segment.seq):
+                return True
+        return False
+
+    def _add_merge_carry(self, segment: Segment) -> bool:
+        """Append a stale line to the carry. False = carry full, caller must plain-skip it."""
+        group = (segment.room_id, segment.session_id)
+        carry = self._merge_carry.get(group)
+        if carry and carry[0] < segment.seq and segment.seq - carry[0] <= 2:
+            last, text, n = carry
+            joined = self._join_zh(text, segment.zh)
+            if n >= self.MERGE_MAX_LINES or len(joined) > self.MERGE_MAX_CHARS:
+                return False
+            self._merge_carry[group] = (segment.seq, joined, n + 1)
+            self._merge_seqs.setdefault(group, []).append(segment.seq)
+            return True
+        self._merge_carry[group] = (segment.seq, segment.zh, 1)
+        self._merge_seqs[group] = [segment.seq]
+        return True
+
     def _take_merge_carry(self, segment: Segment, zh: str) -> str:
-        """Prepend a merged stale line (same session, within 2 seqs) to this request only."""
+        """Prepend the merged stale line(s) (same session, within 2 seqs) to this request only.
+        Sets self._last_merged_seqs to the merged seqs (empty when nothing was merged)."""
+        self._last_merged_seqs = []
         group = (segment.room_id, segment.session_id)
         carry = self._merge_carry.get(group)
         if not carry:
             return zh
-        seq, text = carry
+        seq, text = carry[0], carry[1]
         if seq >= segment.seq:
             return zh
         self._merge_carry.pop(group, None)
+        seqs = self._merge_seqs.pop(group, None) or [seq]
         if segment.seq - seq > 2 or not text:
             return zh
-        joiner = "" if text[-1:] in "，。！？；、,.!?;" else "，"
-        return text + joiner + zh
+        self._last_merged_seqs = list(seqs)
+        return self._join_zh(text, zh)
 
     def _context(self, segment: Segment) -> list[str]:
         rows = self._recent_zh.get((segment.room_id, segment.session_id), ())
@@ -2000,6 +2225,34 @@ class Pipeline:
                     self.mark_missing(room_id, session_id, seq, "缺段：這段沒有留在逐字稿裡")
         if max_ord:
             self._room_sessions[room_id] = max(self._room_sessions.get(room_id, 0), max_ord)
+
+    async def override_translation(self, room_id: str, session_id: str, seq: int, en: str,
+                                   zh: str | None = None) -> Segment:
+        """Publish a human English line (and optionally human Chinese) without the LLM.
+
+        Any queued or in-flight machine attempt for this seq is invalidated first, so it can
+        never land on top of the correction afterwards (QA 全端工程師 B1/B2).
+        """
+        self.ensure_workers()
+        if f"{room_id}:{session_id}:{seq}" in self._sealed.get(room_id, ()):
+            raise PipelineError(404, "找不到這段字幕")
+        segment = self.results.get((room_id, session_id, seq))
+        if segment is None:
+            segment = self._rehydrate((room_id, session_id, seq))
+        if segment is None:
+            raise PipelineError(404, "找不到這段字幕")
+        if segment.status in {"cancelled", "missing"}:
+            raise PipelineError(409, "這段已取消或缺少，不能修正")
+        if zh is not None and zh.strip():
+            segment.zh_raw = segment.zh_raw or segment.zh
+            segment.zh = zh.strip()
+            self._remember_zh(segment)
+        self._drop_queued(segment.key)
+        epoch = self._next_epoch(segment.key)
+        segment.glossary_snapshot = self.terms_for(room_id)
+        self._finish_translation(segment, TranslateResult(text=en, status="ok", origin="human"), epoch, None)
+        self._wake(segment.key, segment)
+        return self.results.get((room_id, session_id, seq), segment)
 
     async def retranslate(self, room_id: str, session_id: str, seq: int, zh: str | None = None) -> Segment:
         self.ensure_workers()

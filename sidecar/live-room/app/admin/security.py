@@ -27,6 +27,7 @@ import logging
 import os
 import re
 import secrets
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -45,6 +46,36 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' 
 
 
 _SECRET_QUERY = re.compile(r"(?:^|&)(?:token|access_token|auth|authorization|key|api_key|sid|code)=")
+# Normalised query-parameter names that must never carry a credential (D-002). Names are
+# percent-decoded, lower-cased and '-' -> '_' first, so %74oken=, Api-Key= and ;token= are
+# caught as well. Any name that *ends* in one of _SECRET_SUFFIXES is refused too.
+_SECRET_NAMES = frozenset({
+    "token", "access_token", "refresh_token", "id_token", "auth", "authorization", "bearer",
+    "key", "api_key", "apikey", "sid", "session", "session_id", "sessionid", "code", "login_code",
+    "password", "passwd", "pwd", "secret", "client_secret", "csrf", "csrf_token", "jwt", "ticket",
+    "zen_admin_sid", "x_zen_csrf",
+})
+_SECRET_SUFFIXES = ("_token", "_secret", "_password", "_api_key", "_apikey", "_sid", "_jwt")
+
+
+def query_has_secret(raw_query: bytes | str) -> bool:
+    """True when any query parameter name looks like a credential (decoded, normalised)."""
+    from urllib.parse import unquote_plus
+    text = raw_query.decode("latin-1") if isinstance(raw_query, bytes) else (raw_query or "")
+    if not text:
+        return False
+    for part in re.split(r"[&;]", text):
+        name = part.split("=", 1)[0]
+        # decode twice: %2574oken -> %74oken -> token
+        for _ in range(2):
+            name = unquote_plus(name)
+        name = name.strip().lower().replace("-", "_").replace(".", "_")
+        name = re.sub(r"\[.*$", "", name)          # token[]=  /  token[0]=
+        if not name:
+            continue
+        if name in _SECRET_NAMES or name.endswith(_SECRET_SUFFIXES):
+            return True
+    return False
 
 
 def allowed_hosts(port: int) -> frozenset[str]:
@@ -100,7 +131,7 @@ class LoopbackOnly:
         if not raw_path.startswith(b"/"):
             return 400, "bad_request", "不接受 absolute-form 請求目標"
         query = (scope.get("query_string") or b"").decode("latin-1").lower()
-        if _SECRET_QUERY.search(query):
+        if _SECRET_QUERY.search(query) or query_has_secret(scope.get("query_string") or b""):
             return 400, "bad_request", "權杖不可放在網址（請用 Cookie 或 Authorization 標頭）"
         host = headers.get("host")
         if not host:
@@ -112,6 +143,12 @@ class LoopbackOnly:
             if origin is None or origin.lower() not in self.origins:
                 return 403, "forbidden", "WebSocket Origin 不在白名單"
             return None
+        if (scope.get("method", "GET").upper() in SAFE_METHODS and scope.get("path", "").startswith("/admin/api")):
+            # 後端 B7: a cookie-carrying API read (incl. SSE) from another local origin (8780, 8645…)
+            # is refused; "none" = typed URL / CLI, same-origin = the admin UI.
+            site = headers.get("sec-fetch-site")
+            if site is not None and site not in ("same-origin", "none"):
+                return 403, "forbidden", f"拒絕 Sec-Fetch-Site: {site}"
         if scope.get("method", "GET").upper() not in SAFE_METHODS:
             if origin is not None and origin.lower() not in self.origins:
                 return 403, "forbidden", "Origin 不在白名單（需含正確埠號）"
@@ -269,8 +306,11 @@ _REDACT_PATTERNS = [
     (re.compile(r"(?i)((?:set-)?cookie\s*[:=]\s*)[^\r\n]+"), r"\1***"),
     (re.compile(r"(?i)(zen_admin_sid=)[^;\s]+"), r"\1***"),
     (re.compile(r"(?i)(x-zen-(?:csrf|confirm)\s*[:=]\s*)[^\s,;'\"]+"), r"\1***"),
-    (re.compile(r"(?i)(\"[^\"]*(?:token|code|ticket|password|secret|key|csrf)[^\"]*\"\s*:\s*)\"[^\"]*\""), r'\1"***"'),
-    (re.compile(r"(?i)\b((?:[a-z_]*?)(?:token|ticket|password|secret|api_key|csrf|login_code))(\s*[=:]\s*)[^\s,;&'\"]+"), r"\1\2***"),
+    (re.compile(r"(?i)(\"[^\"]*(?:token|code|ticket|password|secret|key|csrf|sid)[^\"]*\"\s*:\s*)\"[^\"]*\""), r'\1"***"'),
+    # 資安長 #3: Python repr / kwargs forms: {'token': 'X'}, token='X'
+    (re.compile(r"(?i)('[^']*(?:token|code|ticket|password|secret|key|csrf|sid)[^']*'\s*:\s*)'[^']*'"), r"\1'***'"),
+    (re.compile(r"(?i)\b((?:[a-z_]*?)(?:token|ticket|password|secret|api_key|csrf|login_code|code|sid))(\s*[=:]\s*)(['\"])[^'\"]*\3"), r"\1\2\3***\3"),
+    (re.compile(r"(?i)\b((?:[a-z_]*?)(?:token|ticket|password|secret|api_key|csrf|login_code|code|sid))(\s*[=:]\s*)(?!\*\*\*)[^\s,;&'\"]+"), r"\1\2***"),
     (re.compile(r"#code=[^\s&'\"]+"), "#code=***"),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{8,}"), "sk-***"),
 ]
@@ -311,6 +351,24 @@ def install_redaction(logger: logging.Logger | None = None) -> RedactingFilter:
     return flt
 
 
+_HANDLER_FILTER = RedactingFilter()
+
+
+def install_redaction_on_handlers() -> int:
+    """資安長 #2: logger-level filters do not see records propagated from child loggers
+    (zen.admin, uvicorn.error …). Put the filter on every *handler* that exists now; call
+    this after uvicorn has configured logging (admin lifespan start). Returns handlers touched."""
+    loggers = [logging.getLogger()] + [lg for lg in logging.Logger.manager.loggerDict.values()
+                                        if isinstance(lg, logging.Logger)]
+    n = 0
+    for lg in loggers:
+        for h in lg.handlers:
+            if not any(isinstance(f, RedactingFilter) for f in h.filters):
+                h.addFilter(_HANDLER_FILTER)
+                n += 1
+    return n
+
+
 def load_or_create_token(path: Path) -> tuple[str, str | None]:
     """Return (sha256 hash, plain token or None). Plain is only returned when newly created.
 
@@ -328,10 +386,11 @@ def load_or_create_token(path: Path) -> tuple[str, str | None]:
 class SessionStore:
     """HttpOnly cookie sessions. The DB keeps sha256(sid) and a per-session CSRF token."""
 
-    def __init__(self, connect, clock=time.time, idle_s: float = SESSION_IDLE_S):
+    def __init__(self, connect, clock=time.time, idle_s: float = SESSION_IDLE_S, touch_every_s: float = 60.0):
         self._connect = connect      # () -> sqlite3.Connection on the main DB
         self._clock = clock
         self.idle_s = idle_s
+        self.touch_every_s = touch_every_s
 
     def create(self, role: str = "owner", user_id: int | None = None) -> tuple[str, str]:
         sid, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
@@ -353,14 +412,20 @@ class SessionStore:
         now = self._clock()
         c = self._connect()
         try:
-            row = c.execute("SELECT sid_hash, user_id, role, csrf_token, expires_at FROM admin_sessions WHERE sid_hash=?",
-                            (token_hash(sid),)).fetchone()
+            row = c.execute("SELECT sid_hash, user_id, role, csrf_token, expires_at, last_seen_at FROM admin_sessions "
+                            "WHERE sid_hash=?", (token_hash(sid),)).fetchone()
             if not row or row[4] < now:
                 return None
-            c.execute("BEGIN IMMEDIATE")
-            c.execute("UPDATE admin_sessions SET last_seen_at=?, expires_at=? WHERE sid_hash=?",
-                      (now, now + self.idle_s, row[0]))
-            c.execute("COMMIT")
+            # DBA D12: slide the expiry at most once a minute and never block a read on the write lock.
+            if now - float(row[5] or 0) >= self.touch_every_s:
+                try:
+                    c.execute("BEGIN IMMEDIATE")
+                    c.execute("UPDATE admin_sessions SET last_seen_at=?, expires_at=? WHERE sid_hash=?",
+                              (now, now + self.idle_s, row[0]))
+                    c.execute("COMMIT")
+                except sqlite3.OperationalError:
+                    if c.in_transaction:
+                        c.execute("ROLLBACK")
             return {"role": row[2], "user_id": row[1], "csrf": row[3], "via": "session"}
         finally:
             c.close()
