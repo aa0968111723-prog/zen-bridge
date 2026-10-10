@@ -1,0 +1,17 @@
+{
+  "segments": 20, "segment_s": 6.0, "reps": 2, "cooldown_s": 30,
+  "require_ac": true, "abort_on_ev37": true, "det_runs": 3, "mt_sentences": 20,
+  "asr": [
+    {"id": "now",         "model": "breeze-asr-25-q5_0", "threads": 6, "audio_ctx": 0,   "beam": 5, "prompt": ""},
+    {"id": "nf",          "model": "breeze-asr-25-q5_0", "threads": 6, "audio_ctx": 0,   "beam": 5, "no_fallback": true},
+    {"id": "nf-nfa",      "model": "breeze-asr-25-q5_0", "threads": 6, "audio_ctx": 0,   "beam": 5, "no_fallback": true, "flash_attn": false},
+    {"id": "nf-ac640",    "model": "breeze-asr-25-q5_0", "threads": 6, "audio_ctx": 640, "beam": 5, "no_fallback": true},
+    {"id": "nf-ac640-b1", "model": "breeze-asr-25-q5_0", "threads": 6, "audio_ctx": 640, "beam": 1, "no_fallback": true},
+    {"id": "nf-ac512",    "model": "breeze-asr-25-q5_0", "threads": 6, "audio_ctx": 512, "beam": 5, "no_fallback": true}
+  ],
+  "draft": [{"id": "xasr-int8-t1", "dir": "%LOCALAPPDATA%/ZenBridge/models/draft/x-asr-480-int8", "threads": 1},
+            {"id": "xasr-fp32-t2", "dir": "%LOCALAPPDATA%/ZenBridge/models/draft/x-asr-480-fp32", "threads": 2, "precision": "fp32"}],
+  "mt": [{"id": "hymt2-q4", "gguf": "%MODELS%/Hy-MT2-1.8B-Q4_K_M.gguf", "threads": 2, "langs": ["en", "ja"]},
+         {"id": "hymt2-q8", "gguf": "%MODELS%/Hy-MT2-1.8B-Q8_0.gguf",   "threads": 2, "langs": ["en", "ja"]}],
+  "concurrent": {"enabled": true, "pairs": [["nf-ac640", "xasr-int8-t1", "hymt2-q4"]], "minutes": 5}
+}
