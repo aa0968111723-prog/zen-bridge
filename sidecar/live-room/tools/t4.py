@@ -233,6 +233,17 @@ def _base_row(layer: str, rid: str, ctx: dict) -> dict:
     return row
 
 
+def _prompt(row: dict) -> str:
+    p = row.get("prompt", "")
+    if p == "current":                       # the live app's prompt (tools/rtf_check.PROMPT)
+        try:
+            from tools.rtf_check import PROMPT
+        except Exception:
+            return ""
+        return PROMPT
+    return p
+
+
 def _asr_layer(row: dict, plan: dict, clips, eng: Engines, ctx: dict) -> dict:
     out = _base_row("asr", row["id"], ctx)
     asr = eng.asr(row)
@@ -242,7 +253,7 @@ def _asr_layer(row: dict, plan: dict, clips, eng: Engines, ctx: dict) -> dict:
             for wav, ref in clips:
                 secs = wav_seconds(wav)
                 t0 = eng.clock()
-                res = asr.transcribe(wav, row.get("prompt", ""))
+                res = asr.transcribe(wav, _prompt(row))
                 wall = eng.clock() - t0
                 if not getattr(res, "ok", False):
                     continue
@@ -377,7 +388,7 @@ def _concurrent_layer(pair, plan: dict, clips, eng: Engines, ctx: dict) -> dict:
                 released, wav = jobs.pop(0)
             started = eng.clock()
             a3.append(started - released)
-            res = asr.transcribe(wav, asr_row.get("prompt", ""))
+            res = asr.transcribe(wav, _prompt(asr_row))
             a5.append(eng.clock() - started)
             text = getattr(res, "text", "") or ""
             if text and mt is not None:
