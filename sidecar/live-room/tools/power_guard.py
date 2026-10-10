@@ -24,7 +24,9 @@ def _read_battery():
         battery = psutil.sensors_battery()
         if battery is None:
             return None, "battery state unknown (no battery detected)"
-        return not battery.power_plugged, None
+        if isinstance(battery.power_plugged, bool):
+            return not battery.power_plugged, None
+        return None, "battery state unknown (power source unavailable)"
     except Exception as exc:
         return None, f"battery state unknown ({type(exc).__name__})"
 
@@ -40,7 +42,10 @@ def _read_power_plan():
             timeout=3,
             check=True,
         )
-        return result.stdout.strip() or None, None
+        plan = result.stdout.strip()
+        if not plan:
+            return None, "power plan unknown (empty response)"
+        return plan, None
     except Exception as exc:
         return None, f"power plan unknown ({type(exc).__name__})"
 
@@ -92,7 +97,12 @@ def check(*, battery=None, power_plan=None, battery_saver=None, cpu_percent=None
         pass
     else:
         try:
-            battery = not battery.power_plugged
+            plugged = battery.power_plugged
+            if isinstance(plugged, bool):
+                battery = not plugged
+            else:
+                battery = None
+                reasons.append("battery state unknown (invalid battery value)")
         except Exception:
             battery = None
             reasons.append("battery state unknown (invalid battery value)")
@@ -104,6 +114,9 @@ def check(*, battery=None, power_plan=None, battery_saver=None, cpu_percent=None
         power_plan, note = _read_power_plan()
         if note:
             reasons.append(note)
+    elif not isinstance(power_plan, str) or not power_plan.strip():
+        power_plan = None
+        reasons.append("power plan unknown (invalid value)")
     details["power_plan"] = power_plan
     if isinstance(power_plan, str) and any(
         phrase in power_plan.casefold() for phrase in ("power saver", "省電", "省电")
@@ -135,14 +148,11 @@ def check(*, battery=None, power_plan=None, battery_saver=None, cpu_percent=None
     if cpu_percent is not None and cpu_percent > 25:
         reasons.append(f"background CPU load is high ({cpu_percent:g}%)")
 
-    return {"trustworthy": not any(
+    trustworthy = not any(
         reason in reasons
-        for reason in (
-            "running on battery",
-            "power plan is Power saver",
-            "battery saver is on",
-        )
-    ) and not (cpu_percent is not None and cpu_percent > 25), "reasons": reasons, "details": details}
+        for reason in ("running on battery", "power plan is Power saver", "battery saver is on")
+    ) and not (cpu_percent is not None and cpu_percent > 25)
+    return {"trustworthy": trustworthy, "reasons": reasons, "details": details}
 
 
 def main(argv=None) -> int:

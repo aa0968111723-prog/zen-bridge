@@ -70,6 +70,21 @@ def test_unknown_values_are_notes_not_failures(monkeypatch):
     assert all("unknown" in reason for reason in result["reasons"])
 
 
+def test_unknown_battery_source_and_empty_power_plan_are_reported():
+    battery = SimpleNamespace(power_plugged=None)
+    result = power_guard.check(
+        battery=battery,
+        power_plan="",
+        battery_saver=False,
+        cpu_percent=0,
+    )
+    assert result["trustworthy"] is True
+    assert result["details"]["on_battery"] is None
+    assert result["details"]["power_plan"] is None
+    assert len(result["reasons"]) == 2
+    assert all("unknown" in reason for reason in result["reasons"])
+
+
 def test_windows_probes_use_powercfg_timeout_and_system_status(monkeypatch):
     calls = {}
 
