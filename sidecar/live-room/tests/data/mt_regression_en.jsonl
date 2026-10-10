@@ -1,0 +1,50 @@
+{"id":"en-001","zh":"今天的社課先從五分鐘坐禪開始。","must_terms":["meditation"],"forbidden":[],"notes":"社課開場；坐禪用 meditation。"}
+{"id":"en-002","zh":"禪修不是比賽，請照自己的步調練習。","must_terms":["meditation"],"forbidden":["competition winner"],"notes":"禪修態度；不要加入競賽勝負。"}
+{"id":"en-003","zh":"數息時，從一數到十再重新開始。","must_terms":["count","breath"],"forbidden":[],"notes":"數息方法；保留計數與呼吸。"}
+{"id":"en-004","zh":"法師今天會帶大家練習覺察呼吸。","must_terms":["breath"],"forbidden":[],"notes":"法師帶領練習；不限制法師的譯名。"}
+{"id":"en-005","zh":"開示結束後，同學可以留下來提問。","must_terms":["question"],"forbidden":[],"notes":"開示後的問答安排。"}
+{"id":"en-006","zh":"請先放鬆肩膀，不必急著調整呼吸。","must_terms":["relax","shoulder","breath"],"forbidden":[],"notes":"身體放鬆指引。"}
+{"id":"en-007","zh":"念頭出現時，知道它來了就好。","must_terms":["thought"],"forbidden":[],"notes":"覺察念頭；不要求消除。"}
+{"id":"en-008","zh":"覺察不是責備自己分心。","must_terms":["awareness"],"forbidden":[],"notes":"覺察的態度；避免自責。"}
+{"id":"en-009","zh":"我們把手機調成靜音，再進入禪堂。","must_terms":["phone","silent"],"forbidden":[],"notes":"禪堂禮儀。"}
+{"id":"en-010","zh":"坐墊太低的話，可以再加一張墊子。","must_terms":["cushion"],"forbidden":[],"notes":"坐墊高度調整。"}
+{"id":"en-011","zh":"膝蓋不舒服的同學可以坐椅子。","must_terms":["knee","chair"],"forbidden":[],"notes":"替代坐姿；保留椅子選項。"}
+{"id":"en-012","zh":"背部保持自然挺直，不要用力僵住。","must_terms":["back"],"forbidden":[],"notes":"姿勢指引。"}
+{"id":"en-013","zh":"眼睛輕輕垂下，視線落在前方。","must_terms":["eye"],"forbidden":[],"notes":"坐禪視線位置。"}
+{"id":"en-014","zh":"聽到鐘聲後，先感覺雙腳再起身。","must_terms":["bell","feet"],"forbidden":[],"notes":"結束坐禪的順序。"}
+{"id":"en-015","zh":"走路禪修時，留意每一步的重心。","must_terms":["walk","step"],"forbidden":[],"notes":"行禪的身體覺察。"}
+{"id":"en-016","zh":"吸氣時知道吸氣，吐氣時知道吐氣。","must_terms":["inhale","exhale"],"forbidden":[],"notes":"吸吐覺察；使用明確動詞。"}
+{"id":"en-017","zh":"呼吸很淺也沒有關係，不需要勉強。","must_terms":["breath"],"forbidden":["hold your breath"],"notes":"自然呼吸；不要改成憋氣指令。"}
+{"id":"en-018","zh":"忘記數到哪裡，就溫柔地回到一。","must_terms":["one"],"forbidden":[],"notes":"數息中斷後的重啟。"}
+{"id":"en-019","zh":"社長會在門口借大家坐墊。","must_terms":["cushion"],"forbidden":[],"notes":"社團器材借用。"}
+{"id":"en-020","zh":"新同學不用有禪修經驗也能參加。","must_terms":["meditation","experience"],"forbidden":[],"notes":"新生參與條件。"}
+{"id":"en-021","zh":"期中考前，我們安排一場短禪修。","must_terms":["meditation"],"forbidden":[],"notes":"校園考試情境。"}
+{"id":"en-022","zh":"下週社課改到學生活動中心二樓。","must_terms":["second floor"],"forbidden":[],"notes":"社課場地異動。"}
+{"id":"en-023","zh":"請把鞋子排好，留下門口的通道。","must_terms":["shoe"],"forbidden":[],"notes":"場地動線。"}
+{"id":"en-024","zh":"法師提醒我們，不要追著念頭跑。","must_terms":["thought"],"forbidden":[],"notes":"念頭與注意力。"}
+{"id":"en-025","zh":"這次開示會談到日常生活中的覺察。","must_terms":["awareness"],"forbidden":[],"notes":"開示主題。"}
+{"id":"en-026","zh":"吃飯前停一下，感謝準備食物的人。","must_terms":["food"],"forbidden":[],"notes":"生活禪修與感謝。"}
+{"id":"en-027","zh":"洗杯子時，也可以練習專注當下。","must_terms":["cup"],"forbidden":[],"notes":"生活中的專注。"}
+{"id":"en-028","zh":"聽同學分享時，先不急著給建議。","must_terms":["listen"],"forbidden":[],"notes":"社課分享的傾聽。"}
+{"id":"en-029","zh":"今天不用分享私人經歷，安靜聆聽也很好。","must_terms":["listen"],"forbidden":["must share"],"notes":"尊重分享意願；不要強迫分享。"}
+{"id":"en-030","zh":"如果覺得焦躁，可以先覺察手掌的感覺。","must_terms":["palm"],"forbidden":[],"notes":"覺察身體感受。"}
+{"id":"en-031","zh":"放鬆不是昏睡，而是少一點緊繃。","must_terms":["relax"],"forbidden":[],"notes":"放鬆與昏睡的區別。"}
+{"id":"en-032","zh":"坐禪時聽到車聲，不必把它趕走。","must_terms":["meditation","sound"],"forbidden":[],"notes":"外界聲音的覺察。"}
+{"id":"en-033","zh":"注意力離開呼吸後，再慢慢回來。","must_terms":["attention","breath"],"forbidden":[],"notes":"注意力回到呼吸。"}
+{"id":"en-034","zh":"今天只練習十分鐘，結束後做簡單伸展。","must_terms":["ten","stretch"],"forbidden":[],"notes":"練習時間與伸展。"}
+{"id":"en-035","zh":"請不要替別人的禪修經驗打分數。","must_terms":["meditation"],"forbidden":[],"notes":"社團互相尊重。"}
+{"id":"en-036","zh":"法師說，提問前可以先整理自己的困惑。","must_terms":["question"],"forbidden":[],"notes":"開示問答準備。"}
+{"id":"en-037","zh":"社課的簽到表放在白板旁邊。","must_terms":["whiteboard"],"forbidden":[],"notes":"社課行政資訊。"}
+{"id":"en-038","zh":"我們不錄下同學的分享，請放心。","must_terms":["record"],"forbidden":["will record"],"notes":"分享不錄音；不得反轉否定。"}
+{"id":"en-039","zh":"離開前，請把坐墊放回架上。","must_terms":["cushion"],"forbidden":[],"notes":"器材歸位。"}
+{"id":"en-040","zh":"今晚的禪修由學長帶領，法師下週才來。","must_terms":["meditation","next week"],"forbidden":[],"notes":"帶領者與到訪時間。"}
+{"id":"en-041","zh":"數息只是幫助專注，不是要控制呼吸。","must_terms":["count","breath"],"forbidden":[],"notes":"數息目的與呼吸。"}
+{"id":"en-042","zh":"發現自己在想作業，也是一種覺察。","must_terms":["awareness","homework"],"forbidden":[],"notes":"校園念頭的覺察。"}
+{"id":"en-043","zh":"我們可以把禪修帶進等公車的片刻。","must_terms":["meditation","bus"],"forbidden":[],"notes":"通勤生活練習。"}
+{"id":"en-044","zh":"請先確認身體舒服，再開始數息。","must_terms":["count","breath"],"forbidden":[],"notes":"數息前的準備。"}
+{"id":"en-045","zh":"今天的開示沒有考試，也沒有標準答案。","must_terms":["exam"],"forbidden":[],"notes":"開示與課業的區別。"}
+{"id":"en-046","zh":"下雨天走進禪堂，記得擦乾地上的水。","must_terms":["water"],"forbidden":[],"notes":"雨天場地照顧。"}
+{"id":"en-047","zh":"覺察到疲倦時，可以告訴帶領的同學。","must_terms":["tired"],"forbidden":[],"notes":"練習中的疲倦回報。"}
+{"id":"en-048","zh":"我們用一次自然呼吸，作為社課的結尾。","must_terms":["breath"],"forbidden":[],"notes":"社課收尾。"}
+{"id":"en-049","zh":"念頭像路過的訪客，不必每個都跟著走。","must_terms":["thought","visitor"],"forbidden":[],"notes":"原創念頭比喻。"}
+{"id":"en-050","zh":"願大家把今天的平靜帶回宿舍。","must_terms":["dorm"],"forbidden":[],"notes":"校園社課祝福。"}
