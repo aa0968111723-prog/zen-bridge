@@ -132,6 +132,8 @@ def test_pipeline_soak(tmp_path, monkeypatch, caplog, target):
     def forbidden(*args, **kwargs):
         raise AssertionError("soak must not use network or subprocesses")
 
+    runner = asyncio.Runner()
+    runner.get_loop()
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
     monkeypatch.setattr(socket, "create_connection", forbidden)
@@ -246,4 +248,5 @@ def test_pipeline_soak(tmp_path, monkeypatch, caplog, target):
         assert not pipe._emit_waiters and pipe._translate_pool is None
         assert not any(record.exc_info or record.levelno >= logging.ERROR for record in caplog.records)
 
-    asyncio.run(simulate())
+    with runner:
+        runner.run(simulate())
