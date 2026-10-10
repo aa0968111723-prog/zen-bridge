@@ -45,12 +45,17 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 #first-run li { margin: 6px 0; }
 #log { white-space: pre-wrap; min-height: 140px; max-height: 280px; overflow: auto; }
 .brand { display: flex; align-items: center; gap: 10px; }
+.brand h1 { margin: 0; }
 .brand img { border-radius: 8px; }
+.qr-pair { display: flex; flex-wrap: wrap; gap: 16px; }
+.qr-pair figure { margin: 0; }
+.qr-pair figcaption { font-weight: 650; }
+.qr-url { word-break: break-all; max-width: 220px; font-size: 13px; }
 </style>
 </head>
 <body>
 <main>
-<h1 class="brand"><img src="/static/brand/logo-128.png" alt="" width="40" height="40">禪譯主持</h1>
+<div class="brand"><img src="/static/brand/logo-128.png" alt="" width="40" height="40"><h1>禪譯主持</h1></div>
 <p class="lead">這台是主持端。同一個 Wi-Fi 的手機掃下面的 QR。沒有金鑰時只出中文。</p>
 <div class="card" id="first-run">
 <p><strong>第一次使用，只要三步</strong></p>
@@ -81,8 +86,10 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 <p id="metrics"></p>
 <p id="extra-links" class="lead">其他畫面：<a id="link-overlay" target="_blank" rel="noopener">OBS 疊加字幕</a>　<a id="link-visual" target="_blank" rel="noopener">示意圖（V2）</a>　<a href="http://127.0.0.1:8791/admin/" target="_blank" rel="noopener">後台</a></p>
 <p class="share-title">聽眾掃這裡</p>
-<img id="qr" alt="聽眾 QR" width="220">
-<p id="url"></p>
+<div class="qr-pair">
+<figure id="qr-name-box" hidden><figcaption>用名稱連線</figcaption><img id="qr-name" alt="聽眾 QR（電腦名稱）" width="200"><p id="url-name" class="qr-url"></p></figure>
+<figure><figcaption>用 IP 連線（名稱連不上時）</figcaption><img id="qr" alt="聽眾 QR（IP）" width="200"><p id="url" class="qr-url"></p></figure>
+</div>
 <label>分享位址 <select id="nic"></select></label>
 </div>
 <div class="card">
@@ -91,6 +98,8 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 <p id="glossary-note" class="warn" role="status"></p>
 <button id="save-terms" class="secondary" type="button">儲存術語</button>
 <button id="export" class="secondary" type="button">匯出 SRT</button>
+<button id="handoff" class="secondary" type="button">用手機下載</button>
+<div id="handoff-box" hidden><img id="handoff-qr" alt="下載交接 QR" width="180"><p id="handoff-note"></p></div>
 <label>跳過序號 <input id="skip-seq" inputmode="numeric" value="1" style="width:5em"></label>
 <button id="skip" class="secondary" type="button">標記缺段</button>
 <button id="delete-seg" class="secondary" type="button">刪除此段</button>
@@ -419,6 +428,9 @@ async function setup() {
       qr.removeAttribute("src");
     }
   }
+  await paintQr(document.querySelector("#qr-name"), data.listen_url_name ? "/api/qr?variant=name&room_id=" + encodeURIComponent(roomEl.value) + "&t=" + Date.now() : "", headers);
+  document.querySelector("#qr-name-box").hidden = !data.listen_url_name;
+  document.querySelector("#url-name").textContent = data.listen_url_name || "";
   const nic = document.querySelector("#nic");
   nic.textContent = "";
   const hosts = data.share_hosts || [];
@@ -818,6 +830,38 @@ document.querySelector("#export").onclick = async () => {
   link.href = URL.createObjectURL(blob);
   link.download = roomEl.value + ".srt";
   link.click();
+};
+// round4 #6: QR images use fetch -> blob -> objectURL and revoke the previous one.
+async function paintQr(img, address, headers) {
+  if (img.dataset.objectUrl) { URL.revokeObjectURL(img.dataset.objectUrl); delete img.dataset.objectUrl; }
+  if (!address) { img.removeAttribute("src"); return false; }
+  const resp = await fetch(address, { headers, cache: "no-store" });
+  if (!resp.ok) { img.removeAttribute("src"); return false; }
+  const objectUrl = URL.createObjectURL(await resp.blob());
+  img.dataset.objectUrl = objectUrl;
+  img.src = objectUrl;
+  return true;
+}
+let handoffTimer = 0;
+document.querySelector("#handoff").onclick = async () => {
+  if (!token) return;
+  const headers = { authorization: "Bearer " + token, "content-type": "application/json" };
+  const resp = await fetch("/api/export-handoff", { method: "POST", headers, body: JSON.stringify({ room_id: roomEl.value || "class", kind: "srt" }) });
+  const data = resp.ok ? await resp.json() : null;
+  const box = document.querySelector("#handoff-box");
+  const note = document.querySelector("#handoff-note");
+  if (!data || !data.url) { box.hidden = false; note.textContent = "目前沒有可給手機的連結（請先選網卡）。"; return; }
+  await paintQr(document.querySelector("#handoff-qr"), "/api/export-handoff/qr?token_id=" + encodeURIComponent(data.token), { authorization: "Bearer " + token });
+  box.hidden = false;
+  const until = Date.now() + data.expires_in * 1000;
+  if (handoffTimer) clearInterval(handoffTimer);
+  const tick = () => {
+    const left = Math.max(0, Math.round((until - Date.now()) / 1000));
+    note.textContent = left ? String(Math.floor(left / 60)) + ":" + String(left % 60).padStart(2, "0") + " 內有效，只能用一次" : "已過期，請再按一次";
+    if (!left) { clearInterval(handoffTimer); paintQr(document.querySelector("#handoff-qr"), "", {}); }
+  };
+  tick();
+  handoffTimer = setInterval(tick, 1000);
 };
 document.querySelector("#nic").onchange = async (ev) => {
   const resp = await fetch("/api/share-host", { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify({ host: ev.target.value, room_id: roomEl.value }) });

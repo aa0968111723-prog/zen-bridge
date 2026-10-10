@@ -8,7 +8,9 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
+from urllib.parse import quote
 from contextlib import asynccontextmanager
 from email.utils import formatdate
 from mimetypes import guess_type
@@ -23,6 +25,7 @@ from app.asr import CliAsr, ResidentAsr
 from app.native_asr import NativeResidentAsr
 from app.audio import AudioError, convert_to_wav, ffmpeg_bin, wav_duration_seconds
 from app.draft_hub import DraftHub
+from app.share import machine_share_name
 from app.hw_routes import make_router as make_hw_router
 from app.overlay_routes import router as overlay_router
 from app.visual_routes import VisualHub, build_visual_router
@@ -954,6 +957,9 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             hosts.append(chosen)
         if settings.share_host:
             hosts.append(settings.share_host)
+        name = machine_share_name()
+        if name:
+            hosts.append(name)          # round4 #6: the 「用名稱連線」 QR
         return tuple(hosts)
 
     def _load_replay_floor(room_id: str) -> float | None:
@@ -1400,6 +1406,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "storage": store.enabled,
             "draft_available": drafts_available,
             "tgt_lang": (book.get(room_id) or {}).get("tgt_lang") or pipeline.targets.default,
+            "listen_url_name": share_by_name(room_id, include_key=host_view),
             "storage_recovered": bool(getattr(store, "recovered", False)),
         }
         if host_view:
@@ -1415,13 +1422,92 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         error = getattr(asr, "last_error", "") or resident_error
         return JSONResponse({"service": "breeze-live-room", "ready": ready, "asr_ready": asr_ready, "error": error, "instance_id": os.getenv("BREEZE_DESKTOP_INSTANCE", "")}, status_code=200 if ready else 503, headers={"Cache-Control": "no-store"})
 
+    def share_by_name(room_id: str, *, include_key: bool = False) -> str | None:
+        name = machine_share_name()
+        if not name:
+            return None
+        key = _listen_key_of(room_id) if include_key else ""
+        url = f"{settings.share_scheme}://{name}:{settings.port}/r/{quote(room_id)}"
+        return url + ("?k=" + quote(key, safe="") if key else "")
+
+    def _qr_png(url: str) -> Response:
+        import qrcode
+        img = qrcode.make(url)
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return Response(buf.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    # round4 #6: download hand-off. Host-only to create; the phone link works once, for 10 min,
+    # for exactly one room + format. Unknown/expired/used -> 404 (never 401: not a guessable door).
+    handoffs: dict[str, tuple[str, str, float]] = {}
+    HANDOFF_TTL_S, HANDOFF_MAX = 600.0, 8
+
+    def _handoff_prune(now: float) -> None:
+        for tok in [t for t, (_, _, exp) in handoffs.items() if exp <= now]:
+            handoffs.pop(tok, None)
+        while len(handoffs) >= HANDOFF_MAX:
+            handoffs.pop(min(handoffs, key=lambda t: handoffs[t][2]))
+
+    @app.post("/api/export-handoff")
+    async def export_handoff(request: Request) -> dict:
+        require_host(request, token, settings)
+        body = await _json(request)
+        room_id = validate_room_id(str(body.get("room_id") or "class"))
+        kind = str(body.get("kind") or "srt")
+        if kind not in {"txt", "json", "srt", "vtt"}:
+            raise HTTPException(status_code=400, detail="不支援的匯出格式")
+        now = time.monotonic()
+        _handoff_prune(now)
+        tok = secrets.token_urlsafe(16)
+        handoffs[tok] = (room_id, kind, now + HANDOFF_TTL_S)
+        base = share_for(room_id)
+        url = None
+        if base:
+            url = base.split("/r/", 1)[0] + "/h/" + tok
+        return {"ok": True, "token": tok, "url": url, "expires_in": int(HANDOFF_TTL_S), "single_use": True}
+
+    @app.get("/api/export-handoff/qr")
+    async def export_handoff_qr(request: Request, token_id: str = "") -> Response:
+        require_host(request, token, settings)
+        entry = handoffs.get(token_id)
+        base = share_for(entry[0]) if entry else None
+        if not entry or not base:
+            raise HTTPException(status_code=404, detail="找不到")
+        return _qr_png(base.split("/r/", 1)[0] + "/h/" + token_id)
+
+    @app.get("/h/{tok}")
+    async def handoff_download(tok: str) -> Response:
+        now = time.monotonic()
+        entry = handoffs.pop(tok, None)            # single use: gone even if the export fails below
+        if not entry or entry[2] <= now:
+            raise HTTPException(status_code=404, detail="找不到")
+        room_id, kind, _ = entry
+        if store.enabled:
+            events = await asyncio.to_thread(store.room_rows, room_id)
+        else:
+            events = bus.caption_state(room_id)
+        try:
+            payload = export_text(events, kind)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="找不到") from exc
+        media = "application/json" if kind == "json" else "text/plain; charset=utf-8"
+        return Response(payload, media_type=media, headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="{room_id}.{kind}"'})
+
     @app.get("/api/qr")
-    async def qr(request: Request, room_id: str = "class") -> Response:
+    async def qr(request: Request, room_id: str = "class", variant: str = "ip") -> Response:
         try:
             room_id = validate_room_id(room_id)
         except RoomIdError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        url = share_for(room_id, include_key=_host_authorized(request))
+        authorized = _host_authorized(request)
+        if variant == "name":
+            url = share_by_name(room_id, include_key=authorized)
+            if not url:
+                return JSONResponse(status_code=409, content={"ok": False, "detail": "這台電腦沒有可用的名稱"})
+            return _qr_png(url)
+        url = share_for(room_id, include_key=authorized)
         if not url:
             return JSONResponse(status_code=409, content={"ok": False, "detail": "尚無可供其他裝置使用的連結"})
         import qrcode
