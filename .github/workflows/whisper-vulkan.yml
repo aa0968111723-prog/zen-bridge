@@ -43,7 +43,7 @@ jobs:
           Copy-Item native-build/bin/Release/*.dll $destination
           if (!(Test-Path "$destination/ggml-vulkan.dll")) { throw 'Vulkan backend missing' }
           Copy-Item native-source/LICENSE "$destination/LICENSE-whisper.txt"
-          Copy-Item native-source/ggml/LICENSE "$destination/LICENSE-ggml.txt"
+          # This pinned whisper tree vendors ggml under its top-level MIT license.
           Push-Location $destination
           try {
             & ./whisper-server.exe --help
