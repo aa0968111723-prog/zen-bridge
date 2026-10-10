@@ -460,7 +460,7 @@ def test_two_workers_start_together_instead_of_waiting_out_each_slice():
             index = len(starts)
             cv.notify_all()
         if index <= 2:
-            slice_two_queued.wait(5)
+            assert slice_two_queued.wait(5), "slice 2 was not queued while the first two were busy"
         return AsrResult(ok=True, text="ok")
 
     report = rtf_check.pace_transcriptions(transcribe, slices, workers=2, pace_s=0.05, sleep=sleep, now=clock.now)
