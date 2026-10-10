@@ -219,3 +219,19 @@ def test_gpu_try_tool_runs_clips_through_the_app_worker(tmp_path, monkeypatch, c
     assert gpu_try.main(["--model", str(_model(tmp_path)), str(wav)]) == 0
     out = capsys.readouterr().out
     assert '"active": "cpu"' in out and '"text": "cpu"' in out
+
+
+
+def test_admin_live_probe_follows_the_live_client_port():
+    """GPU_TRY runs the live room on a test port; the admin 'live' card must probe that port."""
+    import socket
+    from app.admin.server import live_probe_for
+    from app.admin.live_client import LiveRoomClient
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0)); s.listen(1)
+    port = s.getsockname()[1]
+    try:
+        assert live_probe_for(LiveRoomClient(f"http://127.0.0.1:{port}"))() == "up"
+    finally:
+        s.close()
+    assert live_probe_for(LiveRoomClient(f"http://127.0.0.1:{port}"))() != "up"

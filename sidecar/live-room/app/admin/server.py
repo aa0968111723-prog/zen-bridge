@@ -41,6 +41,7 @@ from app.admin import db as zdb
 from app.admin import search as zsearch
 from app.admin import staging as zstaging
 from app.admin.jobs import KINDS, JobStore, JobWorker, backup_handler
+from urllib.parse import urlsplit
 from app.admin.live_client import LiveError, LiveDown, LiveRoomClient
 from app.admin.security import (install_redaction_on_handlers, COOKIE_NAME, RESERVED_PORTS, SAFE_METHODS, LoginCodes, LoopbackOnly, RateLimiter,
                                 SessionStore, allowed_origins, csrf_equal, install_redaction, role_allows,
@@ -133,6 +134,14 @@ def _ollama_probe(timeout: float = 1.0) -> str:
         return "down"
 
 
+def live_probe_for(live) -> "Callable[[], str]":
+    """The "live" card probes the live room the admin actually talks to (ZEN_LIVE_URL / BREEZE_PORT),
+    not a hard-coded 8780, so a live room on a test port no longer shows "down"."""
+    parts = urlsplit(getattr(live, "base", "") or "http://127.0.0.1:8780")
+    host, port = parts.hostname or "127.0.0.1", parts.port or 8780
+    return lambda: _tcp_probe(host, port)
+
+
 DEFAULT_PROBES = {"live": lambda: _tcp_probe("127.0.0.1", 8780), "ollama": _ollama_probe}
 
 
@@ -164,8 +173,9 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
     identity_path = Path(identity_path) if identity_path else None
     if identity_path is not None:
         zdb.migrate_identity(identity_path)
-    probes = DEFAULT_PROBES if probes is None else probes
     live = live_client or LiveRoomClient()
+    if probes is None:
+        probes = {**DEFAULT_PROBES, "live": live_probe_for(live)}
     store = JobStore(db_path, clock=clock)
     sessions = SessionStore(lambda: zdb.connect(db_path), clock=clock)
     codes = LoginCodes(clock=clock)
