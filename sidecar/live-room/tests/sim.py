@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import statistics
 import sys
 import tempfile
 import threading
@@ -786,6 +787,43 @@ def _sample_server_memory() -> tuple[int, int]:
     return traced, rss
 
 
+# Reads per RSS point. One read is allocator noise: a buffer another thread
+# holds for a moment, or an arena page not yet handed back. The median of
+# several reads, each after its own collection, is the resident size that
+# stays. The thresholds the tests apply to it are unchanged.
+RSS_SAMPLES = 5
+# Real seconds between reads. Short: the host is parked, but a slice already
+# in flight would still book the pause as latency.
+RSS_SAMPLE_GAP_S = 0.002
+
+
+def _sample_server_rss() -> int:
+    """One collection with GC enabled, then process RSS only."""
+    was = gc.isenabled()
+    gc.enable()
+    gc.collect()
+    rss = rss_bytes()
+    if not was:
+        gc.disable()
+    return rss
+
+
+async def sample_server_memory(pipe) -> tuple[int, int]:
+    """Server heap once, process RSS as the median of RSS_SAMPLES reads.
+
+    Every read waits for in-flight English first, as sample_after_translations
+    does. Where RSS is not readable (rss_bytes() == 0, e.g. Windows) the first
+    read is returned as is.
+    """
+    traced, first = await sample_after_translations(pipe, _sample_server_memory)
+    reads = [first]
+    if first > 0:
+        for _ in range(RSS_SAMPLES - 1):
+            await asyncio.sleep(RSS_SAMPLE_GAP_S)
+            reads.append(await sample_after_translations(pipe, _sample_server_rss))
+    return traced, int(statistics.median(reads))
+
+
 def _class_plan(zh: str):
     """2s English, except segments 300-330, which take almost the whole 40s budget.
 
@@ -883,7 +921,7 @@ async def _run_100min_async(*, trace: bool) -> SimReport:
             host.hold_new_slices()
             try:
                 if seq in rss_points:
-                    mem_at[seq] = await sample_after_translations(pipe, _sample_server_memory)
+                    mem_at[seq] = await sample_server_memory(pipe)
                 else:
                     await sample_after_translations(pipe, gc.collect)
             finally:
@@ -915,7 +953,7 @@ async def _run_100min_async(*, trace: bool) -> SimReport:
             # Baseline RSS for the latency run, after warmup, before segment 1.
             # The traced run does not sample here: a snapshot walk is the stall.
             if not trace:
-                mem_at[0] = await sample_after_translations(pipe, _sample_server_memory)
+                mem_at[0] = await sample_server_memory(pipe)
             host = VirtualHost(client, token, room, session)
             pending_snaps: list[asyncio.Task] = []
 
@@ -932,7 +970,7 @@ async def _run_100min_async(*, trace: bool) -> SimReport:
             # on a collection and a tracemalloc snapshot; doing that while the last
             # line is still queued trips the translate timeout (40s virtual).
             await _wait_translations(app, translator, SEGMENTS + 1)
-            mem_at[1000] = await sample_after_translations(app.state.pipeline, _sample_server_memory)
+            mem_at[1000] = await sample_server_memory(app.state.pipeline)
             if gc_was_enabled:
                 gc.enable()
             # flush is this branch's async store. Main writes each row before publish returns.

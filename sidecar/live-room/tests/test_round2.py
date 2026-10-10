@@ -21,10 +21,11 @@ from app.translate import Translator, TranslateResult
 
 
 class EchoAsr:
-    def __init__(self, delay_for=None, gate=None):
+    def __init__(self, delay_for=None, gate=None, on_done=None):
         self.calls = 0
         self.delay_for = delay_for or {}
         self.gate = gate
+        self.on_done = on_done
         self.done_at = []
         self.seen = []
 
@@ -37,6 +38,8 @@ class EchoAsr:
             assert self.gate["release"].wait(3)
         time.sleep(self.delay_for.get(text, 0))
         self.done_at.append(time.monotonic())
+        if self.on_done is not None:
+            self.on_done()
         if text == "fail":
             return AsrResult(ok=False, text="partial", error="辨識程序失敗")
         if text == "quiet":
@@ -47,14 +50,25 @@ class EchoAsr:
 
 
 class SlowEnglish(Translator):
-    def __init__(self):
+    """0.35 s of English. With ``release``, English also waits for that event first.
+
+    The wait is bounded (RELEASE_WAIT_S). A pipeline that makes the releasing step
+    wait for English therefore still finishes, with the order the test rejects.
+    """
+
+    RELEASE_WAIT_S = 5.0
+
+    def __init__(self, release: threading.Event | None = None):
         super().__init__(enabled=True, key="test-key")
         self.finished = []
         self.seen = []
+        self.release = release
 
     def translate(self, zh: str, glossary=None, context=None) -> TranslateResult:
         self.calls += 1
         self.seen.append({"zh": zh, "glossary": glossary, "context": context})
+        if self.release is not None:
+            self.release.wait(self.RELEASE_WAIT_S)
         time.sleep(0.35)
         self.finished.append(time.monotonic())
         return TranslateResult("EN " + zh, "ok")
@@ -212,6 +226,13 @@ async def open_room(client, token, room):
     return resp
 
 
+async def _until(predicate, timeout: float = 5.0) -> None:
+    """Yield to the loop until predicate() holds or timeout (real seconds) passes."""
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        await asyncio.sleep(0.001)
+
+
 def versions(messages):
     found = []
     for msg in messages:
@@ -327,6 +348,8 @@ async def test_queue_limit_rejects_before_asr_and_retry_does_not_take_a_second_s
                 headers=auth(token),
             )
             elapsed = time.monotonic() - started
+            # The rejects came back while seq 1 still holds the only slot.
+            assert not first.done() and not gate["release"].is_set()
             assert elapsed < 1.0
             assert [item.status_code for item in extras] == [429, 429, 429, 429]
             assert huge.status_code == 413
@@ -360,7 +383,11 @@ async def test_queue_limit_rejects_before_asr_and_retry_does_not_take_a_second_s
 @pytest.mark.anyio
 async def test_chinese_is_broadcast_before_slow_english_and_the_loop_keeps_moving():
     asr = EchoAsr()
-    translator = SlowEnglish()
+    # English cannot finish until the listener has the Chinese line. A pipeline
+    # that held Chinese for English would wait out RELEASE_WAIT_S and publish
+    # zh_ready after finished[0] (or not inside the 2 s loop at all).
+    english_may_finish = threading.Event()
+    translator = SlowEnglish(release=english_may_finish)
     app = app_for(
         asr=asr,
         translator=translator,
@@ -388,9 +415,11 @@ async def test_chinese_is_broadcast_before_slow_english_and_the_loop_keeps_movin
                         ping = True
                     if msg.get("status") == "zh_ready" and zh_at is None:
                         zh_at = time.monotonic()
+                        english_may_finish.set()
                         assert msg["zh"] == "般若"
                         assert msg["en"] == ""
                         assert app.state.bus.history("class")[0]["zh"] == "般若"
+                english_may_finish.set()
                 result = await task
                 assert zh_at is not None
                 assert ping
@@ -407,8 +436,12 @@ async def test_chinese_is_broadcast_before_slow_english_and_the_loop_keeps_movin
 
 @pytest.mark.anyio
 async def test_next_asr_does_not_wait_for_english():
-    asr = EchoAsr()
-    translator = SlowEnglish()
+    # English cannot finish until both recognitions are done. If the second ASR
+    # waited for the first English, English would wait out RELEASE_WAIT_S and
+    # finish before it: done_at[-1] < finished[0] then fails.
+    both_asr_done = threading.Event()
+    asr = EchoAsr(on_done=lambda: len(asr.done_at) >= 2 and both_asr_done.set())
+    translator = SlowEnglish(release=both_asr_done)
     app = app_for(asr=asr, translator=translator)
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://127.0.0.1:8780") as client:
@@ -482,15 +515,10 @@ async def test_failed_session_does_not_block_a_new_session_and_end_fills_the_hol
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://127.0.0.1:8780") as client:
             token = await token_of(app, client)
             held = asyncio.create_task(push(client, token, "class", "old", 2, "舊會話後段".encode()))
-            # ASR leaves _active in well under 20ms. Spin until the reorder buffer parks seq 2.
-            for _ in range(4000):
-                if ("class", "old", 2) in app.state.pipeline._active or 2 in app.state.pipeline._held.get(("class", "old"), {}):
-                    break
-                await asyncio.sleep(0)
-            for _ in range(4000):
-                if 2 in app.state.pipeline._held.get(("class", "old"), {}):
-                    break
-                await asyncio.sleep(0)
+            # Wait until the reorder buffer parks seq 2. gap_wait_s=30 keeps it
+            # there, so waiting on the state (not a count of loop turns, which a
+            # slow ASR thread start can outlast) does not change what is asserted.
+            await _until(lambda: 2 in app.state.pipeline._held.get(("class", "old"), {}) or held.done())
             assert 2 in app.state.pipeline._held.get(("class", "old"), {})
             fresh = await push(client, token, "class", "new", 1, "新會話".encode())
             assert fresh.status_code == 200
@@ -633,22 +661,39 @@ async def test_anonymous_listeners_cannot_exhaust_rooms_and_ended_rooms_are_recl
 
 @pytest.mark.anyio
 async def test_decoder_work_does_not_block_the_event_loop():
+    # Fake clock. Each loop beat is 0.05 s; the decode is 0.3 s, i.e. six beats.
+    # Off the loop, the decode ends after six beats and every gap is one beat.
+    # On the loop no beat can run, so the decode gives up waiting and is charged
+    # its full 0.3 s: the next gap is >= 0.3 and the 0.2 bound fails, as before.
+    clock = {"t": 0.0}
+    beat_cv = threading.Condition()
+    decoded = threading.Event()
+    ticks = []
+
     def slow(src, work):
-        time.sleep(0.3)
+        with beat_cv:
+            first = len(ticks)
+            beside_loop = beat_cv.wait_for(lambda: len(ticks) >= first + 6, timeout=2)
+            if not beside_loop:
+                clock["t"] += 0.3
+        decoded.set()
         return copy_decoder(src, work)
 
     app = app_for(decoder=slow)
-    ticks = []
 
     async def beat():
-        for _ in range(6):
-            ticks.append(time.monotonic())
+        while len(ticks) < 6 or not decoded.is_set():
+            with beat_cv:
+                ticks.append(clock["t"])
+                beat_cv.notify_all()
             await asyncio.sleep(0.05)
+            clock["t"] += 0.05
 
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://127.0.0.1:8780") as client:
             token = await token_of(app, client)
             beater = asyncio.create_task(beat())
+            await asyncio.sleep(0)  # first beat is on the clock before the upload starts
             resp = await push(client, token, "class", "s", 1, "還聽得見".encode())
             await beater
             assert resp.status_code == 200
