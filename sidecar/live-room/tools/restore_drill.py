@@ -52,7 +52,7 @@ def table_counts(path: Path) -> dict[str, int]:
         out = {}
         for n in names:
             try:
-                out[n] = c.execute(f'SELECT COUNT(*) FROM "{n}"').fetchone()[0]
+                out[n] = c.execute('SELECT COUNT(*) FROM "' + n.replace('"', '""') + '"').fetchone()[0]  # CISO P2-1: quote the name
             except sqlite3.DatabaseError as exc:     # 例如 vec0 未載入 extension
                 out[n] = f"ERROR: {exc}"
         return out
