@@ -286,11 +286,22 @@ def migrate(path: str | Path) -> int:
     """Create or verify zen.sqlite3 at schema v2. Idempotent and atomic. Returns user_version."""
     check_sqlite_version()
     check_db_location(path)
-    conn = connect(path, timeout_ms=30000)
-    try:
-        return migrate_conn(conn)
-    finally:
-        conn.close()
+    for attempt in range(6):
+        conn = connect(path, timeout_ms=30000)
+        try:
+            return migrate_conn(conn)
+        except sqlite3.OperationalError as exc:
+            # Concurrent first start (architect A3): another process can be creating the FTS5 tables while
+            # this connection prepares against them. FTS5's xConnect then fails as "vtable constructor
+            # failed" instead of waiting on busy_timeout. Each step is one BEGIN IMMEDIATE, so a fresh
+            # connection (fresh schema) retries safely and sees the other process's committed steps.
+            if "vtable constructor failed" not in str(exc) or attempt == 5:
+                raise
+            log.warning("migrate: %s; retrying with a fresh connection (%d)", exc, attempt + 1)
+            time.sleep(0.05 * (attempt + 1))
+        finally:
+            conn.close()
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 # ---------------------------------------------------------------- stepwise migrations (round3 C3)
