@@ -1,3 +1,6 @@
+<!-- merged into grok/integrate from impl/dbtest @ 33c9fce (base bea2e5c) -->
+**來源 commit：impl/dbtest `33c9fce`（base `bea2e5c`）**
+
 # dbtest（資料庫實際測試與管理改善專家）— 筆電實測 NOTES
 
 ## 做了什麼
