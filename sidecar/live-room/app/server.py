@@ -40,6 +40,9 @@ from app.share import list_share_hosts, listen_url
 from app.store import CaptionStore
 from app.textutil import export_text, scrub_caption, strict_legacy_rows, utf8_text
 from app.translate import Translator
+from app.translate_config import build_translator
+from app.ledger import ledger_from_env
+from app.tm import tm_from_env
 
 class GlossaryConflict(Exception):
     """The room glossary changed before this write. `version` is the one still stored."""
@@ -825,16 +828,37 @@ class _ReferrerPolicy:
         await self.app(scope, receive, send_policy)
 
 
+def _translate_configured(translator) -> bool:
+    configured = getattr(translator, "configured", None)
+    if isinstance(configured, bool):
+        return configured
+    return bool(translator.key)
+
+
+def _zen_db_path():
+    try:
+        from app.admin.db import default_db_path
+        return default_db_path()
+    except Exception:
+        return None
+
+
 def create_app(settings: Settings | None = None, asr=None, translator: Translator | None = None, decoder=None) -> FastAPI:
     if settings is None:
         fill_process_environ()
         settings = Settings.from_env()
     token = new_host_token()
-    translator = translator or Translator(
-        enabled=settings.translate,
-        key=os.getenv("OPENAI_API_KEY", ""),
-        token_budget=settings.token_budget,
-    )
+    injected_translator = translator is not None
+    # BREEZE_TRANSLATE_ENGINE=local (default: Ollama on loopback) or openai (legacy cloud).
+    # A non-loopback local URL raises here so the misconfiguration is visible at start.
+    translator = translator or build_translator(settings)
+    # zen.sqlite3 ledger (opt-in: ZEN_LEDGER=1). Never on the caption path: submit() only queues.
+    ledger = ledger_from_env()
+    ledger.engine = str(getattr(translator, "engine", "") or "")
+    ledger.model = str(getattr(translator, "model", "") or "")
+    if not injected_translator:
+        # Translation memory (opt-in: BREEZE_TM=1). Reads zen.sqlite3; a missing file = no TM.
+        translator = tm_from_env(translator, ledger.path or _zen_db_path(), ledger=ledger)
     model = Path(settings.model_path) if settings.model_path else DEFAULT_MODEL
     whisper = Path(settings.whisper_path) if settings.whisper_path else DEFAULT_WHISPER
     resident_error = ""
@@ -1049,10 +1073,20 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             _fanout(snap)
             if store.enabled and snap.get("id") and snap.get("type") not in {"captions_cleared", "caption_deleted", "captions_expired"}:
                 store.submit_save(snap)
+            _ledger_submit(snap, event)
             return snap
         except Exception:
             logging.getLogger("breeze.server").exception("caption publish failed")
             return None
+
+    def _ledger_submit(snap: dict, event: dict) -> None:
+        # Ledger-only fields (not in the bus snapshot, never sent to listeners).
+        try:
+            if ledger.enabled:
+                extra = {k: event[k] for k in ("en_origin", "speech_ratio", "ids") if k in event}
+                ledger.submit({**snap, **extra} if extra else snap)
+        except Exception:
+            logging.getLogger("breeze.server").exception("ledger submit failed")
 
     def _release_room(room_id: str) -> None:
         """Idle or close drops runtime, not captions that are still inside the ttl."""
@@ -1193,6 +1227,10 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         if hasattr(asr, "close"):
             asr.close()
         store.close()
+        try:
+            await asyncio.to_thread(ledger.close)
+        except Exception:
+            logging.getLogger("breeze.server").exception("ledger close failed")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -1241,6 +1279,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
     app.state.room_book = book
     app.state.bus = bus
     app.state.translator = translator
+    app.state.ledger = ledger
     app.state.asr = asr
     app.state.store = store
     app.state.share_override = share_override
@@ -1299,7 +1338,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "whisper": whisper.exists(),
             "model": model.exists(),
             "ffmpeg": ffmpeg_bin(ROOT) is not None,
-            "translate_configured": bool(translator.key) and settings.translate,
+            "translate_configured": _translate_configured(translator) and settings.translate,
             "translate_verified": False,
             "translate_label": translator.status_label(),
             "asr_mode": "native" if isinstance(asr, NativeResidentAsr) else ("resident" if isinstance(asr, ResidentAsr) else "cli"),
@@ -1718,6 +1757,8 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "price": translator.price_note(),
             "store_errors": store.errors,
             "storage_recovered": bool(getattr(store, "recovered", False)),
+            **ledger.stats(),
+            **(translator.stats() if callable(getattr(type(translator), "stats", None)) else {}),
         }
 
     @app.get("/api/export")

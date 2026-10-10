@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><title>Zen Bridge 後台</title>
+<link rel="stylesheet" href="/admin/static/app.css"></head>
+<body>
+<header><h1>Zen Bridge 後台（本機）</h1><span id="who"></span> <button id="logout">登出</button></header>
+<main>
+  <section><h2>即時狀態</h2><pre id="live">連線中…</pre></section>
+  <section><h2>健康檢查</h2><pre id="health"></pre></section>
+  <section><h2>場次</h2><table id="sessions"><thead><tr><th>開始</th><th>房間</th><th>狀態</th><th>段數</th></tr></thead><tbody></tbody></table></section>
+  <section><h2>搜尋字幕</h2>
+    <form id="search"><input name="q" maxlength="200" placeholder="中文 1 字以上即可" required>
+      <select name="scope"><option value="transcript">中文</option><option value="translation">英文</option></select>
+      <button>搜尋</button></form>
+    <ol id="hits"></ol></section>
+  <section><h2>待審詞條</h2><table id="proposals"><thead><tr><th>中文</th><th>英文</th><th>次數</th><th></th></tr></thead><tbody></tbody></table></section>
+</main>
+<script src="/admin/static/app.js"></script>
+</body></html>

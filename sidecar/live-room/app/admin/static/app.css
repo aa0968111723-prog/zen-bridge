@@ -1,0 +1,7 @@
+body{font-family:system-ui,"Microsoft JhengHei",sans-serif;margin:0;background:#fafafa;color:#222}
+header{display:flex;gap:1em;align-items:center;padding:.5em 1em;background:#234;color:#fff}
+header h1{font-size:1.1em;margin:0;flex:1}
+main{padding:1em;display:grid;gap:1em;grid-template-columns:repeat(auto-fit,minmax(380px,1fr))}
+section{background:#fff;border:1px solid #ddd;border-radius:6px;padding:.5em 1em}
+table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #eee;padding:.2em;text-align:left}
+pre{white-space:pre-wrap;font-size:.85em}mark{background:#ffe08a}

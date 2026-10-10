@@ -74,6 +74,10 @@ class Segment:
     term_flags: list = field(default_factory=list)
     glossary_version: int = 0
     glossary_snapshot: list = field(default_factory=list)
+    # "" for a model translation; "tm_exact" when translation memory answered. Ledger only.
+    en_origin: str = ""
+    # Silero VAD speech share (0..1) when BREEZE_VAD=silero judged this slice. Ledger only.
+    speech_ratio: float | None = None
 
     @property
     def key(self) -> tuple[str, str, int]:
@@ -109,10 +113,36 @@ class Segment:
         return payload
 
 
+def _translate_thread_init():
+    try:
+        from app.runtime_tuning import translate_thread_initializer
+        return translate_thread_initializer()
+    except Exception:
+        return None
+
+
+def _vad_from_env():
+    try:
+        from app.vad import vad_from_env
+        return vad_from_env()
+    except Exception:
+        logging.getLogger("breeze.pipeline").exception("vad setup failed; using RMS")
+        return None
+
+
 class Pipeline:
     def __init__(self, asr, translator: Translator, prompt: str, tmp: Path, settings: Settings | None = None, on_event=None):
         self.asr = asr
         self.translator = translator
+        # Optional Silero VAD gate (BREEZE_VAD=silero). None keeps the legacy RMS-only path.
+        self.vad = _vad_from_env()
+        # Backpressure (hardware.md §5.3): the oldest waiting line older than stale_s, while
+        # newer lines are queued, is skipped or merged into the next request of its session.
+        from app import runtime_tuning
+        self.translate_stale_s = runtime_tuning.stale_s()
+        self.translate_stale_policy = runtime_tuning.stale_policy()
+        self.translate_merged = 0
+        self._merge_carry: dict[tuple[str, str], tuple[int, str]] = {}
         self.prompt = prompt
         self.tmp = tmp
         self.tmp.mkdir(parents=True, exist_ok=True)
@@ -320,6 +350,8 @@ class Pipeline:
             "translate_stale": self.translate_stale,
             "translate_errors": self.translate_errors,
             "translate_waiter_timeouts": self.translate_waiter_timeouts,
+            "translate_merged": self.translate_merged,
+            "translate_busy": self._translate_busy,
         }
         payload.update(self._rtf.snapshot())
         return payload
@@ -334,7 +366,9 @@ class Pipeline:
         backlog = max(1, int(self.settings.translate_queue))
         self._translate_q = asyncio.Queue(maxsize=backlog)
         # Own pool: translation must not occupy the default executor that decode and ASR share.
-        self._translate_pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="breeze-translate")
+        # Translate threads run below the ASR / event-loop threads (BREEZE_TRANSLATE_PRIORITY).
+        self._translate_pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="breeze-translate",
+                                                  initializer=_translate_thread_init())
         for _ in range(workers):
             self._tasks.append(asyncio.create_task(self._translate_loop()))
         self._tasks.append(asyncio.create_task(self._gap_loop()))
@@ -543,6 +577,7 @@ class Pipeline:
         segment.translate_queued = False
         segment.status = "cancelled"
         segment.translate_status = ""
+        segment.en_origin = ""
         segment.error = "已清除"
         return segment
 
@@ -834,6 +869,10 @@ class Pipeline:
         flags = _copy_flags(segment.term_flags)
         if flags:
             event["term_flags"] = flags
+        if segment.en_origin and segment.en:
+            event["en_origin"] = segment.en_origin
+        if segment.speech_ratio is not None:
+            event["speech_ratio"] = segment.speech_ratio
         self.events.append(dict(event))
         if len(self.events) > self.settings.history_limit * 2:
             del self.events[: len(self.events) - self.settings.history_limit * 2]
@@ -1319,7 +1358,24 @@ class Pipeline:
                 raise AudioError(413, segment.error)
             # First recognition and a retry both come through _process. The scan is
             # the whole file; skip it when the gate is off, and never run it on the loop.
-            if self.settings.silence_rms > 0:
+            # Optional Silero VAD (BREEZE_VAD=silero). None = no opinion, so the legacy
+            # RMS gate below still decides; with the VAD off this block is skipped entirely.
+            vad_res = None
+            gate = self.vad
+            if gate is not None:
+                vad_res = await asyncio.to_thread(gate.check, wav)
+                if vad_res is not None:
+                    segment.speech_ratio = vad_res.speech_ratio
+                if gate.is_silent(vad_res) and (seconds or 0) >= 0.3:
+                    gate.skipped += 1
+                    segment.status = "silent"
+                    segment.error = "這段沒有偵測到語音，沒有送去辨識"
+                    segment.zh = ""
+                    self._rtf.clear_waiting(segment.key)
+                    self._rtf.note_silent_skip((segment.room_id, segment.session_id))
+                    self._release(segment)
+                    return segment
+            if vad_res is None and self.settings.silence_rms > 0:
                 rms = await asyncio.to_thread(wav_rms, wav)
                 if rms is not None and rms < self.settings.silence_rms and (seconds or 0) >= 0.3:
                     segment.status = "silent"
@@ -1606,6 +1662,7 @@ class Pipeline:
             return
         segment.translate_queued = False
         segment.en = ""
+        segment.en_origin = ""
         segment.term_flags = []
         segment.translate_status = translate_status
         segment.error = error
@@ -1717,6 +1774,8 @@ class Pipeline:
         # Only a successful translation may fill `en`. off/no_key stay ready with an empty line.
         # Anything else, including a failure that echoed Chinese, publishes blank English.
         segment.en = (translated.text or "") if translated.status == "ok" else ""
+        origin = str(getattr(translated, "origin", "") or "")
+        segment.en_origin = origin if translated.status == "ok" and origin not in ("", "mt") else ""
         segment.translate_status = translated.status
         segment.error = translated.detail
         segment.status = "ready" if translated.status in _READY_TRANSLATION else "translate_failed"
@@ -1750,10 +1809,22 @@ class Pipeline:
         if segment.key not in self._emitted_segs:
             segment.translate_queued = False
             return
-        if time.monotonic() - enqueued_at > self.settings.translate_timeout_s:
+        waited = time.monotonic() - enqueued_at
+        if waited > self.settings.translate_timeout_s:
             self._fail_translation(segment, "skipped", "英譯排隊太久，中文仍保留")
             return
+        if (self.translate_stale_policy != "off" and self.translate_stale_s > 0 and waited > self.translate_stale_s
+                and self._translate_q is not None and self._translate_q.qsize() > 0):
+            # Newer speech is waiting. English for a line this old is no longer useful live.
+            if self.translate_stale_policy == "merge" and segment.zh:
+                self._merge_carry[(segment.room_id, segment.session_id)] = (segment.seq, segment.zh)
+                self.translate_merged += 1
+                self._fail_translation(segment, "skipped_backlog", "英譯積壓，這句併入下一句一起翻譯")
+            else:
+                self._fail_translation(segment, "skipped_backlog", "英譯積壓超過時限，略過這句，中文仍保留")
+            return
         zh_snapshot = segment.zh
+        mt_text = self._take_merge_carry(segment, zh_snapshot)
         terms = self.terms_for(segment.room_id)
         segment.glossary_snapshot = terms
         segment.glossary_version = self.room_glossary_version(segment.room_id)
@@ -1771,7 +1842,7 @@ class Pipeline:
             cancel = threading.Event()
             kwargs["cancel"] = cancel
         assert self._translate_pool is not None
-        cfut = self._translate_pool.submit(partial(self.translator.translate, zh_snapshot, **kwargs))
+        cfut = self._translate_pool.submit(partial(self.translator.translate, mt_text, **kwargs))
         try:
             translated: TranslateResult = await wait_bounded(asyncio.wrap_future(cfut), timeout=self.settings.translate_timeout_s)
         except asyncio.TimeoutError:
@@ -1814,6 +1885,21 @@ class Pipeline:
                 rows.insert(index, (segment.seq, segment.zh))
                 return
         rows.append((segment.seq, segment.zh))
+
+    def _take_merge_carry(self, segment: Segment, zh: str) -> str:
+        """Prepend a merged stale line (same session, within 2 seqs) to this request only."""
+        group = (segment.room_id, segment.session_id)
+        carry = self._merge_carry.get(group)
+        if not carry:
+            return zh
+        seq, text = carry
+        if seq >= segment.seq:
+            return zh
+        self._merge_carry.pop(group, None)
+        if segment.seq - seq > 2 or not text:
+            return zh
+        joiner = "" if text[-1:] in "，。！？；、,.!?;" else "，"
+        return text + joiner + zh
 
     def _context(self, segment: Segment) -> list[str]:
         rows = self._recent_zh.get((segment.room_id, segment.session_id), ())
