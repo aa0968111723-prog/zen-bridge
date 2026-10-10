@@ -7,6 +7,20 @@ import threading
 
 import pytest
 
+
+@pytest.mark.anyio
+async def test_reopening_a_paused_room_reports_pause_until_explicit_resume():
+    async with serving(asr=TextAsr(0), settings=sim_settings(translate=False)) as (app, client, token):
+        await open_room(client, token, 'class')
+        paused = await client.post('/api/rooms/class/pause', headers=auth(token))
+        assert paused.status_code == 200
+        reopened = await client.post('/api/rooms/open', headers=auth(token), json={'room_id': 'class'})
+        assert reopened.status_code == 200 and reopened.json()['paused'] is True
+        resumed = await client.post('/api/rooms/class/resume', headers=auth(token))
+        assert resumed.status_code == 200
+        reopened = await client.post('/api/rooms/open', headers=auth(token), json={'room_id': 'class'})
+        assert reopened.json()['paused'] is False
+
 from app.pipeline import Pipeline
 from tests.sim import Listener, ScriptedTranslator, TextAsr, export_json, post_segment, serving, sim_settings
 from tests.test_round2 import auth, open_room

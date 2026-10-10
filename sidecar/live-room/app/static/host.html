@@ -225,7 +225,15 @@ async function recoverAuth() {
     const room = (roomEl.value || "class").trim() || "class";
     const headers = { authorization: "Bearer " + token, "content-type": "application/json" };
     const opened = await fetch("/api/rooms/open", { method: "POST", headers, body: JSON.stringify({ room_id: room }) });
-    if (opened.ok) rememberRoom(await opened.json());
+    if (!opened.ok) throw new Error("房間尚未開啟；收音保持關閉。");
+    const openedRoom = await opened.json();
+    rememberRoom(openedRoom);
+    if (openedRoom.paused) {
+      const resumed = await hostFetch("/api/rooms/" + encodeURIComponent(room) + "/resume", { method: "POST" });
+      if (!resumed.ok) throw new Error("房間仍在私密暫停；收音保持關閉。");
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      privatePauseConfirmed = false;
+    }
     listenCaptions(room, true);
   })();
   try {

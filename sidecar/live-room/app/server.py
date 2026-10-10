@@ -1393,6 +1393,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "room": room_id,
             "listen_url": share_for(room_id, include_key=True),
             "listen_key": room.get("listen_key") or "",
+            "paused": pipeline.is_paused(room_id),
         }
 
     @app.post("/api/rooms/touch")
