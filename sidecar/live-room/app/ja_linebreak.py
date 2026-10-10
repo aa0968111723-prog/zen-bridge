@@ -22,14 +22,16 @@ import unicodedata
 
 _NO_LINE_START = frozenset(
     "、。，．・？！ゝゞー」』）】ぁぃぅぇぉっゃゅょゎ"
-    "ァィゥェォッャュョヮヵヶ〃々〻ヽヾ"
-)
+    "ゕゖァィゥェォッャュョヮヵヶ〃々〻ヽヾｧｨｩｪｫｬｭｮｯｰ"
+) | frozenset(chr(codepoint) for codepoint in range(0x31F0, 0x3200))
 _NO_LINE_END = frozenset("「『（【〈《〔〖〘〚")
 _PARTICLES = ("から", "まで", "は", "が", "を", "に", "で", "と", "も", "へ")
-_NUMBER_SEPARATORS = frozenset(".,:：/／-−")
+_NUMBER_SEPARATORS = frozenset(".,:：．，/／-−")
 _NUMBER_UNITS = tuple(
     sorted(
         (
+            "キログラム", "キロメートル", "センチメートル", "ミリメートル",
+            "グラム", "リットル", "分間", "秒間", "週間", "ヶ月", "か月",
             "時間", "キロ", "メートル", "センチ", "ミリ", "ドル",
             "kg", "mg", "km", "cm", "mm", "ml", "L", "％", "%",
             "℃", "°C", "°", "年", "月", "日", "時", "分", "秒",
@@ -98,7 +100,7 @@ def _number_end(text: str, start: int) -> int:
     return index
 
 
-def _tokens(text: str) -> list[str]:
+def _tokens(text: str, max_chars: float) -> list[str]:
     tokens: list[str] = []
     index = 0
     while index < len(text):
@@ -108,7 +110,7 @@ def _tokens(text: str) -> list[str]:
             index = ruby.end()
             continue
         ending = next((item for item in _COMMON_ENDINGS if text.startswith(item, index)), None)
-        if ending:
+        if ending and _width(ending) <= max_chars:
             tokens.append(ending)
             index += len(ending)
             continue
@@ -139,7 +141,7 @@ def _preferred_boundary(text: str, following: str = "") -> bool:
 
 
 def _wrap(text: str, max_chars: float) -> list[str]:
-    tokens = _tokens(text)
+    tokens = _tokens(text, max_chars)
     lines: list[str] = []
     start = 0
     while start < len(tokens):
@@ -194,10 +196,10 @@ def break_ja_ex(
     text: str, max_chars: int = 16, max_lines: int = 2
 ) -> JaLinebreakResult:
     """Break Japanese subtitle text and report whether older lines were trimmed."""
-    if not text:
-        return JaLinebreakResult([], False)
     if max_lines < 0:
         raise ValueError("max_lines must be non-negative")
+    if not text:
+        return JaLinebreakResult([], False)
     lines = _wrap(text, max_chars)
     overflow = len(lines) > max_lines
     return JaLinebreakResult(lines[-max_lines:] if max_lines else [], overflow)

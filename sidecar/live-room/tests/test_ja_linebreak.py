@@ -55,13 +55,47 @@ def test_break_ja_examples(text: str, max_chars: int, expected: list[str]) -> No
 def test_kinsoku_attaches_closing_punctuation_to_previous_line() -> None:
     lines = break_ja("あいう、次", max_chars=4, max_lines=5)
     assert lines == ["あいう、", "次"]
-    assert all(not line.startswith("、。，．・？！ゝゞー」』）】") for line in lines)
+    assert all(line[0] not in "、。，．・？！ゝゞー」』）】" for line in lines)
 
 
 def test_opening_punctuation_stays_with_following_text() -> None:
     lines = break_ja("あいう「えお", max_chars=4, max_lines=5)
     assert lines == ["あいう", "「えお"]
-    assert all(not line.endswith("「『（【") for line in lines)
+    assert all(line[-1] not in "「『（【" for line in lines)
+
+
+def test_small_kana_never_starts_a_line() -> None:
+    small_kana = (
+        "ゕゖ"
+        + "".join(chr(codepoint) for codepoint in range(0x31F0, 0x3200))
+        + "ｧｨｩｪｫｬｭｮｯｰ"
+    )
+    for char in small_kana:
+        lines = break_ja(f"あいう{char}えお", max_chars=3, max_lines=10)
+        assert all(line[0] not in small_kana for line in lines)
+
+
+def test_fullwidth_number_separators_keep_number_together() -> None:
+    assert break_ja("３．１４です", max_chars=2, max_lines=5) == ["３．１４", "です"]
+
+
+@pytest.mark.parametrize(
+    ("text", "max_chars", "expected"),
+    [
+        ("10キログラムです", 6, ["10キログラム", "です"]),
+        ("10キロメートル先", 7, ["10キロメートル", "先"]),
+    ],
+)
+def test_compound_units_stay_with_number(
+    text: str, max_chars: int, expected: list[str]
+) -> None:
+    assert break_ja(text, max_chars=max_chars, max_lines=5) == expected
+
+
+def test_long_common_ending_can_break_at_internal_boundary() -> None:
+    lines = break_ja("ありませんでした", max_chars=4, max_lines=5)
+    assert "".join(lines) == "ありませんでした"
+    assert all(len(line) <= 4 for line in lines)
 
 
 def test_halfwidth_characters_count_as_half() -> None:
@@ -87,6 +121,8 @@ def test_zero_max_lines_returns_no_lines_and_reports_content_overflow() -> None:
 def test_negative_max_lines_is_rejected() -> None:
     with pytest.raises(ValueError):
         break_ja("字幕", max_lines=-1)
+    with pytest.raises(ValueError):
+        break_ja("", max_lines=-1)
 
 
 def test_very_long_input_is_bounded_to_recent_lines() -> None:
