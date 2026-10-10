@@ -506,5 +506,10 @@ def test_static_pages_csp_viewport_no_inline(env):
     assert "cdn" not in js.lower() and "http://" not in js and "https://" not in js
     assert "problemMessage" in js and "backoff" in js and "showRelogin" in js and "aria-label" in js
     assert cl.get("/admin/static/evil.js").status_code == 404
+    # zen-shi logo: the header/favicon files are served (they were 404 before), nothing else under brand/
+    for name in ("favicon.ico", "logo-32.png", "logo-128.png", "logo-256.png"):
+        assert cl.get(f"/admin/static/brand/{name}").status_code == 200, name
+    assert cl.get("/admin/static/brand/../server.py").status_code in (400, 404)
+    assert cl.get("/admin/static/brand/evil.png").status_code == 404
     html = cl.get("/admin").text
     assert 'aria-label="後台頁面"' in html and 'href="#overview"' in html

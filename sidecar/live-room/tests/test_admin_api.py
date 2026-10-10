@@ -419,3 +419,13 @@ def test_static_pages_have_no_inline_script(env):
         html = env["client"].get(p).text
         assert "<script>" not in html and 'src="/admin/static/' in html
     assert env["client"].get("/admin/static/../server.py").status_code in (400, 404)
+
+
+def test_rtf_number_accepts_both_live_shapes():
+    """Screenshot find: the live /api/metrics rtf became RtfMeter's dict; overview 500'd on rtf < 0.5."""
+    from app.admin.info import rtf_color, rtf_number
+    assert rtf_number(0.42) == 0.42 and rtf_color(0.42) == "green"
+    snap = {"session": {"count": 3, "rtf": {"p50": 0.71, "p95": 0.9}}, "asr_rtf_p50": 0.6}
+    assert rtf_number(snap) == 0.71 and rtf_color(snap) == "amber"
+    assert rtf_number({"session": {"count": 0, "rtf": {}}}, {"asr_rtf_p50": 1.2}) == 1.2
+    assert rtf_number({"session": {}}) is None and rtf_color({}) == "unknown" and rtf_number(True) is None

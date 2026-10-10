@@ -125,7 +125,24 @@ def parse_timing_log(path, limit: int = 200) -> list[dict]:
     return out[-limit:]
 
 
+def rtf_number(rtf, metrics: dict | None = None) -> float | None:
+    """The live /api/metrics ``rtf`` is a number (old shape) or RtfMeter.snapshot()'s dict
+    (``rtf.session.rtf.p50``); fall back to the process-wide ``asr_rtf_p50``."""
+    if isinstance(rtf, bool):
+        return None
+    if isinstance(rtf, (int, float)):
+        return float(rtf)
+    if isinstance(rtf, dict):
+        sess = rtf.get("session") if isinstance(rtf.get("session"), dict) else {}
+        block = sess.get("rtf") if isinstance(sess.get("rtf"), dict) else {}
+        for v in (block.get("p50"), rtf.get("asr_rtf_p50"), (metrics or {}).get("asr_rtf_p50")):
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                return float(v)
+    return None
+
+
 def rtf_color(rtf) -> str:
+    rtf = rtf_number(rtf)
     if rtf is None:
         return "unknown"
     return "green" if rtf < 0.5 else ("amber" if rtf < 0.9 else "red")

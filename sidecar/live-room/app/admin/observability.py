@@ -19,7 +19,7 @@ from fastapi import Depends, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
 from app.admin import db as zdb
-from app.admin.info import METRIC_NAMES, hardware, parse_timing_log, redact, rtf_color
+from app.admin.info import METRIC_NAMES, hardware, parse_timing_log, redact, rtf_color, rtf_number
 
 STALE_S = 10.0
 
@@ -211,7 +211,7 @@ def register(app, ctx, *, session_row, export_rows, event_list):
             cfg = redact(ctx.config_fn()) if ctx.config_fn else {}
         except Exception:
             cfg = {}
-        rtf = (m or {}).get("rtf")
+        rtf = rtf_number((m or {}).get("rtf"), m)   # live rtf may be the RtfMeter dict
         return {"components": components(), "live": m, "live_error": err, "live_age_s": age,
                 "stale": age is None or age > STALE_S, "rtf": rtf, "rtf_color": rtf_color(rtf),
                 "config": cfg, "ts": clock()}
@@ -330,7 +330,7 @@ def register(app, ctx, *, session_row, export_rows, event_list):
                         break
                     m, err = await asyncio.to_thread(live_snapshot)
                     age = None if state["last_live_ts"] is None else clock() - state["last_live_ts"]
-                    rtf = (m or {}).get("rtf")
+                    rtf = rtf_number((m or {}).get("rtf"), m)   # live rtf may be the RtfMeter dict
                     payload = {"metrics": m, "live_error": err, "stale": err is not None or age is None or age > STALE_S,
                                "age_s": age, "rtf_color": rtf_color(rtf), "ts": clock()}
                     sent += 1

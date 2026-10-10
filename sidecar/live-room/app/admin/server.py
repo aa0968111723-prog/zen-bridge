@@ -431,6 +431,13 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
     def login_page():
         return page("login.html")
 
+    @app.get("/admin/static/brand/{name}")
+    def brand(name: str):
+        # zen-shi logo (favicon + header); fixed list, nothing else under brand/ is served
+        if name not in {"favicon.ico", "logo-32.png", "logo-128.png", "logo-256.png"}:
+            raise Problem(404, "not_found", "找不到")
+        return page("brand/" + name)
+
     @app.get("/admin/static/{name}")
     def static(name: str):
         if name == 'mermaid.min.js':                 # Codex 2569a06: pinned local Mermaid
