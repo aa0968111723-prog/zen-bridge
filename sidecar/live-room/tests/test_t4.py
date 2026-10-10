@@ -231,7 +231,7 @@ def test_asr_row_may_use_the_app_gpu_path(tmp_path, monkeypatch):
                          "asr": [{"id": "vk", "model": "m.bin", "gpu": "vulkan", "whisper_dir": "%X%/wv"}]},
                         env={"X": str(tmp_path)})
     row = plan["asr"][0]
-    assert row["whisper_dir"] == str(tmp_path / "wv")
+    assert Path(row["whisper_dir"]) == tmp_path / "wv"
     seen = {}
 
     def fake_build(cpu, model, env=None):
