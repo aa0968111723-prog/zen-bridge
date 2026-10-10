@@ -22,7 +22,7 @@ internal sealed class BreezeWindow : Form {
     readonly Label status = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.White, BackColor = Color.FromArgb(16,24,39), Font = new Font("Microsoft JhengHei UI", 16), Text = "正在準備中文辨識\n第一次大約要半分鐘，完成後會自動進入。\n請先不要關閉這個視窗。" };
     readonly WebView2 browser = new WebView2 { Dock = DockStyle.Fill, Visible = false };
     readonly MenuStrip menu = new MenuStrip();
-    Process service;
+    Process service, adminService;
     IntPtr job;
     bool closing, stopped, ready, jobAssigned;
     string url, rememberedError, uiUrl, hostToken;
@@ -47,6 +47,7 @@ internal sealed class BreezeWindow : Form {
         if (File.Exists(icon)) Icon = new Icon(icon);
         menu.Items.Add("檢查更新", null, async delegate { await CheckUpdates(); });
         menu.Items.Add("本機設定", null, delegate { Process.Start("explorer.exe", "\"" + root + "\""); });
+        menu.Items.Add("本機後台", null, delegate { StartAdmin(); });
         menu.Items.Add("怎麼用", null, delegate { MessageBox.Show("1. 在主介面建立或選擇社課。\n2. 選擇麥克風與發言語言，再開始收音。\n3. 聽眾用手機掃描 QR 看保存的譯文。\n\n關閉此視窗會停止字幕。", "怎麼用"); });
         menu.Items.Add("關於", null, delegate { MessageBox.Show("禪譯 Zen Bridge " + File.ReadAllText(Path.Combine(root,"VERSION")).Trim() + "\n本機中文字幕 · 手機掃 QR 可看保存的譯文\n關閉此視窗會停止字幕服務。", "關於"); });
         Controls.Add(browser); Controls.Add(status); Controls.Add(menu);
@@ -201,6 +202,38 @@ internal sealed class BreezeWindow : Form {
             }
             File.AppendAllText(path,line+Environment.NewLine,Encoding.UTF8);
         } } catch { }
+    }
+    void StartAdmin() {
+        if (!ready || closing) return;
+        try {
+            if (adminService != null && !adminService.HasExited) {
+                OpenWeb("http://127.0.0.1:8791/admin"); return;
+            }
+            var info = new ProcessStartInfo(PythonPath(), "-m app.desktop_admin") {
+                WorkingDirectory=root, UseShellExecute=false, CreateNoWindow=true,
+                RedirectStandardOutput=true, RedirectStandardError=true
+            };
+            info.EnvironmentVariables["PYTHONUTF8"]="1";
+            info.EnvironmentVariables["PYTHONNOUSERSITE"]="1";
+            info.EnvironmentVariables["ZEN_ADMIN_HOST"]="127.0.0.1";
+            info.EnvironmentVariables["ZEN_ADMIN_PORT"]="8791";
+            info.EnvironmentVariables["ZEN_ADMIN_OPEN_BROWSER"]="1";
+            info.EnvironmentVariables["ZEN_EMBED"]="0";
+            info.EnvironmentVariables["ZEN_LIVE_URL"]=url;
+            info.EnvironmentVariables.Remove("SSLKEYLOGFILE");
+            info.EnvironmentVariables.Remove("PYTHONPATH");
+            info.EnvironmentVariables.Remove("PYTHONHOME");
+            info.EnvironmentVariables.Remove("VIRTUAL_ENV");
+            adminService=Process.Start(info);
+            if (adminService==null) throw new Exception("本機後台無法啟動。");
+            if (!AssignProcessToJobObject(job,adminService.Handle)) {
+                adminService.Kill(); throw new Exception("本機後台無法納入 App 程序管理。");
+            }
+            // Login codes and CLI credentials must never enter the launcher log.
+            adminService.OutputDataReceived+=(s,e)=>{};
+            adminService.ErrorDataReceived+=(s,e)=>{};
+            adminService.BeginOutputReadLine();adminService.BeginErrorReadLine();
+        } catch (Exception ex) { MessageBox.Show(ex.Message,"本機後台"); }
     }
     async Task StopService() {
         if (service != null) {
