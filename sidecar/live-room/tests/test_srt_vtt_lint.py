@@ -76,6 +76,13 @@ def test_markup_and_comments_do_not_count_as_visible_characters(tmp_path, capsys
     assert report["issues"] == []
 
 
+def test_unterminated_comment_does_not_count_as_visible_characters(tmp_path, capsys):
+    text = "x" * 20 + "<!-- hidden\nstill hidden"
+    code, report = run(tmp_path, capsys, cue(text, end="00:00:01,000"))
+    assert code == 0
+    assert report["issues"] == []
+
+
 @pytest.mark.parametrize("fmt,start", [
     ("srt", "00:00:00.000"), ("srt", "00:00,000"), ("srt", "0:00:00,000"),
     ("srt", "00:60:00,000"), ("srt", "00:00:60,000"), ("srt", "00:00:00,00"),

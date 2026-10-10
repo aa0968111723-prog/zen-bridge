@@ -23,6 +23,7 @@ from html.parser import HTMLParser
 
 
 TRADITIONAL = set("這們說會來與對讓嗎呢吧")
+HTML_COMMENT = re.compile(r"<!--.*?(?:-->|--!>|\Z)", re.DOTALL)
 STAMP = {
     "srt": r"[0-9]{2,}:[0-9]{2}:[0-9]{2},[0-9]{3}",
     "vtt": r"(?:[0-9]{2,}:)?[0-9]{2}:[0-9]{2}\.[0-9]{3}",
@@ -158,7 +159,10 @@ def lint(text: str, fmt: str, lang: str, *, max_cps: float | None = None,
 
     previous = None
     for index, timestamp, start, end, body in cues:
-        visible = [visible_text(line) for line in body]
+        payload = HTML_COMMENT.sub(
+            lambda match: "\n" * match.group().count("\n"), "\n".join(body)
+        )
+        visible = [visible_text(line) for line in payload.split("\n")]
         if not any(line.strip() for line in visible):
             issue(index, timestamp, "empty_text", "Cue text is empty.")
         if len(body) > 2:
