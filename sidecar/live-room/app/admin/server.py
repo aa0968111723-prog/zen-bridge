@@ -39,6 +39,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app import feedback
 from app.admin import db as zdb
 from app.admin import search as zsearch
+from app.admin import staging as zstaging
 from app.admin.jobs import KINDS, JobStore, JobWorker, backup_handler
 from app.admin.live_client import LiveError, LiveDown, LiveRoomClient
 from app.admin.security import (install_redaction_on_handlers, COOKIE_NAME, RESERVED_PORTS, SAFE_METHODS, LoginCodes, LoopbackOnly, RateLimiter,
@@ -153,11 +154,13 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
                      sse_max_events: int | None = None, backup_scan_s: float = 0.0,
                      backup_every_s: float = 86400.0, retention_every_s: float = 86400.0,
                      clock=time.time, asr_log_path=None, export_dir=None, metrics_sample_s: float = 0.0,
-                     config_fn=None, llama_probe=None) -> FastAPI:
+                     config_fn=None, llama_probe=None, staging_self_approve: bool | None = None) -> FastAPI:
     if port in RESERVED_PORTS:
         raise ValueError("8645 保留給 Hermes")
     db_path = Path(db_path)
     zdb.migrate(db_path)
+    # Admin self-approve switch (staging): default OFF; ZEN_ADMIN_SELF_APPROVE=1 or the argument turns it on.
+    self_approve = zstaging.self_approve_from_env() if staging_self_approve is None else bool(staging_self_approve)
     identity_path = Path(identity_path) if identity_path else None
     if identity_path is not None:
         zdb.migrate_identity(identity_path)
@@ -250,6 +253,7 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
     app = FastAPI(title="zen-admin", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.store, app.state.worker, app.state.codes, app.state.live = store, worker, codes, live
     app.state.db_path = db_path
+    app.state.staging_self_approve = self_approve
     app.state.run_retention = run_retention
     app.state.bg_tasks = []
 
@@ -426,6 +430,13 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
     @app.get("/admin/login")
     def login_page():
         return page("login.html")
+
+    @app.get("/admin/static/brand/{name}")
+    def brand(name: str):
+        # zen-shi logo (favicon + header); fixed list, nothing else under brand/ is served
+        if name not in {"favicon.ico", "logo-32.png", "logo-128.png", "logo-256.png"}:
+            raise Problem(404, "not_found", "找不到")
+        return page("brand/" + name)
 
     @app.get("/admin/static/{name}")
     def static(name: str):
@@ -681,9 +692,16 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
                     return replay
                 rec = feedback.record_correction(c, segment_id=seg, target_type=ttype, text=str(body.get("text") or ""),
                                                  reason=body.get("reason"), author_id=user.get("user_id"))
-                applied = feedback.promote_correction(
-                    c, rec["correction_id"], to_tm=bool(body.get("promote_tm", True)) and ttype == "translation",
-                    propose=propose, reviewed=role_allows(user.get("role", ""), "admin"))
+                # round3 §5-1: TM / glossary only get pending staging items; an admin approves them
+                # in /staging (app/admin/staging.py). Nothing is written to tm_units / glossary_terms here,
+                # except an admin's own fix when ZEN_ADMIN_SELF_APPROVE=1 (audited approval, same checks).
+                staged = zstaging.stage_from_correction(
+                    c, rec["correction_id"], actor=user,
+                    to_tm=bool(body.get("promote_tm", True)) and ttype == "translation", propose=propose,
+                    self_approve=self_approve)
+                applied = {"status": "applied", "tm_id": None, "term_id": None, **staged,
+                           "tm_pending": staged["tm_staging_id"] is not None
+                                         and not staged.get("auto_approved", {}).get("tm", {}).get("ok")}
                 c.execute("INSERT INTO events(segment_id, room_id, kind, payload) VALUES (?,?,?,?)",
                           (seg, rec["room_id"], "admin.correction",
                            json.dumps({"correction_id": rec["correction_id"], "target_type": ttype})))
@@ -922,6 +940,11 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
 
     # -------------------------------------------------------------- 後台資訊管理系統 (app/admin/info.py)
     from types import SimpleNamespace
+    # round3 §5-1 staging approval router: /admin/api/v1/staging
+    zstaging.register(app, SimpleNamespace(
+        api=API, need=need, conn=conn, read_json=read_json, Problem=Problem, enc_cursor=enc_cursor,
+        dec_cursor=dec_cursor, check_room_id=_check_room_id, idem_key=idem_key, idem_replay=idem_replay,
+        idem_store=idem_store))
     from app.admin import info as zinfo
     try:
         from app.asr_tuning import default_log_path
@@ -937,8 +960,12 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
         sse_interval_s=sse_interval_s, sse_max_events=sse_max_events, started_at=started_at,
         asr_log_path=_asr_log, config_fn=config_fn, check_room_id=_check_room_id,
         export_dir_fn=(lambda: Path(export_dir)) if export_dir else (lambda: zdb.data_dir() / "exports"),
-        metrics_sample_s=metrics_sample_s,
+        metrics_sample_s=metrics_sample_s, staging_self_approve=self_approve,
         llama_probe=llama_probe or (lambda: _tcp_probe("127.0.0.1", 8080))))
+
+    # uiux-a: live performance page /admin/perf (real /api/metrics A2-A6 p50/p95 + RTF)
+    from app.admin import perf_routes
+    perf_routes.register(app, SimpleNamespace(api=API, need=need, live=live, Problem=Problem, clock=clock))
 
     # LoopbackOnly is the outermost layer (added last).
     app.add_middleware(LoopbackOnly, port=port)

@@ -105,7 +105,7 @@ class TranslationMemory:
         query = "src_text : (" + " OR ".join(f'"{g}"' for g in grams) + ")"
         rows = self._rows(
             "SELECT u.id, u.src_text, u.tgt_text FROM tm_fts f JOIN tm_units u ON u.id = f.rowid "
-            "WHERE tm_fts MATCH ? AND u.tgt_lang = ? ORDER BY bm25(tm_fts) LIMIT 30",
+            "WHERE tm_fts MATCH ? AND u.tgt_lang = ? AND u.quality >= 3 ORDER BY bm25(tm_fts) LIMIT 30",  # disabled (<3) never an example
             (query, tgt),
         )
         hits = [TmHit(r[0], r[1], r[2], difflib.SequenceMatcher(None, n, norm(r[1])).ratio()) for r in rows]
