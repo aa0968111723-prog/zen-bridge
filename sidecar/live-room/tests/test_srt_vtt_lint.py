@@ -207,7 +207,7 @@ def test_line_count_and_empty_text(tmp_path, capsys, text, expected):
     assert codes(report) == expected
 
 
-@pytest.mark.parametrize("character", list("這們說會個來時為與對還讓嗎呢吧") + ["ㄅ", "ㆠ"])
+@pytest.mark.parametrize("character", list("這們說會來與對讓嗎呢吧") + ["ㄅ", "ㆠ"])
 def test_japanese_untranslated_warning(tmp_path, capsys, character):
     code, report = run(tmp_path, capsys, cue(character), lang="ja")
     assert code == 0
@@ -221,6 +221,14 @@ def test_english_does_not_warn_and_japanese_kanji_are_allowed(tmp_path, capsys):
         code, report = run(tmp_path, capsys, cue(text), lang=lang)
         assert code == 0
         assert report["issues"] == []
+
+
+@pytest.mark.parametrize("text", ["会議の時間です", "個人情報", "行為を還元する"])
+def test_standard_japanese_kanji_do_not_warn(tmp_path, capsys, text):
+    code, report = run(tmp_path, capsys, cue(text), lang="ja")
+    assert code == 0
+    assert report["warnings"] == 0
+    assert report["issues"] == []
 
 
 @pytest.mark.parametrize("lang", ["en", "ja"])

@@ -22,7 +22,7 @@ from pathlib import Path
 from html.parser import HTMLParser
 
 
-TRADITIONAL = set("這們說會個來時為與對還讓嗎呢吧")
+TRADITIONAL = set("這們說會來與對讓嗎呢吧")
 STAMP = {
     "srt": r"[0-9]{2,}:[0-9]{2}:[0-9]{2},[0-9]{3}",
     "vtt": r"(?:[0-9]{2,}:)?[0-9]{2}:[0-9]{2}\.[0-9]{3}",
