@@ -1,4 +1,6 @@
 """round4 #7 + testlead P0: a ja session's slices reach the MT backend with tgt_lang='ja'."""
+import asyncio
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -131,5 +133,27 @@ async def test_ja_room_glossary_reading_becomes_ruby_on_the_caption():
             assert got["terms"][0]["reading"] == "はんにゃ"
             body = (await push(client, token, "jp", "s1", 1, "今天講般若".encode())).json()
             assert body["ruby"] == [{"text": "般若", "reading": "はんにゃ"}]
+            # screenshot find: the audience socket whitelist dropped tgt_lang/segments/ruby, so a
+            # listener painted ja as lang=en with no ruby. The listener view must carry them.
+            for _ in range(50):
+                seg = app.state.pipeline.get("jp", "s1", 1)
+                if seg and seg.en:
+                    break
+                await asyncio.sleep(0.02)
+            async with Socket(app, "/ws/listen?room_id=jp") as sock:
+                hello = await sock.recv()
+            row = [r for r in hello["history"] if r.get("en")][-1]
+            assert row["tgt_lang"] == "ja" and "".join(row["segments"]) == row["en"]
+            assert row["ruby"] == [{"text": "般若", "reading": "はんにゃ"}]
+            assert "zh_raw" not in row and "term_flags" not in row
     finally:
         await stop(app)
+
+
+def test_listener_view_shapes_ja_fields():
+    from app.dispatch import for_listener
+    base = {"type": "caption", "id": "r:s:1", "zh": "x", "en": "今日は", "tgt_lang": "ja"}
+    ok = for_listener({**base, "segments": ["今日は"], "ruby": [{"text": "今日", "reading": "きょう", "x": 1}]})
+    assert ok["segments"] == ["今日は"] and ok["ruby"] == [{"text": "今日", "reading": "きょう"}]
+    bad = for_listener({**base, "tgt_lang": "<img>", "segments": [1, {}], "ruby": "<b>x</b>"})
+    assert "tgt_lang" not in bad and "segments" not in bad and "ruby" not in bad

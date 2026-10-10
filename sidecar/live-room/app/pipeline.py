@@ -1083,6 +1083,13 @@ class Pipeline:
             event["en_merged_from"] = list(segment.en_merged_from)
         if segment.speech_ratio is not None:
             event["speech_ratio"] = segment.speech_ratio
+        if segment.tgt_lang != "en":
+            # round4 #7: the caption event (bus, listeners, store) carries the ja view too, not just
+            # the push response: tgt_lang, <wbr> segments and first-occurrence ruby.
+            pub = segment.public()
+            for key in ("tgt_lang", "segments", "ruby"):
+                if key in pub:
+                    event[key] = pub[key]
         self.events.append(dict(event))
         if len(self.events) > self.settings.history_limit * 2:
             del self.events[: len(self.events) - self.settings.history_limit * 2]
