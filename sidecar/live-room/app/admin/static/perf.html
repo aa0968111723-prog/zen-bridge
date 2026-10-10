@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>即時效能｜Zen Bridge 後台</title>
+<link rel="icon" href="/admin/static/brand/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/admin/static/brand/logo-32.png">
+<link rel="apple-touch-icon" href="/admin/static/brand/logo-256.png">
+<link rel="stylesheet" href="/admin/perf/static/perf.css"></head>
+<body>
+<a class="skip" href="#main">跳到主要內容</a>
+<header class="top"><h1>即時效能</h1><a class="back" href="/admin">回後台總覽</a></header>
+<div id="sr-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+<main id="main" tabindex="-1">
+  <div id="panel" class="panel" data-phase="loading">
+    <p id="conn" class="conn">載入中…</p>
+    <div id="alert" class="alert" hidden>
+      <p id="alert-text"></p>
+      <p class="alert-actions"><button id="retry" type="button">立即重試</button>
+        <a id="login-link" href="/admin/login" hidden>前往登入</a></p>
+    </div>
+    <section class="block" aria-labelledby="rtf-h">
+      <h2 id="rtf-h">辨識速度（RTF）</h2>
+      <div id="cards" class="cards"></div>
+    </section>
+    <section class="block" aria-labelledby="stages-h">
+      <h2 id="stages-h">各段延遲（A2–A6，p50／p95）</h2>
+      <ul class="legend" aria-label="圖例">
+        <li><span class="sw sw-p50" aria-hidden="true"></span>實心：一般（p50）</li>
+        <li><span class="sw sw-p95" aria-hidden="true"></span>斜線延伸：最慢（p95）</li>
+        <li><span class="sw sw-target" aria-hidden="true"></span>虛線：目標上限</li>
+      </ul>
+      <div id="chart" class="chart" aria-hidden="true"></div>
+      <p id="chart-empty" class="empty" hidden>開始聽之後才有數字</p>
+      <details id="table-wrap" class="table-wrap">
+        <summary>以表格查看數字</summary>
+        <table id="stage-table">
+          <caption>各段延遲（毫秒換算為秒），顏色等級以 p95 判斷</caption>
+          <thead><tr><th scope="col">段</th><th scope="col">說明</th><th scope="col">一般（p50）</th>
+            <th scope="col">最慢（p95）</th><th scope="col">目標上限</th><th scope="col">樣本數</th><th scope="col">狀態</th></tr></thead>
+          <tbody id="stage-tbody"></tbody>
+        </table>
+      </details>
+    </section>
+    <p class="foot">段落定義與目標：round4 §3.2。RTF 門檻與主持頁相同（p95 低於 0.7 跟得上、0.7–0.9 接近上限、0.9 以上跟不上）。
+      紅色門檻中標「暫定」者需在主持機（5600H）實測後調整。</p>
+  </div>
+</main>
+<script type="module" src="/admin/perf/static/perf.js"></script>
+</body></html>

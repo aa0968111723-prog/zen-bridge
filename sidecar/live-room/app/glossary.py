@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from bisect import bisect_right
 
 from app.textutil import strict_legacy_rows
 
@@ -404,6 +405,7 @@ def _apply(text: str, glossary, tables=None) -> tuple[str, list[dict]]:
     # when the output still contains that canonical, so 戊甲乙 becomes 戊丙丁 and
     # the next pass cannot turn the new 丙丁 into 庚辛.
     protected = _exact_canon_spans(text, folded, canon)
+    protected_ends = [right for _left, right in protected]
     longest = 1
     for key in canon:
         longest = max(longest, len(key))
@@ -429,7 +431,7 @@ def _apply(text: str, glossary, tables=None) -> tuple[str, list[dict]]:
                 replacement = alias[key]
             else:
                 continue
-            if not _keeps_canons(text, index, index + size, replacement, protected):
+            if not _keeps_canons(text, index, index + size, replacement, protected, protected_ends):
                 continue
             chosen = (size, replacement)
             break
@@ -467,7 +469,7 @@ def _exact_canon_spans(text: str, folded: str, canon: dict[str, str]) -> list[tu
     return spans
 
 
-def _keeps_canons(text: str, start: int, end: int, replacement: str, spans: list[tuple[int, int]]) -> bool:
+def _keeps_canons(text: str, start: int, end: int, replacement: str, spans: list[tuple[int, int]], ends=None) -> bool:
     """True when every protected canonical this edit touches still occurs afterwards.
 
     A piece that does not overlap the edit stays in the prefix or the suffix, so it
@@ -475,7 +477,13 @@ def _keeps_canons(text: str, start: int, end: int, replacement: str, spans: list
     edit or across the short junction around the replacement. This matches searching
     the whole rewritten line without copying that line on every candidate.
     """
-    for left, right in spans:
+    # Spans come from a forward, non-overlapping scan. Search only the ones
+    # touching this edit instead of rescanning every canonical for each word.
+    first = bisect_right(ends, start) if ends is not None else 0
+    for position in range(first, len(spans)):
+        left, right = spans[position]
+        if left >= end:
+            break
         if start >= right or end <= left:
             continue
         piece = text[left:right]

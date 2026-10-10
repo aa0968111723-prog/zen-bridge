@@ -46,10 +46,17 @@ async def test_push_returns_before_slow_translation():
     settings = sim_settings(translate_timeout_s=60 * SCALE)
     async with serving(settings=settings, asr=TextAsr(1.5), translator=translator) as (app, client, token):
         await open_room(client, token, "class")
+        # Warm-up push in another room, like run_100min's warm-up room. The first request to each
+        # FastAPI endpoint reads its source (fastapi.routing._extract_endpoint_context: tokenize of
+        # the whole push handler) and spins up worker threads: a one-time cold cost of 5-10 ms real,
+        # i.e. 0.5-1 virtual s at scale 0.01, which is what pushed B-b1 over 2.5 v-s on clean base.
+        await open_room(client, token, "warm")
+        await post_segment(client, token, "warm", "w", 1, "暖身".encode(), 0, 6000)
         async with Listener(app, "class") as listener:
-            started = __import__("time").monotonic()
+            # perf_counter: Windows monotonic steps by ~15.6 ms, which alone pushed 3.0 to 3.1 v-s on the laptop.
+            started = __import__("time").perf_counter()
             resp = await post_segment(client, token, "class", "s", 1, "第1句".encode(), 0, 6000)
-            elapsed_v = (__import__("time").monotonic() - started) / SCALE
+            elapsed_v = (__import__("time").perf_counter() - started) / SCALE
             assert resp.status_code == 200, resp.text
             assert resp.json()["zh"] == "第1句"
             assert elapsed_v <= vlimit(2.5)
