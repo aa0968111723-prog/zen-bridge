@@ -38,7 +38,9 @@ def prepare(output, assets, sdk=None):
             shutil.copyfileobj(incoming, outgoing)
     if hashlib.sha256(archive.read_bytes()).hexdigest() != asset['sha256']:
         raise RuntimeError('Python checksum mismatch')
-    python_root = output / '.python' / asset['version']
+    python_directory = asset.get('directory',asset['version'])
+    python_root = output / '.python' / python_directory
+    (output/'desktop/offline-runtime.json').write_text(json.dumps({'python_directory':python_directory}),encoding='ascii')
     python = python_root / 'tools/python.exe'
     if not python.exists():
         with zipfile.ZipFile(archive) as zipped:

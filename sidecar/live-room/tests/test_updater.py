@@ -90,7 +90,8 @@ def test_failed_update_restores_source_environment_and_user_data(tmp_path, monke
     (root / '.venv').mkdir()
     (root / '.venv/old').write_text('old-environment')
     (root / '.env').write_text('keep-settings')
-    base_python = root / '.python/3.12.10/tools/python.exe'
+    asset = json.loads((root/'bootstrap-manifest.json').read_text())['python']
+    base_python = root / '.python' / asset.get('directory',asset['version']) / 'tools/python.exe'
     base_python.parent.mkdir(parents=True)
     base_python.touch()
     (stage / 'VERSION').write_text('9.9.9')
