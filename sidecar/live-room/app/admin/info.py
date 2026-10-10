@@ -382,13 +382,15 @@ def register(app, ctx) -> int:
             rec = feedback.record_correction(c, segment_id=seg, target_type="transcript" if target == "zh" else "translation",
                                              text=str(body.get("text") or ""), reason=body.get("reason"),
                                              tgt_lang="en" if target == "zh" else target, author_id=user.get("user_id"))
-            is_admin = user.get("role") in ("admin", "owner")
-            applied = feedback.promote_correction(c, rec["correction_id"], to_tm=target == "en" and body.get("to_tm", True) is not False,
-                                                  reviewed=is_admin)
+            # round3 §5-1: the fix goes to staging (app/admin/staging.py); an admin approves it into TM.
+            from app.admin import staging as zstaging
+            staged = zstaging.stage_from_correction(c, rec["correction_id"], actor=user,
+                                                    to_tm=target != "zh" and body.get("to_tm", True) is not False)
+            applied = {"status": "applied", "tm_id": None, "term_id": None, **staged}
             audit(c, user, "segment.edit", session_id=info["session_id"], segment_id=seg, target=target,
                   version=rec["version"], correction_id=rec["correction_id"])
         return JSONResponse({"version": rec["version"], "correction_id": rec["correction_id"], **applied,
-                             "tm_pending": applied.get("tm_id") is not None and not is_admin},
+                             "tm_pending": staged["tm_staging_id"] is not None},
                             headers={"ETag": f'"v{rec["version"]}"'})
 
     @app.post(f"{API}/segments/{{seg}}/undo")
@@ -436,7 +438,13 @@ def register(app, ctx) -> int:
         with conn() as c:
             tm = [dict(r) for r in c.execute("SELECT id, src_text, tgt_text, tgt_lang, segment_id, created_at FROM tm_units "
                                              "WHERE quality=2 ORDER BY id LIMIT 200")]
-        return {"tm_pending": tm}
+            # round3 §5-1: new corrections wait in staging_items (GET /staging); legacy quality-2 units stay above.
+            staged = [dict(r) for r in c.execute("SELECT id, kind, tgt_lang, src_text, tgt_text, segment_id, created_at, rev "
+                                                 "FROM staging_items WHERE state='pending' ORDER BY created_at, id LIMIT 200")]
+        for r in staged:
+            r["etag"] = f'"s{r["id"]}-r{r.pop("rev")}"'
+        # tm_pending ids are tm_units ids (POST /tm/{id}/approve); staging ids are a different space.
+        return {"tm_pending": tm, "staging_pending": staged}
 
     # ============================================================ glossary (en / ja)
     def glossary_for(c, lang: str) -> int:

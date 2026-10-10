@@ -213,6 +213,14 @@ pages.review = async () => {
       span.append(btn("核准", async () => { await api(`/tm/${u.id}/approve`, {method: "POST"}); render(); }, `核准 ${u.src_text}`),
         btn("駁回", async () => { await api(`/tm/${u.id}/reject`, {method: "POST"}); render(); }, `駁回 ${u.src_text}`));
     });
+    // round3 §5-1: corrections wait in staging; only an admin's approval writes TM / glossary.
+    const st = q.staging_pending || [];
+    section("待審修正（staging）").append(table(["類型", "中文", "提議", ""], st.map(u => [u.kind === "term" ? "詞彙" : "翻譯記憶", u.src_text, u.tgt_text, can("admin") ? el("span") : "等待管理員"]), "待審修正"));
+    if (can("admin")) [...$("#page").querySelectorAll("table[aria-label=待審修正] tbody tr")].forEach((tr, i) => {
+      const u = st[i]; const span = tr.cells[3].firstChild;
+      span.append(btn("核准", async () => { await api(`/staging/${u.id}/approve`, {method: "POST", headers: {"If-Match": u.etag}, json: {}}); render(); }, `核准 ${u.src_text}`),
+        btn("退回", async () => { const reason = prompt("退回原因"); if (!reason) return; await api(`/staging/${u.id}/reject`, {method: "POST", headers: {"If-Match": u.etag}, json: {reason}}); render(); }, `退回 ${u.src_text}`));
+    });
   }
 };
 

@@ -28,7 +28,7 @@ log = logging.getLogger("zen.admin.db")
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 IDENTITY_SCHEMA_PATH = Path(__file__).with_name("identity_schema.sql")
 BASELINE_VERSION = 2          # schema.sql creates v2; never edit it (DBA D6) - add a migration
-SCHEMA_VERSION = 3            # round3 C3: = highest migrations/NNNN_*.sql
+SCHEMA_VERSION = 10           # round3 C3: = highest migrations/NNNN_*.sql (0004–0009 reserved; backend staging = 0010)
 MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 IDENTITY_VERSION = 1
 MIN_SQLITE = (3, 42, 0)   # unixepoch('subsec'); FTS5 rank=1 integrity-check verified on 3.46
@@ -298,16 +298,21 @@ _STEP_RE = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
 
 
 def migration_steps(directory: Path | None = None) -> list[tuple[int, str, Path]]:
-    """[(version, name, path)] for migrations/NNNN_name.sql, NNNN > baseline, contiguous."""
+    """[(version, name, path)] for migrations/NNNN_name.sql, NNNN > baseline, ascending.
+
+    The first step must be baseline+1. Later numbers may skip reserved ranges (zen-impl BRIEF:
+    each agent numbers from its own block, e.g. backend staging = 0010), but a number may appear
+    only once. run_migrations refuses a step numbered below the DB's version that was never applied,
+    so a late-merged lower number can never be skipped silently."""
     d = Path(directory or MIGRATIONS_DIR)
     steps = []
     for p in sorted(d.glob("*.sql")) if d.is_dir() else []:
         m = _STEP_RE.match(p.name)
         if m and int(m.group(1)) > BASELINE_VERSION:
             steps.append((int(m.group(1)), m.group(2), p))
-    want = list(range(BASELINE_VERSION + 1, BASELINE_VERSION + 1 + len(steps)))
-    if [v for v, _, _ in steps] != want:
-        raise SchemaError(f"遷移檔編號不連續：{[p.name for _, _, p in steps]}")
+    nums = [v for v, _, _ in steps]
+    if len(set(nums)) != len(nums) or (nums and nums[0] != BASELINE_VERSION + 1):
+        raise SchemaError(f"遷移檔編號重複或不是從 v{BASELINE_VERSION + 1} 開始：{[p.name for _, _, p in steps]}")
     return steps
 
 
@@ -346,6 +351,11 @@ def run_migrations(conn: sqlite3.Connection, *, target: int | None = None, direc
         raise SchemaError(f"資料庫 schema v{version} 比程式 v{target} 新，請更新程式；"
                           f"或用更新前的快照 pre-migrate-v{target}.sqlite3 還原（python -m app.admin.restore）")
     _verify_steps(conn, steps)
+    applied = {r[0] for r in conn.execute("SELECT version FROM schema_migrations WHERE version > ?", (BASELINE_VERSION,))}
+    late = [p.name for v, _, p in steps if v <= version and v not in applied]
+    if late:
+        raise SchemaError(f"遷移檔 {late} 的編號低於資料庫目前的 v{version} 卻從未套用；"
+                          f"不要插入比已發布版本更小的編號，請改成下一個未使用的號碼")
     todo = [st for st in steps if version < st[0] <= target]
     if not todo:
         return version

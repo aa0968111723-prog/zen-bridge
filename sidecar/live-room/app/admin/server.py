@@ -39,6 +39,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app import feedback
 from app.admin import db as zdb
 from app.admin import search as zsearch
+from app.admin import staging as zstaging
 from app.admin.jobs import KINDS, JobStore, JobWorker, backup_handler
 from app.admin.live_client import LiveError, LiveDown, LiveRoomClient
 from app.admin.security import (install_redaction_on_handlers, COOKIE_NAME, RESERVED_PORTS, SAFE_METHODS, LoginCodes, LoopbackOnly, RateLimiter,
@@ -681,9 +682,13 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
                     return replay
                 rec = feedback.record_correction(c, segment_id=seg, target_type=ttype, text=str(body.get("text") or ""),
                                                  reason=body.get("reason"), author_id=user.get("user_id"))
-                applied = feedback.promote_correction(
-                    c, rec["correction_id"], to_tm=bool(body.get("promote_tm", True)) and ttype == "translation",
-                    propose=propose, reviewed=role_allows(user.get("role", ""), "admin"))
+                # round3 §5-1: TM / glossary only get pending staging items; an admin approves them
+                # in /staging (app/admin/staging.py). Nothing is written to tm_units / glossary_terms here.
+                staged = zstaging.stage_from_correction(
+                    c, rec["correction_id"], actor=user,
+                    to_tm=bool(body.get("promote_tm", True)) and ttype == "translation", propose=propose)
+                applied = {"status": "applied", "tm_id": None, "term_id": None, **staged,
+                           "tm_pending": staged["tm_staging_id"] is not None}
                 c.execute("INSERT INTO events(segment_id, room_id, kind, payload) VALUES (?,?,?,?)",
                           (seg, rec["room_id"], "admin.correction",
                            json.dumps({"correction_id": rec["correction_id"], "target_type": ttype})))
@@ -922,6 +927,11 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
 
     # -------------------------------------------------------------- 後台資訊管理系統 (app/admin/info.py)
     from types import SimpleNamespace
+    # round3 §5-1 staging approval router: /admin/api/v1/staging
+    zstaging.register(app, SimpleNamespace(
+        api=API, need=need, conn=conn, read_json=read_json, Problem=Problem, enc_cursor=enc_cursor,
+        dec_cursor=dec_cursor, check_room_id=_check_room_id, idem_key=idem_key, idem_replay=idem_replay,
+        idem_store=idem_store))
     from app.admin import info as zinfo
     try:
         from app.asr_tuning import default_log_path

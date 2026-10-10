@@ -161,8 +161,10 @@ def test_edit_history_undo_push(env, roles):
     assert r.status_code == 200, r.text
     assert r.json()["version"] == 2 and r.json()["tm_pending"] is True
     assert cl.patch(f"{API}/segments/s1-2/text", json=body, headers={**roles["editor"], "if-match": '"v1"'}).status_code == 412
-    q = cl.get(f"{API}/review/queue", headers=roles["editor"]).json()["tm_pending"]
-    assert len(q) == 1 and q[0]["tgt_text"] == "The Dharma"
+    q = cl.get(f"{API}/review/queue", headers=roles["editor"]).json()
+    assert q["tm_pending"] == []                          # round3 §5-1: nothing is written to TM before approval
+    st = q["staging_pending"]
+    assert len(st) == 1 and st[0]["tgt_text"] == "The Dharma" and st[0]["kind"] == "tm"
     # push human text, never retranslate
     r = cl.post(f"{API}/segments/s1-2/push", headers=roles["editor"])
     assert r.status_code == 200 and env["live"].pushed[-1][3] == "The Dharma"
@@ -185,7 +187,12 @@ def test_admin_edit_goes_live_and_ja_push_refused(env, roles):
     cl = env["client"]
     r = cl.patch(f"{API}/segments/s1-2/text", json={"target": "en", "text": "Dharma teaching"},
                  headers={**roles["admin"], "if-match": '"v1"'})
-    assert r.json()["tm_pending"] is False
+    # round3 §5-1: even an admin's fix is staged first, then approved explicitly
+    assert r.json()["tm_pending"] is True and r.json()["tm_id"] is None
+    assert cl.get(f"{API}/tm?status=live", headers=roles["viewer"]).json()["items"] == []
+    sid = r.json()["tm_staging_id"]
+    etag = cl.get(f"{API}/staging/{sid}", headers=roles["admin"]).headers["etag"]
+    assert cl.post(f"{API}/staging/{sid}/approve", json={}, headers={**roles["admin"], "if-match": etag}).status_code == 200
     tm = cl.get(f"{API}/tm?status=live", headers=roles["viewer"]).json()["items"]
     assert tm and tm[0]["tgt_text"] == "Dharma teaching"
     c = db.connect(env["path"])
@@ -258,8 +265,12 @@ def test_push_excludes_ja_terms(env, roles):
 # ------------------------------------------------------------------ TM
 def test_tm_browser(env, roles):
     cl = env["client"]
-    cl.patch(f"{API}/segments/s1-2/text", json={"target": "en", "text": "The Dharma"}, headers={**roles["editor"], "if-match": '"v1"'})
-    items = cl.get(f"{API}/tm?q=Dharma&status=pending&lang=en", headers=roles["viewer"]).json()["items"]
+    r = cl.patch(f"{API}/segments/s1-2/text", json={"target": "en", "text": "The Dharma"}, headers={**roles["editor"], "if-match": '"v1"'})
+    assert cl.get(f"{API}/tm?q=Dharma&status=pending&lang=en", headers=roles["viewer"]).json()["items"] == []
+    sid = r.json()["tm_staging_id"]
+    etag = cl.get(f"{API}/staging/{sid}", headers=roles["admin"]).headers["etag"]
+    assert cl.post(f"{API}/staging/{sid}/approve", json={}, headers={**roles["admin"], "if-match": etag}).status_code == 200
+    items = cl.get(f"{API}/tm?q=Dharma&status=live&lang=en", headers=roles["viewer"]).json()["items"]
     assert len(items) == 1
     tid = items[0]["id"]
     r = cl.get(f"{API}/tm/{tid}", headers=roles["viewer"])
