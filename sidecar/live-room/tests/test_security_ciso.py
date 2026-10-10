@@ -4,9 +4,7 @@ import http.server
 import io
 import json
 import logging
-import socket
 import threading
-import time
 import urllib.error
 import urllib.request
 
@@ -33,15 +31,13 @@ def test_embedder_env_refuses_8645():
         embedder_from_env({"ZEN_EMBED_BASE_URL": "http://127.0.0.1:8645"})
 
 
-def _drain_body(handler: http.server.BaseHTTPRequestHandler) -> None:
-    """Read the request body before replying.
-
-    Closing a socket with unread bytes makes Windows send RST, and the client
-    then sees WinError 10053 (ConnectionAbortedError) instead of the reply.
-    """
-    length = int(handler.headers.get("Content-Length") or 0)
-    if length > 0:
-        handler.rfile.read(length)
+def _drain_body(handler) -> None:
+    """Read the request body before answering. Windows root cause of WinError 10053: replying to a POST
+    and closing with its body still unread makes the stack send RST, so the client sees "connection
+    aborted" instead of the 307 under test (Linux tolerates it)."""
+    n = int(handler.headers.get("Content-Length") or 0)
+    if n > 0:
+        handler.rfile.read(n)
 
 
 class _Redirector(http.server.BaseHTTPRequestHandler):
@@ -75,51 +71,6 @@ class _Canary(http.server.BaseHTTPRequestHandler):
         pass
 
 
-# Transport errors a loopback socket can raise before any HTTP reply is read.
-_SETUP_ERRORS = (ConnectionAbortedError, ConnectionResetError)
-_SETUP_ATTEMPTS = 3
-
-
-def _is_setup_error(exc: BaseException) -> bool:
-    if isinstance(exc, urllib.error.HTTPError):
-        return False  # a reply was read: never retried
-    if isinstance(exc, urllib.error.URLError):
-        return isinstance(exc.reason, _SETUP_ERRORS)
-    return isinstance(exc, _SETUP_ERRORS)
-
-
-def _retry_setup(call):
-    """Run call(); retry only when the loopback connection was aborted or reset.
-
-    Any HTTP reply (including the 307 under test) and any other error is
-    returned or raised on the first attempt. The last setup error is raised
-    after _SETUP_ATTEMPTS tries.
-    """
-    for attempt in range(_SETUP_ATTEMPTS):
-        try:
-            return call()
-        except Exception as exc:
-            if not _is_setup_error(exc) or attempt == _SETUP_ATTEMPTS - 1:
-                raise
-            time.sleep(0.05)
-    raise AssertionError("unreachable")
-
-
-def _wait_listening(port: int) -> None:
-    """Block until 127.0.0.1:port accepts a TCP connection (bounded)."""
-    def connect():
-        with socket.create_connection(("127.0.0.1", port), timeout=2):
-            pass
-
-    for attempt in range(20):
-        try:
-            return _retry_setup(connect)
-        except ConnectionRefusedError:
-            if attempt == 19:
-                raise
-            time.sleep(0.05)
-
-
 @pytest.fixture
 def redirect_pair():
     canary = http.server.HTTPServer(("127.0.0.1", 0), _Canary)
@@ -128,8 +79,6 @@ def redirect_pair():
     redir = http.server.HTTPServer(("127.0.0.1", 0), _Redirector)
     for s in (canary, redir):
         threading.Thread(target=s.serve_forever, daemon=True).start()
-    for s in (canary, redir):
-        _wait_listening(s.server_port)
     yield f"http://127.0.0.1:{redir.server_port}"
     for s in (canary, redir):
         s.shutdown()
@@ -160,7 +109,7 @@ def test_translator_default_opener_does_not_follow_redirect(redirect_pair):
     req = urllib.request.Request(redirect_pair + "/v1/chat/completions", data=b"{}",
                                  headers={"Authorization": "Bearer k"})
     with pytest.raises(urllib.error.HTTPError):
-        _retry_setup(lambda: _default_opener(redirect_pair)(req, timeout=2))
+        _default_opener(redirect_pair)(req, timeout=2)
     assert _Canary.hits == []
 
 

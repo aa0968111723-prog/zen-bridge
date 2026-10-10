@@ -20,9 +20,11 @@ def _route_url(path):
 
 def _write_routes(app):
     safe = security.SAFE_METHODS
-    return [(method, route.path) for route in app.routes
-            for method in (route.methods or ())
-            if method not in safe]
+    # FastAPI now keeps included routers lazy. OpenAPI expands their prefixes;
+    # inspecting only route.methods would omit the new staging write endpoints.
+    return [(method.upper(), path) for path, operations in app.openapi()['paths'].items()
+            for method in operations
+            if method.upper() in {'POST', 'PUT', 'PATCH', 'DELETE'} and method.upper() not in safe]
 
 
 def test_admin_bind_and_foreign_host_are_refused(env):

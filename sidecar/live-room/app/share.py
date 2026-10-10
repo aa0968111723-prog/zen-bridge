@@ -65,3 +65,18 @@ def listen_url(
     if listen_key:
         url += "?k=" + quote(listen_key, safe="")
     return url
+
+
+def machine_share_name() -> str | None:
+    """round4 #6: this PC's name for the 「用名稱連線」 QR (BREEZE_SHARE_NAME overrides; "off" disables).
+    Only plain DNS-label names are used; anything odd -> None (no QR rather than a broken one)."""
+    import re
+    raw = os.getenv("BREEZE_SHARE_NAME")
+    if raw is not None and raw.strip().lower() in {"off", "0", "none"}:
+        return None
+    name = (raw or socket.gethostname() or "").strip().rstrip(".").lower()
+    if not name or len(name) > 63 or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9-]+)*", name):
+        return None
+    if name in {"localhost"}:
+        return None
+    return name

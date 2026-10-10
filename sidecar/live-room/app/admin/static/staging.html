@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>待審修正（staging）— Zen Bridge 後台</title>
+<link rel="icon" href="/admin/static/brand/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/admin/static/brand/logo-32.png">
+<link rel="apple-touch-icon" href="/admin/static/brand/logo-256.png">
+<link rel="stylesheet" href="/admin/static/app.css">
+<link rel="stylesheet" href="/admin/staging/staging.css"></head>
+<body>
+<a class="skip" href="#main">跳到主要內容</a>
+<header><h1>Zen Bridge 後台（本機）</h1>
+  <span id="who" aria-live="polite"></span> <a href="/admin">回後台首頁</a></header>
+<div id="banner" role="alert" aria-live="assertive" hidden></div>
+<main id="main" tabindex="-1">
+  <h2>待審修正（staging）</h2>
+  <p class="hint">人工修正先放在這裡；管理員核准後才寫入翻譯記憶或詞表。詞表核准<strong>不會</strong>自動推送到直播房間，請到「詞表」用差異預覽＋版本號推送。</p>
+  <form id="filters" class="st-filters" aria-label="篩選">
+    <label>狀態 <select name="state">
+      <option value="pending" selected>待審</option><option value="approved">已核准</option>
+      <option value="rejected">已退回</option><option value="superseded">已被取代</option>
+      <option value="withdrawn">已撤回</option><option value="all">全部</option></select></label>
+    <label>類型 <select name="kind"><option value="">全部</option><option value="tm">翻譯記憶</option><option value="term">詞彙</option></select></label>
+    <label>語言 <select name="tgt_lang"><option value="">全部</option><option value="en">英文</option><option value="ja">日文</option></select></label>
+    <label>每頁 <select name="limit"><option>20</option><option selected>50</option><option>100</option></select></label>
+    <button type="submit">套用</button>
+  </form>
+  <div id="bulkbar" class="st-bulk" hidden>
+    <label><input type="checkbox" id="override"> 目標已變動也核准（會記入稽核）</label>
+    <button type="button" id="bulk-approve">核准勾選項目</button> <span id="sel-count" aria-live="polite"></span>
+  </div>
+  <table id="list" aria-label="待審修正"><thead><tr>
+    <th scope="col"><input type="checkbox" id="sel-all" aria-label="全選本頁"></th>
+    <th scope="col">類型</th><th scope="col">中文</th><th scope="col">差異（送審時 → 提議）</th>
+    <th scope="col">狀態</th><th scope="col">建立</th><th scope="col">操作</th></tr></thead><tbody></tbody></table>
+  <nav class="st-pager" aria-label="分頁"><button type="button" id="first">第一頁</button>
+    <button type="button" id="next" disabled>下一頁</button></nav>
+  <section id="detail" aria-label="項目明細" hidden></section>
+</main>
+<script type="module" src="/admin/staging/staging.js"></script>
+</body></html>

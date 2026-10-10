@@ -270,6 +270,7 @@ def test_cli_make_and_score_smoke(tmp_path):
         check=True,
         capture_output=True,
         text=True,
+        encoding='utf-8',
     )
     key_path = tmp_path / "sheet.key.json"
     key = json.loads(key_path.read_text(encoding="utf-8"))
@@ -279,6 +280,7 @@ def test_cli_make_and_score_smoke(tmp_path):
         check=True,
         capture_output=True,
         text=True,
+        encoding='utf-8',
     )
     assert "MT 評估摘要" in result.stdout
 

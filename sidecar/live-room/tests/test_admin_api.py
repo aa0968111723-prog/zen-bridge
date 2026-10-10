@@ -306,7 +306,8 @@ def test_segments_and_search(env):
     assert r.json()["items"][0]["segment_id"] == "s1-2"
 
 
-def test_correction_with_idempotency_key_feeds_tm(env):
+def test_correction_with_idempotency_key_stages_tm(env):
+    """round3 §5-1: a correction only stages TM / glossary; an admin approval writes them."""
     body = {"segment_id": "s1-1", "target_type": "translation", "text": "Today: causes and conditions.",
             "propose_term": {"zh": "因緣", "en": "causes and conditions"}}
     h = {**BEARER, "idempotency-key": "corr-0001-abcdef"}
@@ -318,13 +319,22 @@ def test_correction_with_idempotency_key_feeds_tm(env):
     assert r3.status_code == 422
     c = db.connect(env["path"])
     assert c.execute("SELECT COUNT(*) FROM corrections").fetchone()[0] == 1
+    assert c.execute("SELECT COUNT(*) FROM tm_units").fetchone()[0] == 0
+    assert c.execute("SELECT COUNT(*) FROM glossary_terms WHERE zh='因緣'").fetchone()[0] == 0
+    c.close()
+    sid = r1.json()["tm_staging_id"]
+    etag = env["client"].get(f"{API}/staging/{sid}", headers=BEARER).headers["etag"]
+    assert env["client"].post(f"{API}/staging/{sid}/approve", json={}, headers={**BEARER, "if-match": etag}).status_code == 200
+    c = db.connect(env["path"])
     assert c.execute("SELECT tgt_text FROM tm_units").fetchone()[0] == "Today: causes and conditions."
     c.close()
 
 
 def test_glossary_etag_if_match(env):
-    env["client"].post(f"{API}/corrections", headers=BEARER, json={
-        "segment_id": "s1-1", "text": "Fix.", "propose_term": {"zh": "因緣", "en": "conditions"}})
+    from app import feedback
+    c = db.connect(env["path"])          # legacy proposal (corrections now go through /staging)
+    feedback.propose_term(c, "因緣", "conditions")
+    c.close()
     items = env["client"].get(f"{API}/glossary/proposals", headers=BEARER).json()["items"]
     tid, etag = items[0]["id"], items[0]["etag"]
     assert env["client"].get(f"{API}/glossary/terms/{tid}", headers=BEARER).headers["etag"] == etag
@@ -409,3 +419,22 @@ def test_static_pages_have_no_inline_script(env):
         html = env["client"].get(p).text
         assert "<script>" not in html and 'src="/admin/static/' in html
     assert env["client"].get("/admin/static/../server.py").status_code in (400, 404)
+
+
+def test_rtf_number_accepts_both_live_shapes():
+    """Screenshot find: the live /api/metrics rtf became RtfMeter's dict; overview 500'd on rtf < 0.5."""
+    from app.admin.info import rtf_color, rtf_number
+    assert rtf_number(0.42) == 0.42 and rtf_color(0.42) == "green"
+    snap = {"session": {"count": 3, "rtf": {"p50": 0.71, "p95": 0.9}}, "asr_rtf_p50": 0.6}
+    assert rtf_number(snap) == 0.71 and rtf_color(snap) == "amber"
+    assert rtf_number({"session": {"count": 0, "rtf": {}}}, {"asr_rtf_p50": 1.2}) == 1.2
+    assert rtf_number({"session": {}}) is None and rtf_color({}) == "unknown" and rtf_number(True) is None
+
+
+def test_monitor_card_uses_the_numeric_rtf():
+    """Screenshot find: the live monitor card printed [object Object] (raw RtfMeter dict)."""
+    from pathlib import Path
+    js = (Path(__file__).resolve().parents[1] / "app/admin/static/app.js").read_text(encoding="utf-8")
+    assert 'card("RTF", m.rtf' not in js and 'typeof d.rtf === "number"' in js
+    src = (Path(__file__).resolve().parents[1] / "app/admin/observability.py").read_text(encoding="utf-8")
+    assert '"rtf": rtf, "rtf_color": rtf_color(rtf), "ts": clock()}' in src

@@ -19,7 +19,7 @@ from fastapi import Depends, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
 from app.admin import db as zdb
-from app.admin.info import METRIC_NAMES, hardware, parse_timing_log, redact, rtf_color
+from app.admin.info import METRIC_NAMES, hardware, parse_timing_log, redact, rtf_color, rtf_number
 
 STALE_S = 10.0
 
@@ -82,11 +82,19 @@ def register(app, ctx, *, session_row, export_rows, event_list):
         hw = hardware(paths())
         vals = sample_row(m or {} if err is None else {}, hw)
         now = clock()
-        with conn(write=True) as c:
-            persist_sample(c, now, vals)
-            if now - state["last_rollup"] > 3600:
-                state["last_rollup"] = now
-                rollup_and_prune(c, now)
+        # QA dbtest P2: a busy zen.sqlite3 (ledger batch, backup) must not lose the sample.
+        for attempt in range(5):
+            try:
+                with conn(write=True) as c:
+                    persist_sample(c, now, vals)
+                    if now - state["last_rollup"] > 3600:
+                        rollup_and_prune(c, now)
+                        state["last_rollup"] = now
+                break
+            except sqlite3.OperationalError as exc:
+                if attempt == 4 or "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                    raise
+                time.sleep(0.05 * (2 ** attempt))
         state["last_sample"] = now
         return {"ts": now, "values": vals, "live_error": err}
 
@@ -203,9 +211,10 @@ def register(app, ctx, *, session_row, export_rows, event_list):
             cfg = redact(ctx.config_fn()) if ctx.config_fn else {}
         except Exception:
             cfg = {}
-        rtf = (m or {}).get("rtf")
+        rtf = rtf_number((m or {}).get("rtf"), m)   # live rtf may be the RtfMeter dict
         return {"components": components(), "live": m, "live_error": err, "live_age_s": age,
                 "stale": age is None or age > STALE_S, "rtf": rtf, "rtf_color": rtf_color(rtf),
+                "asr_gpu": (m or {}).get("asr_gpu"),            # opt-in GPU path state (app.asr_gpu)
                 "config": cfg, "ts": clock()}
 
     @app.get(f"{API}/overview/hardware")
@@ -322,9 +331,9 @@ def register(app, ctx, *, session_row, export_rows, event_list):
                         break
                     m, err = await asyncio.to_thread(live_snapshot)
                     age = None if state["last_live_ts"] is None else clock() - state["last_live_ts"]
-                    rtf = (m or {}).get("rtf")
+                    rtf = rtf_number((m or {}).get("rtf"), m)   # live rtf may be the RtfMeter dict
                     payload = {"metrics": m, "live_error": err, "stale": err is not None or age is None or age > STALE_S,
-                               "age_s": age, "rtf_color": rtf_color(rtf), "ts": clock()}
+                               "age_s": age, "rtf": rtf, "rtf_color": rtf_color(rtf), "ts": clock()}
                     sent += 1
                     yield f"id: {sent}\nevent: metrics\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
                     errs = await asyncio.to_thread(lambda: event_list(None, "error", None, None, 5)["items"])

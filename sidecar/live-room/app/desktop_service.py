@@ -8,6 +8,8 @@ from app.settings import Settings, fill_process_environ
 from app.desktop_update import cleanup_downloads
 
 def main():
+    from app.console import safe_console
+    safe_console()
     if sys.stdin.readline().strip() != 'start':
         return
     cleanup_downloads()

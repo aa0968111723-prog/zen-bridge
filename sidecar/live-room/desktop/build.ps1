@@ -21,7 +21,7 @@ New-Item -ItemType Directory -Force $OutputDirectory | Out-Null
 $compiler = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $core = Join-Path $SdkDirectory 'lib\net462\Microsoft.Web.WebView2.Core.dll'
 $forms = Join-Path $SdkDirectory 'lib\net462\Microsoft.Web.WebView2.WinForms.dll'
-& $compiler /nologo /target:winexe /platform:x64 /optimize+ /utf8output /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Net.Http.dll /r:System.Web.Extensions.dll /r:Microsoft.CSharp.dll "/r:$core" "/r:$forms" "/out:$OutputDirectory\Breeze.exe" (Join-Path $PSScriptRoot 'Launcher.cs')
+& $compiler /nologo /target:winexe /platform:x64 /optimize+ /utf8output /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Net.Http.dll /r:System.Web.Extensions.dll /r:Microsoft.CSharp.dll "/r:$core" "/r:$forms" "/win32icon:$PSScriptRoot\breeze.ico" "/out:$OutputDirectory\Breeze.exe" (Join-Path $PSScriptRoot 'Launcher.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Desktop compilation failed' }
 Copy-Item $core,$forms -Destination $OutputDirectory -Force
 Copy-Item (Join-Path $SdkDirectory 'runtimes\win-x64\native\WebView2Loader.dll') -Destination $OutputDirectory -Force
