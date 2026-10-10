@@ -11,6 +11,7 @@ room/session/language, then --default-duration (seconds, default 3).
 Text is stripped at both ends. Japanese CJK/kana/full-width characters count as
 1, ASCII and other narrow characters as 0.5. Percentiles use linear rank.
 --json also saves stdout's report to a new file; existing files are never replaced.
+Run against a stable offline database; do not concurrently replace its sidecars.
 """
 from __future__ import annotations
 
@@ -95,7 +96,13 @@ def analyze(db: str | Path, session: str | None = None, *,
     default_duration = _positive(default_duration)
     thresholds = {"en": _positive(en_cps), "ja": _positive(ja_cps)}
     path = Path(db).resolve()
-    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+    uri = path.as_uri() + "?mode=ro"
+    # Offline, checkpointed WAL databases must not acquire new WAL/SHM files.
+    if not Path(str(path) + "-wal").exists():
+        uri += "&immutable=1"
+    elif not Path(str(path) + "-shm").exists():
+        raise ValueError("WAL without SHM: checkpoint the database before offline analysis")
+    with closing(sqlite3.connect(uri, uri=True)) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("BEGIN")
         schema, rows = _read(conn, session)

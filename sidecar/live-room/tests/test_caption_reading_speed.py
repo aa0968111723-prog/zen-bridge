@@ -174,9 +174,40 @@ def test_read_only_uri_and_database_integrity(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(speed.sqlite3, "connect", readonly)
     assert speed.main(["--db", str(path)]) == 0
     assert json.loads(capsys.readouterr().out)["flagged_count"] == 2
-    assert calls == [(path.resolve().as_uri() + "?mode=ro", {"uri": True})]
+    assert calls == [(path.resolve().as_uri() + "?mode=ro&immutable=1", {"uri": True})]
     assert _snapshot(path) == before
     assert not Path(str(path) + "-wal").exists()
+    assert not Path(str(path) + "-shm").exists()
+
+
+def test_checkpointed_wal_database_does_not_create_sidecars(tmp_path):
+    path = _ledger_db(tmp_path / "captions.sqlite3")
+    with closing(sqlite3.connect(path)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("UPDATE translations SET text='猫' WHERE segment_id='j2'")
+        writer.commit()
+    before = _snapshot(path)
+    assert not Path(str(path) + "-wal").exists()
+    assert speed.analyze(path)["by_language"]["ja"]["max_cps"] == 8
+    assert _snapshot(path) == before
+    assert not Path(str(path) + "-wal").exists()
+    assert not Path(str(path) + "-shm").exists()
+
+
+def test_wal_without_shm_is_refused_without_creating_files(tmp_path):
+    source = _ledger_db(tmp_path / "source.sqlite3")
+    path = tmp_path / "captions.sqlite3"
+    with closing(sqlite3.connect(source)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("UPDATE translations SET text='猫' WHERE segment_id='j2'")
+        writer.commit()
+        path.write_bytes(source.read_bytes())
+        wal = Path(str(path) + "-wal")
+        wal.write_bytes(Path(str(source) + "-wal").read_bytes())
+    before = [_snapshot(item) for item in (path, wal)]
+    with pytest.raises(ValueError, match="WAL without SHM"):
+        speed.analyze(path)
+    assert [_snapshot(item) for item in (path, wal)] == before
     assert not Path(str(path) + "-shm").exists()
 
 
