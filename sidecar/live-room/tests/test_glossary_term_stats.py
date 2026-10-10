@@ -109,6 +109,29 @@ def test_room_and_session_glossary_scopes(ledger):
     assert next(t for t in terms if t["target"] == "case")["source_segments"] == 0
 
 
+def test_translation_of_old_transcript_is_an_omission(ledger):
+    with closing(db.connect(ledger)) as conn:
+        conn.execute(
+            """UPDATE translations SET transcript_id=(
+                   SELECT id FROM transcripts WHERE segment_id='en-1' AND version=1)
+               WHERE segment_id='en-1'"""
+        )
+        conn.execute("UPDATE transcripts SET is_current=0 WHERE segment_id='en-1'")
+        conn.execute("INSERT INTO transcripts(segment_id,version,text) VALUES ('en-1',2,'禪修')")
+    assert collect_stats(ledger)["overall"]["hits"] == 0
+    assert by_zh(collect_stats(ledger))["禪修"]["source_segments"] == 3
+
+
+def test_legacy_glossary_language_metadata(ledger):
+    with closing(db.connect(ledger)) as conn:
+        conn.execute("INSERT INTO glossaries(id,name) VALUES (2,'Japanese')")
+        conn.execute("INSERT INTO admin_glossary_lang VALUES (2,'ja')")
+        conn.execute("INSERT INTO glossary_terms(glossary_id,zh,en) VALUES (2,'禪修','禅修')")
+        conn.execute("DROP TABLE glossary_term_targets")
+    assert collect_stats(ledger, lang="ja")["overall"]["hits"] == 1
+    assert all(term["target"] != "禅修" for term in collect_stats(ledger)["terms"])
+
+
 @pytest.fixture
 def captions(tmp_path):
     path = tmp_path / "captions.sqlite3"
@@ -201,6 +224,23 @@ def test_readonly_connection_and_unchanged_inputs(ledger):
     collect_stats(ledger, lang="ja")
     assert ledger.read_bytes() == before
     assert ledger.stat().st_mtime_ns == modified
+
+
+def test_committed_wal_captions_are_included(captions):
+    with closing(sqlite3.connect(captions)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute(
+            """INSERT INTO captions(id,room_id,session_id,seq,version,zh,en,updated_at)
+               VALUES ('wal','class','s1',2,1,'禪修','Zen meditation',1)"""
+        )
+        writer.commit()
+        before = captions.read_bytes()
+        wal_path = Path(str(captions) + "-wal")
+        wal_before = wal_path.read_bytes()
+        assert collect_stats(captions)["overall"]["hits"] == 2
+        assert captions.read_bytes() == before
+        assert wal_path.read_bytes() == wal_before
 
 
 def test_cli_json_and_text_and_readonly_run(ledger):

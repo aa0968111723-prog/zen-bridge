@@ -49,6 +49,14 @@ def _database_terms(conn: sqlite3.Connection, lang: str) -> list[dict]:
                    WHERE t.status='active' AND gt.status='active' AND gt.tgt_lang=?""",
                 (lang,),
             )
+        elif "admin_glossary_lang" in tables:
+            rows = conn.execute(
+                """SELECT t.zh, t.en AS target, g.room_id, g.session_id
+                   FROM glossary_terms t JOIN glossaries g ON g.id=t.glossary_id
+                   LEFT JOIN admin_glossary_lang l ON l.glossary_id=g.id
+                   WHERE t.status='active' AND COALESCE(l.tgt_lang,'en')=?""",
+                (lang,),
+            )
         elif lang == "en":
             rows = conn.execute(
                 """SELECT t.zh, t.en AS target, g.room_id, g.session_id
@@ -95,6 +103,7 @@ def _segments(conn: sqlite3.Connection, lang: str, session: str | None):
                  JOIN transcripts t ON t.segment_id=s.id AND t.is_current=1
                  LEFT JOIN translations tr ON tr.segment_id=s.id
                      AND tr.is_current=1 AND tr.tgt_lang=?
+                     AND (tr.transcript_id IS NULL OR tr.transcript_id=t.id)
                  WHERE s.status<>'deleted' AND (t.lang='zh' OR t.lang LIKE 'zh-%')
                      AND (se.tgt_lang=? OR tr.id IS NOT NULL)"""
         params = [lang, lang]
