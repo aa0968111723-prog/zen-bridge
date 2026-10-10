@@ -74,3 +74,20 @@ def test_compact_requires_matching_gpu_files_not_just_cpu_tools(tmp_path):
     assert not verify_files(tmp_path,expected['fingerprint'],expected['tools'])
     (native/'ggml-vulkan.dll').unlink()
     assert not verify_files(tmp_path,expected['fingerprint'],expected['tools'])
+
+
+def test_isolated_runtime_does_not_reuse_the_legacy_python(tmp_path):
+    from scripts.update_runtime import probably_compatible
+    runtime(tmp_path)
+    asset={'python':{'version':'3.12.10','directory':'3.12.10-zen050'}}
+    (tmp_path/'bootstrap-manifest.json').write_text(json.dumps(asset))
+    legacy=tmp_path/'.python/3.12.10/tools/python.exe'
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(b'legacy still used by a bot')
+    expected=descriptor(tmp_path)
+    assert not probably_compatible(tmp_path,expected)
+    active=tmp_path/'.python/3.12.10-zen050/tools/python.exe'
+    active.parent.mkdir(parents=True)
+    active.write_bytes(b'new private runtime')
+    assert probably_compatible(tmp_path,expected)
+    assert legacy.read_bytes()==b'legacy still used by a bot'

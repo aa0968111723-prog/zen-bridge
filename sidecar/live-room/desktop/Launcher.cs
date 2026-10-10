@@ -199,9 +199,10 @@ internal sealed class BreezeWindow : Form {
 
     string PythonPath() {
         string venv = Path.Combine(root,".venv","Scripts","python.exe");
-        if (File.Exists(venv)) return venv;
+        if (!File.Exists(Path.Combine(root,"desktop","offline-runtime.json")) && File.Exists(venv)) return venv;
         var manifest = new JavaScriptSerializer().Deserialize<dynamic>(File.ReadAllText(Path.Combine(root,"bootstrap-manifest.json")));
-        return Path.Combine(root,".python",(string)manifest["python"]["version"],"tools","python.exe");
+        string directory=manifest["python"].ContainsKey("directory") ? (string)manifest["python"]["directory"] : (string)manifest["python"]["version"];
+        return Path.Combine(root,".python",directory,"tools","python.exe");
     }
     void Log(string line) {
         if (String.IsNullOrEmpty(line)) return;
