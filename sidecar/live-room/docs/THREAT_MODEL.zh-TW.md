@@ -45,6 +45,7 @@
 | B4 | 直播或後台 → 本機推論服務（Ollama 11434、llama-server） | 冒充 11434 的本機程式 |
 | B5 | OBS（CEF）↔ 直播 | 被分享出去的 OBS 場景檔 |
 | B6 | 更新器 ↔ 網際網路 | 供應鏈（Codex 負責，只做參考） |
+| B7 | 直播服務 → 示意圖 LLM（`BREEZE_VISUAL_LLM_BASE_URL`，aitest V2，第 2 輪新增） | 設定錯誤時的遠端主機、proxy、8645 |
 
 ## 3. 各元件的 STRIDE 分析
 
@@ -89,6 +90,17 @@
 - 疊加層（fullstack，尚未接線）：字幕只用 `textContent` 寫入，參數都有夾限，CSP 是 `default-src 'none'`。缺口：`connect-src ws: wss:` 太寬；`?k=` 會留在 OBS 的場景檔裡。
 - 後台的 SSE：只推全域指標，不帶個人資料；跨源請求沒有 CORS，讀不到內容 **[實測 d87096f]**。
 
+### 3.7 第 2 輪新增元件（基準 `grok/integrate` = `9743ce8`，2026-10-11 補充）
+- **示意圖 V2（`app/visual.py`、`app/visual_routes.py`，aitest）**：會把定稿字幕送到 OpenAI 相容的 LLM，再把產生的示意圖廣播出去。預設是關閉的，要設定 `BREEZE_VISUAL_LLM_*` 才會開。
+  - I（資訊外洩）：`GET /api/visual/{room_id}` **沒有驗證**就回傳示意圖歷史（內容來自字幕），但 `/ws/visual` 需要 Origin 和聽眾金鑰。8780 綁在 LAN 上，預設房名又是 `class`，同網段的人不用金鑰就能讀到 **[實測，box probe]**。
+  - I／S（B7 出口）：`is_loopback_url()` 用 `host.startswith("127.")` 判斷，所以 `127.evil.example` 這種網域名稱也會通過；沒有擋 8645；用的是一般的 `urllib.request.urlopen`，會讀 proxy 環境變數或登錄檔、也會跟轉址，沒有沿用 `app.net.safe_opener()` **[實測：判斷函式；靜態：opener]**。設定錯誤時，字幕可能離開這台筆電，或被送到 8645。
+  - D（阻斷服務）：`POST /api/visual/{room}/trigger` 只檢查來源是不是 loopback，沒有 CSRF 或主持權杖。本機瀏覽器裡任何網頁都能用跨站 POST 反覆觸發 LLM（`force=1` 可以略過冷卻）**[靜態]**。
+  - 既有控制：模型輸出只用 `textContent` 顯示；每位觀看者的佇列有上限；`validate_room_id`；`strip_think`／`is_presentable`。
+- **草稿字幕 `/ws/draft`（round4 #5）**：第一個 frame 必須帶主持權杖（`same_secret`），會檢查 Origin，每個封包最多 32000 bytes，私密暫停時不會發布。缺口：先 `accept` 才驗證，不過有 5 秒逾時（P2）**[靜態]**。
+- **`/api/hw/status`（perf）**：用 `require_host` 保護，而且是唯讀的；`apply_profile` 目前沒有接線。如果之後接上，會用 ctypes 呼叫 OpenProcess/SetPriorityClass，而且程式寫死拒絕 HIGH/REALTIME、絕不改電源計畫、有 `revert()` **[靜態]**。
+- **後台 staging（backend）**：所有端點都透過既有的 `need(role)`（session、Origin、Sec-Fetch-Site、CSRF、寫入速率限制）；核准需要 admin 加上 If-Match；`staging_audit` 會記錄改前和改後。這一塊**部分**補上了 §5 第 6 點的稽核缺口（只涵蓋 TM 和詞彙的核准，登入和匯出仍然沒有稽核） **[靜態＋測試]**。
+- **`tools/smoke_desktop.py`（testlead）**：只在自己找的 loopback 空埠啟動子程序，指令用串列參數，拒絕 8645，會清掉 `*_API_KEY` 環境變數，不印出權杖 **[靜態]**。
+
 ### 3.6 更新器、安裝程式（Codex 負責，只做參考）
 - 下載必須驗證 SHA256 或簽章、不跟到其他網域的轉址、不能用來降級。這部分不在本文件範圍，請參考 Codex 的文件。
 
@@ -127,9 +139,12 @@
 | P2 | restore_drill 的表名要跳脫、manifest 檔名要限制在備份資料夾內、提供 `--cleanup` | backup | 用含 `"` 的表名、`../` 的 manifest 測試 |
 | P2 | cicd 的 checkout 加上 `persist-credentials: false` | cicd | 檢查 yml |
 | P2 | `zbench.http_json` 改用 `safe_opener` | 執行手 | 轉址測試 |
+| P1 | `GET /api/visual/{room_id}` 套用和 `/ws/visual` 相同的 Origin 與聽眾金鑰檢查（或拿掉 history） | aitest／整合者 | 沒帶 `k` 回 403；帶正確的 `k` 回 200 |
+| P1 | 示意圖 LLM 的 URL 改用 `ipaddress` 判斷 loopback（不接受網域名稱，只接受 `localhost`），拒絕 `RESERVED_PORTS`，請求改走 `app.net.safe_opener()` | aitest | 測試：`127.evil.example`、`127.0.0.1:8645`、302 轉址、`HTTP_PROXY` 都要被拒絕或不生效 |
+| P2 | `POST /api/visual/{room}/trigger` 改用主持權杖（`require_host`）當 guard | 整合者 | 沒帶權杖回 401 |
 | 規劃 | LAN 加密方案（自簽 TLS 或隔離熱點）評估 | arch | 文件 |
 
 ## 7. 已知限制
 - 所有實測都在 box（Linux、Xeon）上做，沒有在 Windows 5600H 上驗證過 ACL、CEF 或 Defender 的行為。
-- perf（hw_tune 的 ctypes 和 subprocess）、backend（staging APIRouter）、aitest（visual_routes）都還沒交件，所以沒有納入本文件；交件後補上。
+- perf、backend、aitest、testlead 已在第 2 輪補進 §3.7（基準 `9743ce8`）；§1–§6 的其他行號仍以 6ec5012 為準。
 - 更新器和安裝程式屬於 Codex 的範圍，本文件只做參考。
