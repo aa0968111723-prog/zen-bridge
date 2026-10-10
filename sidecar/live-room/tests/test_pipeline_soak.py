@@ -7,6 +7,7 @@ The pipeline's legacy ``en`` field carries that target's translation.
 """
 
 import asyncio
+import contextlib
 import gc
 import io
 import json
@@ -228,7 +229,7 @@ def test_pipeline_soak(tmp_path, monkeypatch, caplog, target):
             assert counts == {"zh_ready": slices, "ready": slices, "draft": slices * 2}
             assert store.path == tmp_path / "captions.sqlite3"
             assert store.enabled and store.errors == 0
-            with sqlite3.connect(store.path) as conn:
+            with contextlib.closing(sqlite3.connect(store.path)) as conn:
                 assert conn.execute("select count(*) from captions").fetchone()[0] == slices
                 assert conn.execute(
                     "select count(*) from captions where status != 'ready' or en = ''"
