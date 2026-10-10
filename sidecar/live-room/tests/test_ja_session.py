@@ -99,3 +99,37 @@ def test_ledger_archives_ja_session_as_ja(tmp_path):
     led.close()
     with sqlite3.connect(path) as c:
         assert c.execute("SELECT tgt_lang, text FROM translations").fetchall() == [("ja", "般若です。")]
+
+
+def test_room_glossary_accepts_ja_and_kana_reading():
+    from app.glossary import validate_terms
+    ok, bad = validate_terms([{"zh": "般若", "en": "prajna", "ja": "般若", "reading": "はんにゃ"},
+                              {"zh": "法師", "en": "Dharma Master"}])
+    assert bad == [] and ok[0]["ja"] == "般若" and ok[0]["reading"] == "はんにゃ"
+    assert "ja" not in ok[1] and "reading" not in ok[1]          # en terms keep their old shape
+    for item, why in (({"zh": "般若", "en": "p", "ja": "般若", "reading": "han<b>"}, "讀音只能是"),
+                      ({"zh": "般若", "en": "p", "reading": "はんにゃ"}, "必須同時填日文"),
+                      ({"zh": "般若", "en": "p", "ja": "般\n若"}, "單行"),
+                      ({"zh": "般若", "en": "p", "ja": "あ" * 41}, "超過")):
+        ok, bad = validate_terms([item])
+        assert ok == [] and any(why in r["reason"] for r in bad), (item, bad)
+
+
+@pytest.mark.anyio
+async def test_ja_room_glossary_reading_becomes_ruby_on_the_caption():
+    app = app_for(translator=EnOnly())
+    app.state.pipeline._target_backend, app.state.pipeline._target_backend_loaded = JaBackend(), True
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://127.0.0.1:8780") as client:
+            token = await token_of(app, client)
+            h = {**auth(token), "content-type": "application/json"}
+            await client.post("/api/rooms/open", json={"room_id": "jp", "tgt_lang": "ja"}, headers=h)
+            r = await client.put("/api/rooms/jp/glossary", headers=h, json={"if_version": 0, "terms": [
+                {"zh": "般若", "en": "prajna", "ja": "般若", "reading": "はんにゃ"}]})
+            assert r.status_code == 200, r.text
+            got = (await client.get("/api/rooms/jp/glossary", headers=h)).json()
+            assert got["terms"][0]["reading"] == "はんにゃ"
+            body = (await push(client, token, "jp", "s1", 1, "今天講般若".encode())).json()
+            assert body["ruby"] == [{"text": "般若", "reading": "はんにゃ"}]
+    finally:
+        await stop(app)
