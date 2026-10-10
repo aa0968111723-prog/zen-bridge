@@ -385,12 +385,14 @@ def register(app, ctx) -> int:
             # round3 §5-1: the fix goes to staging (app/admin/staging.py); an admin approves it into TM.
             from app.admin import staging as zstaging
             staged = zstaging.stage_from_correction(c, rec["correction_id"], actor=user,
-                                                    to_tm=target != "zh" and body.get("to_tm", True) is not False)
+                                                    to_tm=target != "zh" and body.get("to_tm", True) is not False,
+                                                    self_approve=getattr(ctx, "staging_self_approve", False))
             applied = {"status": "applied", "tm_id": None, "term_id": None, **staged}
             audit(c, user, "segment.edit", session_id=info["session_id"], segment_id=seg, target=target,
                   version=rec["version"], correction_id=rec["correction_id"])
         return JSONResponse({"version": rec["version"], "correction_id": rec["correction_id"], **applied,
-                             "tm_pending": staged["tm_staging_id"] is not None},
+                             "tm_pending": staged["tm_staging_id"] is not None
+                                           and not staged.get("auto_approved", {}).get("tm", {}).get("ok")},
                             headers={"ETag": f'"v{rec["version"]}"'})
 
     @app.post(f"{API}/segments/{{seg}}/undo")

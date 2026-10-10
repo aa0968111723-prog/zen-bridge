@@ -11,9 +11,10 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 from starlette.testclient import TestClient  # noqa: E402
 
 from app import tm as ztm  # noqa: E402
-from app.admin import db, staging  # noqa: E402
-from app.admin.server import API, enc_cursor  # noqa: E402
-from tests.test_admin_api import BASE, BEARER, ORIGIN, browser_login, env, writes  # noqa: E402,F401
+from app.admin import db, security, staging  # noqa: E402
+from app.admin.server import API, create_admin_app, enc_cursor  # noqa: E402
+from tests.local_fakes import seed_segment  # noqa: E402
+from tests.test_admin_api import BASE, BEARER, ORIGIN, PORT, TOKEN, FakeLive, browser_login, env, writes  # noqa: E402,F401
 from tests.test_admin_info import mk_user  # noqa: E402
 
 PROBLEM = "application/problem+json"
@@ -71,7 +72,7 @@ def test_migration_up_from_existing_v3_db(tmp_path):
     c.execute("INSERT INTO tm_units(src_text, src_norm, tgt_text, src_hash) VALUES ('佛法', '佛法', 'Dharma', ?)",
               (ztm.src_hash("佛法"),))
     c.close()
-    assert db.migrate(p) == db.SCHEMA_VERSION == 10
+    assert db.migrate(p) == db.SCHEMA_VERSION == 11
     assert (tmp_path / "pre-migrate-v3.sqlite3").is_file()     # data existed -> verified snapshot first
     c = db.connect(p)
     try:
@@ -83,7 +84,7 @@ def test_migration_up_from_existing_v3_db(tmp_path):
         assert c.execute("SELECT en FROM glossary_terms").fetchone()[0] == "emptiness"
     finally:
         c.close()
-    assert db.migrate(p) == 10                                   # idempotent, no second snapshot
+    assert db.migrate(p) == db.SCHEMA_VERSION                    # idempotent, no second snapshot
     assert sorted(x.name for x in tmp_path.glob("pre-migrate-*")) == ["pre-migrate-v2.sqlite3", "pre-migrate-v3.sqlite3"]
 
 
@@ -512,3 +513,111 @@ def test_staging_js_syntax():
     js = Path(staging.__file__).with_name("static") / "staging.js"
     out = subprocess.run([node, "--check", str(js)], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
+
+
+# ------------------------------------------------------------------ admin self-approve switch (default OFF)
+def test_self_approve_switch_parsing_and_default_off(env, roles):  # noqa: F811
+    assert staging.self_approve_from_env({}) is False
+    assert staging.self_approve_from_env({"ZEN_ADMIN_SELF_APPROVE": "true"}) is False
+    assert staging.self_approve_from_env({"ZEN_ADMIN_SELF_APPROVE": " 1 "}) is True
+    assert env["app"].state.staging_self_approve is False
+    r = env["client"].post(f"{API}/corrections", json={"segment_id": "s1-1", "target_type": "translation",
+                                                      "text": "Today, causes and conditions ripen."}, headers=roles["admin"])
+    assert r.json()["tm_pending"] is True and "auto_approved" not in r.json()
+    assert q(env, "SELECT count(*) FROM tm_units")[0][0] == 0
+
+
+@pytest.fixture
+def auto_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZEN_ADMIN_SELF_APPROVE", "1")          # the real switch, read by create_admin_app
+    path = tmp_path / "zen.sqlite3"
+    live = FakeLive()
+    app = create_admin_app(path, token_hash_hex=security.token_hash(TOKEN), port=PORT,
+                           identity_path=tmp_path / "zen-identity.sqlite3", probes={"live": lambda: "up"},
+                           live_client=live, backup_dir=lambda: tmp_path / "backups", start_worker=False,
+                           sse_interval_s=0.0, sse_max_events=2)
+    client = TestClient(app, base_url=BASE, client=("127.0.0.1", 50000))
+    c = db.connect(path)
+    seed_segment(c, seg="s1-1", seq=1, zh="今天講因緣具足", en="Today, conditions")
+    seed_segment(c, seg="s1-2", seq=2, zh="佛法", en="Dharma")
+    c.close()
+    with client:
+        cl = client
+        yield {"app": app, "client": cl, "path": path, "live": live,
+               "admin": mk_user(cl, "ad", "admin")[1], "editor": mk_user(cl, "ed", "editor")[1]}
+
+
+def test_self_approve_on_admin_fix_is_written_and_fully_audited(auto_env):
+    cl, env_ = auto_env["client"], auto_env
+    assert env_["app"].state.staging_self_approve is True
+    body = {"segment_id": "s1-1", "target_type": "translation", "text": "Today, causes and conditions ripen.",
+            "propose_term": {"zh": "因緣", "en": "causes and conditions"}}
+    r = cl.post(f"{API}/corrections", json=body, headers=env_["admin"])
+    assert r.status_code == 201, r.text
+    out = r.json()
+    assert out["auto_approved"]["tm"]["ok"] is True and out["auto_approved"]["term"]["ok"] is True
+    assert out["tm_pending"] is False
+    assert q(env_, "SELECT quality, origin FROM tm_units")[0] == (5, "approved")
+    assert q(env_, "SELECT status, en FROM glossary_terms WHERE zh='因緣'")[0] == ("active", "causes and conditions")
+    rows = q(env_, "SELECT state, approval_mode, author_id = decided_by, decision_note FROM staging_items ORDER BY id")
+    assert [(r_[0], r_[1], r_[2]) for r_ in rows] == [("approved", "self_auto", 1)] * 2
+    assert all("ZEN_ADMIN_SELF_APPROVE" in r_[3] for r_ in rows)
+    audit = q(env_, "SELECT action, mode, actor_id IS NOT NULL, before_json IS NOT NULL, after_json IS NOT NULL "
+                    "FROM staging_audit ORDER BY id")
+    # TM: before = [] (no units yet). Term: no glossary row existed, so before_json is NULL; after is the new row.
+    assert audit == [("create", None, 1, 1, 1), ("approve", "self_auto", 1, 1, 1),
+                     ("create", None, 1, 0, 1), ("approve", "self_auto", 1, 0, 1)]
+    ev = [json.loads(p[0]) for p in q(env_, "SELECT payload FROM events WHERE kind='audit.staging.approve'")]
+    assert [e["mode"] for e in ev] == ["self_auto", "self_auto"]
+    d = cl.get(f"{URL}/{out['tm_staging_id']}", headers=env_["admin"]).json()
+    assert [a["mode"] for a in d["audit"]] == [None, "self_auto"]
+    assert env_["live"].puts == []                                  # still no live push
+
+
+def test_self_approve_never_for_editors_and_respects_lock_validation(auto_env):
+    cl, env_ = auto_env["client"], auto_env
+    r = cl.patch(f"{API}/segments/s1-2/text", json={"target": "en", "text": "The Dharma"},
+                 headers={**env_["editor"], "if-match": '"v1"'})
+    assert r.status_code == 200 and r.json()["tm_pending"] is True and "auto_approved" not in r.json()
+    assert q(env_, "SELECT count(*) FROM tm_units")[0][0] == 0
+    # admin edit through the workbench is auto-approved too
+    r = cl.patch(f"{API}/segments/s1-2/text", json={"target": "en", "text": "The Buddhadharma"},
+                 headers={**env_["admin"], "if-match": '"v2"'})
+    assert r.status_code == 200 and r.json()["tm_pending"] is False
+    # locked term: the auto-approval fails inside its SAVEPOINT, item stays pending, nothing half-written
+    c = db.connect(env_["path"])
+    from app import feedback
+    gid = feedback._global_glossary(c)
+    c.execute("INSERT INTO glossary_terms(glossary_id, zh, en, locked) VALUES (?, '因緣', 'conditions', 1)", (gid,))
+    ver = c.execute("SELECT version FROM glossaries WHERE id=?", (gid,)).fetchone()[0]
+    c.close()
+    r = cl.post(f"{API}/corrections", json={"segment_id": "s1-1", "target_type": "translation",
+                                            "text": "Today, causes and conditions ripen.",
+                                            "propose_term": {"zh": "因緣", "en": "causality"}}, headers=env_["admin"])
+    assert r.status_code == 201, r.text
+    auto = r.json()["auto_approved"]
+    assert auto["tm"]["ok"] is True and auto["term"] == {"ok": False, "status": 409, "code": "term_locked",
+                                                          "detail": auto["term"]["detail"]}
+    assert q(env_, "SELECT en FROM glossary_terms WHERE zh='因緣'")[0][0] == "conditions"
+    assert q(env_, "SELECT version FROM glossaries WHERE id=?", (gid,))[0][0] == ver
+    tid = r.json()["term_staging_id"]
+    assert q(env_, "SELECT state, approval_mode FROM staging_items WHERE id=?", (tid,))[0] == ("pending", None)
+    assert q(env_, "SELECT count(*) FROM staging_audit WHERE item_id=? AND action='approve'", (tid,))[0][0] == 0
+    # invalid input is still refused before anything is staged
+    bad = cl.post(f"{API}/corrections", json={"segment_id": "s1-1", "text": "Fix.",
+                                              "propose_term": {"zh": "因缘", "en": "x"}}, headers=env_["admin"])
+    assert bad.status_code == 422 and bad.json()["code"] == "not_traditional"
+
+
+def test_self_auto_mode_refuses_someone_elses_item(env, roles):  # noqa: F811
+    it = new_item(env["client"], roles["editor"], kind="tm", src_text="佛法", tgt_text="The Dharma")
+    c = db.connect(env["path"])
+    try:
+        c.execute("BEGIN IMMEDIATE")
+        with pytest.raises(staging.StagingError) as exc:
+            staging.approve(c, it["id"], actor={"user_id": 99, "via": "bearer", "role": "admin"},
+                            if_match=it["etag"], mode="self_auto")
+        assert exc.value.status == 403
+        c.execute("ROLLBACK")
+    finally:
+        c.close()

@@ -154,11 +154,13 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
                      sse_max_events: int | None = None, backup_scan_s: float = 0.0,
                      backup_every_s: float = 86400.0, retention_every_s: float = 86400.0,
                      clock=time.time, asr_log_path=None, export_dir=None, metrics_sample_s: float = 0.0,
-                     config_fn=None, llama_probe=None) -> FastAPI:
+                     config_fn=None, llama_probe=None, staging_self_approve: bool | None = None) -> FastAPI:
     if port in RESERVED_PORTS:
         raise ValueError("8645 保留給 Hermes")
     db_path = Path(db_path)
     zdb.migrate(db_path)
+    # Admin self-approve switch (staging): default OFF; ZEN_ADMIN_SELF_APPROVE=1 or the argument turns it on.
+    self_approve = zstaging.self_approve_from_env() if staging_self_approve is None else bool(staging_self_approve)
     identity_path = Path(identity_path) if identity_path else None
     if identity_path is not None:
         zdb.migrate_identity(identity_path)
@@ -251,6 +253,7 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
     app = FastAPI(title="zen-admin", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.store, app.state.worker, app.state.codes, app.state.live = store, worker, codes, live
     app.state.db_path = db_path
+    app.state.staging_self_approve = self_approve
     app.state.run_retention = run_retention
     app.state.bg_tasks = []
 
@@ -683,12 +686,15 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
                 rec = feedback.record_correction(c, segment_id=seg, target_type=ttype, text=str(body.get("text") or ""),
                                                  reason=body.get("reason"), author_id=user.get("user_id"))
                 # round3 §5-1: TM / glossary only get pending staging items; an admin approves them
-                # in /staging (app/admin/staging.py). Nothing is written to tm_units / glossary_terms here.
+                # in /staging (app/admin/staging.py). Nothing is written to tm_units / glossary_terms here,
+                # except an admin's own fix when ZEN_ADMIN_SELF_APPROVE=1 (audited approval, same checks).
                 staged = zstaging.stage_from_correction(
                     c, rec["correction_id"], actor=user,
-                    to_tm=bool(body.get("promote_tm", True)) and ttype == "translation", propose=propose)
+                    to_tm=bool(body.get("promote_tm", True)) and ttype == "translation", propose=propose,
+                    self_approve=self_approve)
                 applied = {"status": "applied", "tm_id": None, "term_id": None, **staged,
-                           "tm_pending": staged["tm_staging_id"] is not None}
+                           "tm_pending": staged["tm_staging_id"] is not None
+                                         and not staged.get("auto_approved", {}).get("tm", {}).get("ok")}
                 c.execute("INSERT INTO events(segment_id, room_id, kind, payload) VALUES (?,?,?,?)",
                           (seg, rec["room_id"], "admin.correction",
                            json.dumps({"correction_id": rec["correction_id"], "target_type": ttype})))
@@ -947,7 +953,7 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
         sse_interval_s=sse_interval_s, sse_max_events=sse_max_events, started_at=started_at,
         asr_log_path=_asr_log, config_fn=config_fn, check_room_id=_check_room_id,
         export_dir_fn=(lambda: Path(export_dir)) if export_dir else (lambda: zdb.data_dir() / "exports"),
-        metrics_sample_s=metrics_sample_s,
+        metrics_sample_s=metrics_sample_s, staging_self_approve=self_approve,
         llama_probe=llama_probe or (lambda: _tcp_probe("127.0.0.1", 8080))))
 
     # LoopbackOnly is the outermost layer (added last).

@@ -146,7 +146,8 @@ async function showDetail(id) {
   const hr = el("tr"); ["時間", "動作", "操作者", "備註"].forEach(h => hr.append(el("th", h, {scope: "col"})));
   t.append(el("thead")); t.tHead.append(hr);
   const tb = el("tbody");
-  d.audit.forEach(a => { const tr = el("tr"); tr.append(el("td", fmtTime(a.at)), el("td", a.action), el("td", `${a.actor_via || ""}:${a.actor_id ?? "—"}`), el("td", a.note || "")); tb.append(tr); });
+  const modeLabel = {self_auto: "（本人自動核准）", override: "（強制核准）", manual: ""};
+  d.audit.forEach(a => { const tr = el("tr"); tr.append(el("td", fmtTime(a.at)), el("td", a.action + (modeLabel[a.mode] || "")), el("td", `${a.actor_via || ""}:${a.actor_id ?? "—"}`), el("td", a.note || "")); tb.append(tr); });
   t.append(tb); s.append(el("h4", "稽核軌跡"), t);
   s.scrollIntoView();
 }

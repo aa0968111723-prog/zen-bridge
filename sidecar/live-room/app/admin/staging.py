@@ -190,15 +190,18 @@ def get_row(c: sqlite3.Connection, item_id: int):
     return r
 
 
-def _audit(c, item_id: int, action: str, actor: dict, before=None, after=None, note: str | None = None) -> None:
-    c.execute("INSERT INTO staging_audit(item_id, action, actor_id, actor_via, before_json, after_json, note) "
-              "VALUES (?,?,?,?,?,?,?)",
+def _audit(c, item_id: int, action: str, actor: dict, before=None, after=None, note: str | None = None,
+           mode: str | None = None) -> None:
+    c.execute("INSERT INTO staging_audit(item_id, action, actor_id, actor_via, before_json, after_json, note, mode) "
+              "VALUES (?,?,?,?,?,?,?,?)",
               (item_id, action, actor.get("user_id"), actor.get("via"),
-               None if before is None else _dumps(before), None if after is None else _dumps(after), note))
+               None if before is None else _dumps(before), None if after is None else _dumps(after), note, mode))
     # events stays text-free (schema: payload 不得含字幕全文或個資): ids only.
+    payload = {"item_id": item_id, "via": actor.get("via"), "role": actor.get("role")}
+    if mode:
+        payload["mode"] = mode
     c.execute("INSERT INTO events(kind, actor_id, payload) VALUES (?,?,?)",
-              (f"audit.staging.{action}", actor.get("user_id"),
-               json.dumps({"item_id": item_id, "via": actor.get("via"), "role": actor.get("role")})))
+              (f"audit.staging.{action}", actor.get("user_id"), json.dumps(payload)))
 
 
 def _public(r) -> dict:
@@ -271,10 +274,40 @@ def stage(c: sqlite3.Connection, *, kind: str, tgt_lang: str = "en", src_text, t
     return item_out(row), True
 
 
+SELF_APPROVE_ENV = "ZEN_ADMIN_SELF_APPROVE"
+
+
+def self_approve_from_env(env=None) -> bool:
+    """Admin self-approve switch. Default OFF; only the exact value "1" turns it on."""
+    import os
+    env = os.environ if env is None else env
+    return (env.get(SELF_APPROVE_ENV) or "0").strip() == "1"
+
+
+def _self_approve(c, item: dict, actor: dict) -> dict:
+    """Auto-approve an admin's own fresh item inside a SAVEPOINT. Same checks as a manual approval
+    (state, ETag, conflict, lock, validation); a failure rolls back only this approval and leaves the
+    item pending for a normal review."""
+    c.execute("SAVEPOINT staging_self_approve")
+    try:
+        out = approve(c, item["id"], actor=actor, if_match=item["etag"], mode="self_auto",
+                      note="管理員本人修正，自我核准開關開啟（ZEN_ADMIN_SELF_APPROVE=1）")
+        c.execute("RELEASE staging_self_approve")
+        return {"ok": True, "target_id": out["target_id"], "etag": out["item"]["etag"]}
+    except StagingError as exc:
+        c.execute("ROLLBACK TO staging_self_approve")
+        c.execute("RELEASE staging_self_approve")
+        return {"ok": False, "status": exc.status, "code": exc.code, "detail": exc.detail}
+
+
 def stage_from_correction(c: sqlite3.Connection, corr_id: int, *, actor: dict, to_tm: bool = True,
-                          propose: dict | None = None) -> dict:
+                          propose: dict | None = None, self_approve: bool = False) -> dict:
     """Replacement for feedback.promote_correction on the correction endpoints: the caption fix
-    itself is already a new human version (record_correction); TM / glossary only get a pending item."""
+    itself is already a new human version (record_correction); TM / glossary only get a pending item.
+
+    self_approve (config switch, default off): an admin's own fresh items are approved right away in
+    the same transaction, fully audited as mode 'self_auto'. Editors are never auto-approved."""
+    auto = bool(self_approve) and role_allows(actor.get("role", ""), "admin")
     row = c.execute("SELECT target_type, target_id, segment_id, after_text, status FROM corrections WHERE id=?",
                     (corr_id,)).fetchone()
     if not row:
@@ -290,18 +323,22 @@ def stage_from_correction(c: sqlite3.Connection, corr_id: int, *, actor: dict, t
         if zh and zh[0]:
             merged = c.execute("SELECT 1 FROM translations WHERE segment_id=? AND status='merged' LIMIT 1",
                                (seg,)).fetchone()
-            item, _ = stage(c, kind="tm", tgt_lang=lang, src_text=zh[0], tgt_text=after, actor=actor,
+            item, created = stage(c, kind="tm", tgt_lang=lang, src_text=zh[0], tgt_text=after, actor=actor,
                             correction_id=corr_id, segment_id=seg,
                             # 全站 D4: a fix on a merged MT line may also cover the earlier zh.
                             note="合併句：核准前請確認中文涵蓋範圍" if merged else None)
             out["tm_staging_id"] = item["id"]
+            if auto and created and not merged:            # a merged line always waits for a review
+                out.setdefault("auto_approved", {})["tm"] = _self_approve(c, item, actor)
     if propose:
         lang = str(propose.get("tgt_lang") or "en")
-        item, _ = stage(c, kind="term", tgt_lang=lang, src_text=propose.get("zh"),
+        item, created = stage(c, kind="term", tgt_lang=lang, src_text=propose.get("zh"),
                         tgt_text=propose.get("en") if lang == "en" else (propose.get("target") or propose.get("en")),
                         aliases=propose.get("aliases"), actor=actor, correction_id=corr_id, segment_id=seg,
                         note=f"from correction {corr_id}")
         out["term_staging_id"] = item["id"]
+        if auto and created:
+            out.setdefault("auto_approved", {})["term"] = _self_approve(c, item, actor)
     return out
 
 
@@ -355,13 +392,19 @@ def _write_term(c, row, actor: dict) -> tuple[int, dict, int]:
 
 
 def approve(c: sqlite3.Connection, item_id: int, *, actor: dict, if_match: str | None,
-            override_conflict: bool = False, note: str | None = None) -> dict:
+            override_conflict: bool = False, note: str | None = None, mode: str = "manual") -> dict:
+    if mode not in ("manual", "self_auto"):
+        raise ValueError(mode)
+    if mode == "self_auto":
+        override_conflict = False                      # self-approval never overrides a conflict
     row = get_row(c, item_id)
     check_etag(row, if_match)
     _transition(row, "approved")
     note = _clean(note, "note", 0, 500) or None if note is not None else None
     current = snapshot(c, row["kind"], row["tgt_lang"], row["src_text"])
     changed = _sig(current) != row["base_sig"]
+    if mode == "self_auto" and not _is_author(row, actor):
+        raise StagingError("自我核准只限本人的提案", code="forbidden", status=403)
     if changed and not override_conflict:
         raise StagingError("送審後目標條目已被別人修改；請檢視後重新送審（rebase）或帶 override_conflict",
                            code="target_changed", status=409, base=json.loads(row["base_json"]), current=current,
@@ -375,11 +418,13 @@ def approve(c: sqlite3.Connection, item_id: int, *, actor: dict, if_match: str |
         # No automatic live push: the room changes only through the diff + if_room_version flow.
         result["live_push"] = {"pushed": False, "how": "POST /admin/api/v1/rooms/{room_id}/glossary/push "
                                                         "先 dry_run 看差異，再帶 if_room_version 推送"}
+    used = "self_auto" if mode == "self_auto" else ("override" if changed else "manual")
     c.execute("UPDATE staging_items SET state='approved', rev=rev+1, decided_by=?, decided_via=?, "
-              "decided_at=unixepoch('subsec'), decision_note=?, target_id=?, updated_at=unixepoch('subsec') WHERE id=?",
-              (actor.get("user_id"), actor.get("via"), note, target_id, row["id"]))
+              "decided_at=unixepoch('subsec'), decision_note=?, target_id=?, approval_mode=?, "
+              "updated_at=unixepoch('subsec') WHERE id=?",
+              (actor.get("user_id"), actor.get("via"), note, target_id, used, row["id"]))
     audit_note = "override_conflict" + (f": {note}" if note else "") if changed else note
-    _audit(c, row["id"], "approve", actor, before=current, after=after, note=audit_note)
+    _audit(c, row["id"], "approve", actor, before=current, after=after, note=audit_note, mode=used)
     result.update({"item": item_out(get_row(c, row["id"])), "target_id": target_id, "target": after,
                    "override_used": bool(changed)})
     return result
@@ -443,7 +488,7 @@ def detail(c: sqlite3.Connection, item_id: int) -> dict:
     out["diff"] = {"before": current, "after": {"tgt_text": row["tgt_text"], "aliases": json.loads(row["aliases"])}}
     out["audit"] = [{**dict(a), "before": json.loads(a["before_json"]) if a["before_json"] else None,
                      "after": json.loads(a["after_json"]) if a["after_json"] else None}
-                    for a in c.execute("SELECT id, action, actor_id, actor_via, at, before_json, after_json, note "
+                    for a in c.execute("SELECT id, action, actor_id, actor_via, at, before_json, after_json, note, mode "
                                        "FROM staging_audit WHERE item_id=? ORDER BY id", (row["id"],))]
     for a in out["audit"]:
         a.pop("before_json", None)
