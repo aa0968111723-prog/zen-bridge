@@ -884,6 +884,8 @@ def _cmd_det(args, factory=None) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from app.console import safe_console
+    safe_console()
     parser = argparse.ArgumentParser(description="量這台電腦的辨識即時率（RTF）。不會印出主持權杖或逐字稿。")
     sub = parser.add_subparsers(dest="cmd", required=True)
     metrics = sub.add_parser("metrics", help="讀正在跑的服務的 /api/metrics")

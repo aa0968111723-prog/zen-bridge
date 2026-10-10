@@ -45,6 +45,8 @@ def bind_socket(bind: str, port: int):
 
 
 def main(argv: list[str] | None = None) -> None:
+    from app.console import safe_console
+    safe_console()
     bind, port = resolve_bind()
     # Codex 2569a06 hold: embeddings stay off until the idle-gate fix passes on-device QA.
     # Refuse before binding the port, so a refused start never claims 8791 or a job.

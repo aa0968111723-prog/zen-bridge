@@ -82,6 +82,8 @@ def inspect(settings: Settings, root: Path = ROOT, verify_model: bool = False, p
 
 
 def main() -> int:
+    from app.console import safe_console
+    safe_console()
     parser = argparse.ArgumentParser(description="字幕服務啟動前檢查；不會傳送逐字稿或呼叫付費 API")
     parser.add_argument("--verify-model", action="store_true")
     parser.add_argument("--json", action="store_true")

@@ -8,6 +8,8 @@ from app.admin.db import SchemaError, default_db_path, migrate
 
 
 def main(argv: list[str] | None = None) -> int:
+    from app.console import safe_console
+    safe_console()
     parser = argparse.ArgumentParser(description="套用 zen.sqlite3 schema（可重複執行）")
     parser.add_argument("--db", default=None, help="資料庫路徑；預設 ZEN_DB_PATH 或 %%LOCALAPPDATA%%\\ZenBridge\\data\\zen.sqlite3")
     args = parser.parse_args(argv)

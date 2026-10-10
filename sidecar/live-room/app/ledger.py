@@ -210,6 +210,7 @@ class Ledger:
                     try:
                         self._write_batch(conn, batch)
                         self._replay(conn)
+                        self._maybe_checkpoint(conn, len(batch))
                         break
                     except Exception as exc:
                         try:
@@ -314,6 +315,28 @@ class Ledger:
             work.unlink()
             log.warning("ledger spool replay interrupted; %d events kept for later", len(lines) - done)
 
+    # QA dbtest P1: with a long reader open (admin search/export) the WAL grew to 216 MB over 2 h.
+    # A TRUNCATE checkpoint every 300 events or 5 min capped it at 28 MB (max 177 ms on the 5600H).
+    CHECKPOINT_EVERY = int(os.environ.get("ZEN_LEDGER_CHECKPOINT_EVERY") or 300)
+    CHECKPOINT_S = float(os.environ.get("ZEN_LEDGER_CHECKPOINT_S") or 300)
+
+    def _maybe_checkpoint(self, conn: sqlite3.Connection, n: int) -> None:
+        self._since_ckpt = getattr(self, "_since_ckpt", 0) + n
+        last = getattr(self, "_ckpt_at", None)
+        now = self._clock()
+        if last is None:
+            self._ckpt_at = last = now
+        if self._since_ckpt < self.CHECKPOINT_EVERY and now - last < self.CHECKPOINT_S:
+            return
+        self._since_ckpt, self._ckpt_at = 0, now
+        try:
+            row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            self.checkpoints = getattr(self, "checkpoints", 0) + 1
+            if row and row[0]:
+                log.info("ledger checkpoint busy (reader open): log=%s moved=%s", row[1], row[2])
+        except sqlite3.Error:
+            log.warning("ledger checkpoint failed", exc_info=True)
+
     def _write_batch(self, conn: sqlite3.Connection, batch: list) -> None:
         conn.execute("BEGIN IMMEDIATE")
         ok = skipped = 0
@@ -375,7 +398,8 @@ class Ledger:
     def _erase_text(c: sqlite3.Connection, seg_ids: list[str]) -> None:
         for sid in seg_ids:
             c.execute("DELETE FROM corrections WHERE segment_id=?", (sid,))
-            c.execute("UPDATE tm_units SET segment_id=NULL WHERE segment_id=?", (sid,))
+            # architect A1: the host deleted this line - TM entries learned from it go too
+            c.execute("DELETE FROM tm_units WHERE segment_id=?", (sid,))
             c.execute("DELETE FROM translations WHERE segment_id=?", (sid,))
             c.execute("DELETE FROM transcripts WHERE segment_id=?", (sid,))
 

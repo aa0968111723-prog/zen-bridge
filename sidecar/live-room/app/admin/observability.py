@@ -82,11 +82,19 @@ def register(app, ctx, *, session_row, export_rows, event_list):
         hw = hardware(paths())
         vals = sample_row(m or {} if err is None else {}, hw)
         now = clock()
-        with conn(write=True) as c:
-            persist_sample(c, now, vals)
-            if now - state["last_rollup"] > 3600:
-                state["last_rollup"] = now
-                rollup_and_prune(c, now)
+        # QA dbtest P2: a busy zen.sqlite3 (ledger batch, backup) must not lose the sample.
+        for attempt in range(5):
+            try:
+                with conn(write=True) as c:
+                    persist_sample(c, now, vals)
+                    if now - state["last_rollup"] > 3600:
+                        rollup_and_prune(c, now)
+                        state["last_rollup"] = now
+                break
+            except sqlite3.OperationalError as exc:
+                if attempt == 4 or "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                    raise
+                time.sleep(0.05 * (2 ** attempt))
         state["last_sample"] = now
         return {"ts": now, "values": vals, "live_error": err}
 

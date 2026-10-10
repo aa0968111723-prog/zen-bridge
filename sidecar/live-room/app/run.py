@@ -38,6 +38,8 @@ def open_when_serving(port: int, stopped: threading.Event, timeout_s: float = 20
 
 
 def main() -> None:
+    from app.console import safe_console
+    safe_console()
     os.chdir(ROOT)
     fill_process_environ()
     try:
