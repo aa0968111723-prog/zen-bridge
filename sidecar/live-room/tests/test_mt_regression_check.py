@@ -45,13 +45,26 @@ def test_pass_both_languages(tmp_path, lang, out, terms):
     assert (summary["min_ratio"], summary["max_ratio"]) == checker.DEFAULT_BOUNDS[lang]
 
 
-@pytest.mark.parametrize("char", list("這們說會個來時為與對還讓嗎呢吧") + ["ㄅ", "ㄩ", "ㆠ", "ㆿ"])
+@pytest.mark.parametrize("char", list("這們說會來與對讓嗎呢吧") + ["ㄅ", "ㄩ", "ㆠ", "ㆿ"])
 def test_japanese_residual_characters(tmp_path, char):
     summary = checker.check(*fixture_files(tmp_path, "坐禅を練習します" + char, ["坐禅"]), "ja")
     result = summary["results"][0]
     assert result["failures"] == ["residual_chinese"]
     assert result["residual_characters"] == [char]
     assert summary["failure_counts"]["residual_chinese"] == 1
+
+
+@pytest.mark.parametrize("out,zh", [
+    ("今日は坐禅の時間です。", "今天是坐禪時間。"),
+    ("個人で練習します。", "每個人各自練習。"),
+    ("還元", "還原"),
+    ("為替", "匯率"),
+])
+def test_common_japanese_kanji_are_not_residual_chinese(tmp_path, out, zh):
+    summary = checker.check(*fixture_files(tmp_path, out, zh=zh), "ja")
+    assert summary["passed"] == 1
+    assert summary["failure_counts"]["residual_chinese"] == 0
+    assert summary["results"][0]["failures"] == []
 
 
 def test_residual_heuristic_is_japanese_only(tmp_path):

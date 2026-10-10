@@ -20,7 +20,8 @@ from pathlib import Path
 
 
 DEFAULT_BOUNDS = {"en": (0.8, 6.0), "ja": (0.6, 3.0)}
-TRADITIONAL_ONLY = frozenset("這們說會個來時為與對還讓嗎呢吧")
+# Exclude common Japanese kanji 時, 個, 還, 為; old forms in quotes can still be flagged.
+TRADITIONAL_ONLY = frozenset("這們說會來與對讓嗎呢吧")
 RULES = ("missing_id", "empty_output", "residual_chinese", "must_terms", "forbidden", "length_ratio")
 
 
