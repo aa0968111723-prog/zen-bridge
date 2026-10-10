@@ -373,6 +373,7 @@ def build_visual_router(
     *,
     host_guard: Guard | None = local_only_host_guard,
     ws_guard: Guard | None = None,
+    http_guard: Guard | None = None,
     static_dir: Path = STATIC,
 ) -> APIRouter:
     """Router for the visual channel.
@@ -393,8 +394,15 @@ def build_visual_router(
         return FileResponse(static_dir / "visual.js", media_type="application/javascript", headers=_NO_STORE)
 
     @router.get("/api/visual/{room_id}")
-    async def visual_state(room_id: str):
+    async def visual_state(room_id: str, request: Request):
         room_id = _room(room_id)
+        # CISO review P1: the HTTP history needs the same listener check as the socket.
+        guard = http_guard if http_guard is not None else ws_guard
+        if guard is None:
+            if not _is_loopback_client(request.client.host if request.client else None):
+                raise HTTPException(status_code=403, detail="forbidden")
+        elif await _maybe_await(guard(request, room_id)) is False:
+            raise HTTPException(status_code=403, detail="forbidden")
         hub.bind_loop()
         return {"room_id": room_id, "history": hub.channel.history(room_id), **hub.stats(room_id)}
 

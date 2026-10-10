@@ -331,7 +331,10 @@ class OpenAICompatLLM:
         )
         if self._api_key:
             request.add_header("Authorization", "Bearer " + self._api_key)
-        with urllib.request.urlopen(request, timeout=timeout_s) as response:  # noqa: S310 - configured URL only
+        if not is_loopback_url(self.base_url):          # CTO gate P1: re-check at call time (never 8645)
+            raise ValueError("visual LLM base URL is not an allowed local URL")
+        from app.net import safe_opener                  # no redirects, no proxy env
+        with safe_opener()(request, timeout=timeout_s) as response:  # noqa: S310 - configured URL only
             return json.loads(response.read().decode("utf-8"))
 
     async def complete(self, messages: list[dict], *, timeout_s: float) -> str:
@@ -365,7 +368,22 @@ def is_loopback_url(url: str) -> bool:
         return False
     if parts.scheme not in {"http", "https"}:
         return False
-    return host in LOOPBACK_HOSTS or host.startswith("127.")
+    try:
+        from app.net import effective_port
+        from app.translate_config import RESERVED_PORTS
+        if effective_port(parts) in RESERVED_PORTS:      # CTO gate P1: 8645 is Hermes, never called
+            return False
+    except ValueError:
+        return False
+    if parts.username is not None or parts.password is not None:
+        return False
+    if host in LOOPBACK_HOSTS:
+        return True
+    import ipaddress
+    try:
+        return ipaddress.ip_address(host).is_loopback          # 127.0.0.2 yes, 127.evil.example no
+    except ValueError:
+        return False
 
 
 def build_llm_from_env(env: Mapping[str, str] | None = None, config: VisualConfig | None = None) -> OpenAICompatLLM | None:

@@ -397,7 +397,8 @@ def make_app(hub: VisualHub, **kw) -> FastAPI:
 
 
 def test_viewer_page_and_script_are_served():
-    with TestClient(make_app(VisualHub(None))) as client:
+    # CISO P1: the HTTP history is guarded; this test opens it explicitly (server.py passes the listen-key guard)
+    with TestClient(make_app(VisualHub(None), http_guard=lambda r, room: True)) as client:
         page = client.get("/visual?room=r1")
         assert page.status_code == 200 and "text/html" in page.headers["content-type"]
         assert "/visual/visual.js" in page.text and "示意圖" in page.text
@@ -412,7 +413,7 @@ def test_viewer_page_and_script_are_served():
 
 def test_websocket_receives_hello_then_live_drafts_for_its_room_only():
     hub = make_hub(FakeLLM())
-    with TestClient(make_app(hub)) as client:
+    with TestClient(make_app(hub, http_guard=lambda r, room: True)) as client:
         with client.websocket_connect("/ws/visual?room_id=r1") as ws_a, \
                 client.websocket_connect("/ws/visual?room_id=r2") as ws_b:
             hello = ws_a.receive_json()
@@ -457,3 +458,10 @@ def test_manual_trigger_endpoint_and_default_local_only_guard():
     local = TestClient(make_app(make_hub(FakeLLM())), client=("127.0.0.1", 5000))
     with local:
         assert local.post("/api/visual/r1/trigger").status_code == 200
+
+
+def test_http_history_is_refused_without_a_guard_for_remote_clients():
+    with TestClient(make_app(VisualHub(None))) as client:          # TestClient peer is "testclient", not loopback
+        assert client.get("/api/visual/r1").status_code == 403
+    with TestClient(make_app(VisualHub(None), http_guard=lambda r, room: False)) as client:
+        assert client.get("/api/visual/r1").status_code == 403

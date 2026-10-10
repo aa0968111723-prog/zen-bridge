@@ -30,7 +30,7 @@ from app.hw_routes import make_router as make_hw_router
 from app.overlay_routes import router as overlay_router
 from app.visual_routes import VisualHub, build_visual_router
 from app.mt_backend import TargetLangError, validate_tgt_lang
-from app.auth import audience_origin_allowed, new_host_token, origin_is_allowed, require_host, require_local_host, same_secret
+from app.auth import audience_origin_allowed, host_is_allowed, new_host_token, origin_is_allowed, require_host, require_local_host, same_secret
 from app.dispatch import ListenerSlot, RoomBus, for_listener
 from app.glossary import (
     GLOSSARY_MAX_BODY,
@@ -1325,7 +1325,14 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         return room is None or _listener_authorized(ws, room, ws.query_params.get("k", ""))
 
     app.state.visual_hub = visual_hub
-    app.include_router(build_visual_router(visual_hub, ws_guard=_visual_ws_guard))   # aitest: /visual
+    def _visual_http_guard(request, room_id):
+        if not host_is_allowed(request.headers.get("host", ""), settings, _audience_extra_hosts()):
+            return False
+        room = book.get(room_id)
+        return room is not None and _listener_authorized(request, room, request.query_params.get("k", ""))
+
+    app.include_router(build_visual_router(visual_hub, ws_guard=_visual_ws_guard,
+                                           http_guard=_visual_http_guard))   # aitest: /visual
     app.state.settings = settings
     app.state.token = token
     app.state.pipeline = pipeline
