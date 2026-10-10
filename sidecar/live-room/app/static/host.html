@@ -66,6 +66,7 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 <button id="private-pause" disabled style="color:#b91c1c" aria-pressed="false">私密暫停</button>
 <button id="try" class="secondary" type="button">試音</button>
 </div>
+<p id="draft-row" hidden><label><input type="checkbox" id="draft-on" checked> 聽眾端顯示灰色草稿字幕（即時、未校正；正式字幕到了會原地取代，投影模式不顯示）</label> <span id="draft-state" class="muted">草稿字幕：關</span></p>
 <p id="phase">收音狀態：待命</p>
 <p id="rtf-speed" class="speed-empty" title="每 1 秒錄音需要的辨識秒數。一般是這一場最近 200 段的中位數，最慢是第 95 百分位。低於 0.9 才跟得上。新的一場沒有樣本時，不顯示上一場的數字。">辨識速度：開始聽之後才有數字</p>
 <p id="caption-en"></p>
@@ -95,6 +96,7 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 import { createCaptureController } from "/static/recorder_machine.js";
 import { connectRoom, createCaptionView, mergeCaptionUpdate } from "/static/room_client.js";
 import { applyCaption } from "/static/host_caption.js";
+import { startDraftStream } from "/static/draft_capture.js";
 import { glossaryApplyLoadFailure, glossaryApplyLoaded, glossaryBeginLoad, glossaryEdit, glossaryRefusal, glossaryRoomState, glossarySaveDecision, glossarySaveLine, glossarySaveSettlement, glossaryTextDirty, glossaryTransportLine } from "/static/host_glossary.js";
 const roomEl = document.querySelector("#room");
 const log = document.querySelector("#log");
@@ -387,6 +389,9 @@ async function setup() {
   const headers = token ? { authorization: "Bearer " + token } : {};
   const data = await fetch("/api/setup?room_id=" + encodeURIComponent(roomEl.value), { headers, cache: "no-store" }).then((r) => r.json());
   rememberRoom(data);
+  draftAvailable = !!data.draft_available;
+  const draftRow = document.querySelector("#draft-row");
+  if (draftRow) draftRow.hidden = !draftAvailable;
   const qr = document.querySelector("#qr");
   if (!data.share_ready) {
     qr.removeAttribute("src");
@@ -515,11 +520,26 @@ function paintRecognitionSpeed(data) {
   speed.textContent = view.text;
   speed.title = view.title;
 }
+// round4 #5: optional grey draft captions (X-ASR). Off unless the server has a draft model.
+let micStream = null;
+let draft = null;
+let draftAvailable = false;
+async function syncDraft(next) {
+  const want = next === "recording" || next === "waiting";
+  const box = document.querySelector("#draft-on");
+  if (!want || !draftAvailable || !box || !box.checked) {
+    if (draft) { const d = draft; draft = null; (await d).stop(); }
+    return;
+  }
+  if (draft || !micStream || !ctl.session) return;
+  draft = startDraftStream({ stream: micStream, roomId: ctl.session.roomId, sessionId: ctl.session.id, token,
+    onState: (s) => { const el = document.querySelector("#draft-state"); if (el) el.textContent = s === "on" ? "草稿字幕：開" : "草稿字幕：關"; } });
+}
 const ctl = createCaptureController({
   periodMs: 6000,
   roomId: () => roomEl.value || "class",
   newId: () => crypto.randomUUID().replace(/-/g, "").slice(0, 16),
-  openMic: () => navigator.mediaDevices.getUserMedia({ audio: deviceId() }),
+  openMic: async () => { micStream = await navigator.mediaDevices.getUserMedia({ audio: deviceId() }); return micStream; },
   abortUploads: () => { for (const request of audioRequests) request.abort(); },
   onUploadError: (meta, err) => {
     line("第 " + meta.seq + " 段上傳未確認完成：" + (err?.message || "網路錯誤") + "；請檢查連線與字幕。停止後可匯出已接收內容。");
@@ -591,6 +611,7 @@ const ctl = createCaptureController({
     return data;
   },
   onPhase(next) {
+    syncDraft(next);
     const extra = next === "error" && ctl.lastError ? "：" + ctl.lastError : "";
     phaseEl.textContent = "收音狀態：" + (phaseLabels[next] || next) + extra;
   },

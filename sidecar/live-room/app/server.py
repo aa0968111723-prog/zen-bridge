@@ -22,7 +22,8 @@ from app.aio import cancellation_pending, wait_bounded
 from app.asr import CliAsr, ResidentAsr
 from app.native_asr import NativeResidentAsr
 from app.audio import AudioError, convert_to_wav, ffmpeg_bin, wav_duration_seconds
-from app.auth import audience_origin_allowed, new_host_token, require_host, require_local_host, same_secret
+from app.draft_hub import DraftHub
+from app.auth import audience_origin_allowed, new_host_token, origin_is_allowed, require_host, require_local_host, same_secret
 from app.dispatch import ListenerSlot, RoomBus, for_listener
 from app.glossary import (
     GLOSSARY_MAX_BODY,
@@ -859,7 +860,8 @@ def _zen_db_path():
         return None
 
 
-def create_app(settings: Settings | None = None, asr=None, translator: Translator | None = None, decoder=None) -> FastAPI:
+def create_app(settings: Settings | None = None, asr=None, translator: Translator | None = None, decoder=None,
+               draft_factory=None) -> FastAPI:
     if settings is None:
         fill_process_environ()
         settings = Settings.from_env()
@@ -1366,6 +1368,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "queue": pipeline.stats(),
             "listeners": _seated_listeners(book.rooms.values()),
             "storage": store.enabled,
+            "draft_available": drafts_available,
             "storage_recovered": bool(getattr(store, "recovered", False)),
         }
         if host_view:
@@ -1470,6 +1473,21 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                 dead.append(conn)
         _drop_unsendable(room, dead)
 
+    def _publish_draft(event: dict) -> None:
+        # round4 #5: drafts are screen-only. Never into bus history, store, ledger or TM, and a
+        # listener whose queue is nearly full simply skips a draft instead of being dropped.
+        room = book.get(event["room_id"])
+        if room is None:
+            return
+        for conn in list(room["listeners"]):
+            q = getattr(conn.slot, "q", None)
+            if q is not None and q.maxsize and q.qsize() >= max(1, q.maxsize // 2):
+                continue
+            conn.slot.offer(event)
+
+    drafts = DraftHub(draft_factory, publish=_publish_draft, is_paused=pipeline.is_paused)
+    app.state.drafts = drafts
+
     @app.post("/api/rooms/{room_id}/pause")
     async def room_pause(room_id: str, request: Request) -> dict:
         require_host(request, token, settings)
@@ -1477,6 +1495,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         if book.get(room_id) is None:
             ensure_room(room_id)
         out = pipeline.pause_room(room_id)
+        drafts.drop_room(room_id)                # round4 #5: in-flight draft text dies too
         _announce_pause(room_id, True)
         logging.getLogger("breeze.server").info("private pause room=%s voided=%d", room_id, out["voided"])
         return {"ok": True, "paused": True, **out}
@@ -1936,6 +1955,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                 if t0_ms >= _MAX_SEGMENT_MS:
                     t0_ms = _MAX_SEGMENT_MS - 1
                 t1_ms = t0_ms + 1
+            drafts.note_pushed(room_id, session_id, seq)     # round4 #5: drafts move to seq+1
             segment = Segment(
                 room_id=room_id,
                 session_id=session_id,
@@ -2012,6 +2032,59 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         except Exception:
             pass
         await ws.close(code=code)
+
+    drafts_available = drafts.available()
+
+    @app.websocket("/ws/draft")
+    async def draft_stream(ws: WebSocket, room_id: str = "class", session_id: str = "") -> None:
+        """round4 #5: host PCM16 16 kHz mono -> draft captions. First frame must be {"token": host}."""
+        await ws.accept()
+        origin = ws.headers.get("origin")
+        try:
+            room_id = validate_room_id(room_id)
+            session_id = validate_session_id(session_id)
+        except RoomIdError:
+            await ws.close(code=1008, reason="rejected")
+            return
+        if origin and not origin_is_allowed(origin, settings):
+            await ws.close(code=1008, reason="origin")
+            return
+        try:
+            hello = await asyncio.wait_for(ws.receive_json(), timeout=5)
+        except Exception:
+            await ws.close(code=1008, reason="auth")
+            return
+        supplied = str((hello or {}).get("token") or "")
+        if not same_secret(supplied, token):
+            await ws.close(code=1008, reason="auth")
+            return
+        sess = drafts.open(room_id, session_id) if drafts_available else None
+        if sess is None:
+            await ws.send_json({"type": "draft_off"})
+            await ws.close(code=1000, reason="draft_off")
+            return
+        await ws.send_json({"type": "draft_on", "seq": sess.seq})
+        try:
+            while True:
+                msg = await ws.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+                data = msg.get("bytes")
+                if not data:
+                    continue
+                try:
+                    drafts.emit(await asyncio.to_thread(drafts.feed, sess, data))
+                except ValueError:
+                    await ws.close(code=1009, reason="too_large")
+                    break
+                except Exception:
+                    logging.getLogger("breeze.draft").exception("draft feed failed room=%s", room_id)
+                    await ws.close(code=1011, reason="draft_error")
+                    break
+        except WebSocketDisconnect:
+            pass
+        finally:
+            drafts.close(sess)
 
     @app.websocket("/ws/listen")
     async def listen(ws: WebSocket, room_id: str = "class", cursor: int = 0, replay: int = 0, k: str = "", cid: str = "", supplement: int = 0) -> None:

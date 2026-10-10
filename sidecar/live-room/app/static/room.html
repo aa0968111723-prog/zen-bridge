@@ -6,6 +6,8 @@
 <title>禪譯聽眾</title>
 <style>
 [hidden] { display: none !important; }
+.zh.draft, .zh .draft { color: var(--muted) !important; font-weight: 500 !important; font-style: normal; }
+html.project .draft, body.project .draft { display: none !important; }
 :root { --bg: #fbf6ee; --fg: #2a2118; --muted: #6b5644; --line: rgba(90, 60, 30, .2); --size: clamp(1.5rem, 7vw, 2.125rem); }
 html { background: var(--bg); }
 html.dark, html.project { background: #16130f; }
@@ -224,10 +226,20 @@ function paintChrome() {
   stage.classList.toggle("stale", mode === "stale" || mode === "ended");
   stageNoteEl.textContent = privacyPaused ? "字幕暫停中" : resumedNotice ? "字幕已恢復" : failed(item) ? "這段沒有字幕" : stageNoteFor(kind, mode, hostLive);
 }
+function finalsOnly() {
+  const out = new Map();
+  for (const [id, row] of items) if (!row.draft) out.set(id, row);
+  return out;
+}
 function render() {
-  const item = liveTail(items, state.follow, state.pinned);
-  en.textContent = !item || failed(item) ? "" : (item.en || "");
+  // round4 #5: drafts are grey and live only on the stage line; projection never shows them.
+  const projecting = prefs.mode === "project";
+  const pool = projecting ? finalsOnly() : items;
+  const item = liveTail(pool, state.follow, state.pinned);
+  const drafting = !!(item && item.draft);
+  en.textContent = !item || failed(item) || drafting ? "" : (item.en || "");
   zh.textContent = !item || failed(item) ? "" : (item.zh || "");
+  zh.classList.toggle("draft", drafting);
   const placed = historyStick(history.scrollTop, history.scrollHeight, history.clientHeight, state.follow);
   history.textContent = "";
   if (gapDivider) {
@@ -236,7 +248,7 @@ function render() {
     mark.textContent = HISTORY_DIVIDER;
     history.appendChild(mark);
   }
-  const rows = orderedCaptions(items).slice(-12);
+  const rows = orderedCaptions(finalsOnly()).slice(-12);
   for (const row of rows) {
     const li = document.createElement("li");
     if (failed(row)) {
@@ -317,6 +329,11 @@ function connect() {
       if (paused) for (const [id, item] of items) {
         if (item.draft || item.status === "draft") items.delete(id);
       }
+      render();
+    },
+    onDraft: (item) => {
+      if (privacyPaused) return;
+      view.apply(item);
       render();
     },
     onDelete: show,
