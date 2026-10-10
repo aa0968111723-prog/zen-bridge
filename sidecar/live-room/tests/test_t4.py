@@ -221,3 +221,29 @@ def test_plan_file_with_a_bom_loads(tmp_path):
     p = tmp_path / "plan.json"
     p.write_bytes(b"\xef\xbb\xbf" + json.dumps({"segments": 1, "segment_s": 6.0, "reps": 1}).encode())
     assert t4.load_plan(p)["segments"] == 1
+
+
+def test_asr_row_may_use_the_app_gpu_path(tmp_path, monkeypatch):
+    """An ASR row with gpu=vulkan goes through app.asr_gpu.build_asr and never silently measures CPU."""
+    from app import asr_gpu
+    from app.asr import AsrResult
+    plan = t4.load_plan({"segments": 1, "segment_s": 5, "reps": 1,
+                         "asr": [{"id": "vk", "model": "m.bin", "gpu": "vulkan", "whisper_dir": "%X%/wv"}]},
+                        env={"X": str(tmp_path)})
+    row = plan["asr"][0]
+    assert row["whisper_dir"] == str(tmp_path / "wv")
+    seen = {}
+
+    def fake_build(cpu, model, env=None):
+        seen.update(env)
+        return "ENGINE", AsrResult(ok=True)
+    monkeypatch.setattr(asr_gpu, "build_asr", fake_build)
+    eng = t4.real_engines(tmp_path, None)
+    assert eng.asr(row) == "ENGINE"
+    assert seen["BREEZE_ASR_GPU"] == "vulkan" and seen["BREEZE_ASR_GPU_AUDIO_CTX"] == "640"
+
+    def falls_back(cpu, model, env=None):
+        return cpu(), AsrResult(ok=True)
+    monkeypatch.setattr(asr_gpu, "build_asr", falls_back)
+    with pytest.raises(SystemExit):
+        eng.asr(row)

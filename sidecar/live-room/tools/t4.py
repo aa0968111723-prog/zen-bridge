@@ -37,7 +37,7 @@ TOP_REQUIRED = {"segments": int, "segment_s": (int, float), "reps": int}
 TOP_OPTIONAL = {"cooldown_s": (int, float), "require_ac": bool, "abort_on_ev37": bool, "asr": list,
                 "draft": list, "mt": list, "concurrent": dict, "mt_sentences": int, "det_runs": int}
 ASR_KEYS = {"id": str, "model": str, "threads": int, "audio_ctx": int, "beam": int, "prompt": str,
-            "no_fallback": bool, "flash_attn": bool}
+            "no_fallback": bool, "flash_attn": bool, "gpu": str, "whisper_dir": str}
 DRAFT_KEYS = {"id": str, "dir": str, "threads": int, "precision": str}
 MT_KEYS = {"id": str, "gguf": str, "threads": int, "langs": list, "profile": str,
            "ngl": int, "server": str}       # ngl/server: GPU (Vulkan) llama-server rows
@@ -99,7 +99,7 @@ def load_plan(source, env=None) -> dict:
             if row["id"] in seen:
                 raise PlanError(f"id 重複：{row['id']}")
             seen.add(row["id"])
-            for k in ("dir", "gguf", "model", "server"):
+            for k in ("dir", "gguf", "model", "server", "whisper_dir"):
                 if k in row:
                     row[k] = _expand(row[k], env)
         if layer == "draft":
@@ -517,6 +517,22 @@ def real_engines(models_dir: Path, llama_server: Path | None) -> Engines:
     from app.native_asr import NativeResidentAsr
 
     def asr(row):
+        if row.get("gpu"):
+            # The app's opt-in GPU path (app.asr_gpu): same worker, self-test and params as live.
+            from app.asr_gpu import build_asr, gpu_status
+            genv = {"BREEZE_ASR_GPU": row["gpu"], "BREEZE_WHISPER_DIR": row.get("whisper_dir", ""),
+                    "BREEZE_ASR_GPU_THREADS": str(row.get("threads", 4)),
+                    "BREEZE_ASR_GPU_AUDIO_CTX": str(row.get("audio_ctx", 640)),
+                    "BREEZE_ASR_GPU_BEAM": str(row.get("beam", 1) or 1),
+                    "BREEZE_ASR_GPU_NO_FALLBACK": "1" if row.get("no_fallback", True) else "0"}
+
+            def no_cpu():
+                raise SystemExit("GPU 列不改量 CPU")
+            try:
+                engine, started = build_asr(no_cpu, model_path(row["model"], models_dir), env=genv)
+            except SystemExit:
+                raise SystemExit(f"GPU 啟動失敗：{gpu_status().get('error')}")
+            return engine
         env = dict(os.environ)
         if row.get("no_fallback"):
             env["BREEZE_ASR_TEMPERATURE_INC"] = "0"
