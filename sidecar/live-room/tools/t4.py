@@ -123,6 +123,8 @@ def load_plan(source, env=None) -> dict:
             if not (isinstance(pair, list) and len(pair) == 3):
                 raise PlanError("concurrent.pairs 每一組是 [asr_id, draft_id, mt_id]")
             for layer, pid in zip(("asr", "draft", "mt"), pair):
+                if layer == "mt" and pid == "none":
+                    continue                     # no local MT model on this machine: ASR + draft only
                 if pid not in ids[layer]:
                     raise PlanError(f"concurrent.pairs 的 {layer} id 不存在：{pid}")
         if not isinstance(conc.get("minutes", 5), (int, float)) or conc.get("minutes", 5) <= 0:
@@ -348,7 +350,8 @@ def _mt_layer(row: dict, plan: dict, sentences, eng: Engines, ctx: dict) -> list
 def _concurrent_layer(pair, plan: dict, clips, eng: Engines, ctx: dict) -> dict:
     """Breeze + draft + MT together; one slice released every segment_s (real pace)."""
     by = {layer: {r["id"]: r for r in plan.get(layer, [])} for layer in ("asr", "draft", "mt")}
-    asr_row, draft_row, mt_row = by["asr"][pair[0]], by["draft"][pair[1]], by["mt"][pair[2]]
+    asr_row, draft_row = by["asr"][pair[0]], by["draft"][pair[1]]
+    mt_row = by["mt"].get(pair[2])               # None when the pair says "none"
     conc = plan["concurrent"]
     seg_s = float(plan["segment_s"])
     total_s = float(conc.get("minutes", 5)) * 60.0
@@ -356,8 +359,8 @@ def _concurrent_layer(pair, plan: dict, clips, eng: Engines, ctx: dict) -> dict:
     out = _base_row("concurrent", "+".join(pair), ctx)
     asr = eng.asr(asr_row)
     draft = eng.draft(draft_row)
-    mt, mt_close = eng.mt(mt_row)
-    lang = mt_row.get("langs", ["en"])[0]
+    mt, mt_close = eng.mt(mt_row) if mt_row is not None else (None, None)
+    lang = (mt_row or {}).get("langs", ["en"])[0]
     a3, a5, a6, b2 = [], [], [], []
     lock = threading.Lock()
     jobs: list = []
@@ -377,7 +380,7 @@ def _concurrent_layer(pair, plan: dict, clips, eng: Engines, ctx: dict) -> dict:
             res = asr.transcribe(wav, asr_row.get("prompt", ""))
             a5.append(eng.clock() - started)
             text = getattr(res, "text", "") or ""
-            if text:
+            if text and mt is not None:
                 t0 = eng.clock()
                 mt.translate(text, tgt_lang=lang)
                 a6.append(eng.clock() - t0)

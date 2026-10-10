@@ -192,3 +192,14 @@ def test_det_subcommand(clips, tmp_path):
     rows = json.loads(args.out.read_text(encoding="utf-8"))
     assert rows == [{"threads": 1, "clips": 3, "identical": 3, "deterministic": True},
                     {"threads": 2, "clips": 3, "identical": 0, "deterministic": False}]
+
+
+def test_concurrent_without_local_mt(clips, tmp_path):
+    a, r = clips
+    p = small_plan()
+    p["asr"], p["mt"] = p["asr"][3:4], []
+    p["draft"] = p["draft"][:1]
+    p["concurrent"]["pairs"] = [["nf-ac640", "xasr-int8-t1", "none"]]
+    code, rows = t4.run_t4(t4.load_plan(p), a, r, tmp_path / "c.jsonl", engines(mt=lambda row: pytest.fail("no mt")))
+    conc = rows[-1]
+    assert code == 0 and conc["layer"] == "concurrent" and conc["a6_p95_s"] is None and conc["a5_p95_s"] is not None
