@@ -45,6 +45,7 @@ UsePreviousLanguage=no
 UsePreviousGroup=no
 ShowLanguageDialog=no
 UninstallDisplayIcon={app}\Breeze.exe
+SetupIconFile={#PayloadDir}\desktop\breeze.ico
 CloseApplications=yes
 RestartApplications=no
 AppMutex=Local\BreezeLiveRoomApp

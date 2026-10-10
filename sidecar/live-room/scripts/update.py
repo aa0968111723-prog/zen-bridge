@@ -118,6 +118,58 @@ def restore(root, backup):
             shutil.rmtree(root / '.venv')
         shutil.move(str(backup / 'venv'), str(root / '.venv'))
 
+# ---------------------------------------------------------------- DB safety (round3 C3)
+def db_paths(root):
+    """(zen.sqlite3, zen-identity.sqlite3) for this install, after .env is applied."""
+    fill_process_environ(root / '.env')
+    from app.admin import db as zdb
+    return zdb.default_db_path(), zdb.identity_db_path()
+
+def db_version(path):
+    import sqlite3
+    if not Path(path).is_file():
+        return None
+    with contextlib.closing(sqlite3.connect(f'{Path(path).resolve().as_uri()}?mode=ro', uri=True)) as c:
+        return c.execute('PRAGMA user_version').fetchone()[0]
+
+def snapshot_db(root, backup):
+    """Verified copy of both DBs into <backup>/db before any software is replaced; the new
+    software may migrate the schema on first start. Returns the record, or None (no DB yet)."""
+    from app.admin import db as zdb
+    main, identity = db_paths(root)
+    if not main.is_file():
+        return None
+    out = zdb.backup_set(main, backup / 'db', identity)
+    record = {'schema_version': db_version(main), 'db_path': str(main), 'file': out['file'],
+              'identity': out['files'].get('identity')}
+    (backup / 'db.json').write_text(json.dumps(record, ensure_ascii=False))
+    return record
+
+def db_rollback_check(root, backup, restore_db=False):
+    """After the software is rolled back: if the DB was migrated past the snapshot, say so and
+    (only with --restore-db) put the pre-update snapshot back. Never overwrites silently."""
+    info_path = backup / 'db.json'
+    if not info_path.is_file():
+        return 'no-snapshot'
+    record = json.loads(info_path.read_text())
+    main, identity = db_paths(root)
+    now = db_version(main)
+    if now is None or record.get('schema_version') is None or now <= record['schema_version']:
+        return 'compatible'
+    snap = backup / 'db' / record['file']
+    if not restore_db:
+        print(f'注意：資料庫已升級到 schema v{now}，舊版程式只認得 v{record["schema_version"]}，啟動時會拒絕開啟。')
+        print(f'更新前的資料庫快照：{snap}')
+        print('要還原到更新前的資料庫，請執行：rollback.bat -RestoreDb'
+              '（更新之後新增的字幕會另存成 *.pre-restore-*，不會刪除）')
+        return 'newer'
+    from app.admin import db as zdb
+    zdb.restore_from(snap, main)
+    if record.get('identity'):
+        zdb.restore_from(backup / 'db' / record['identity'], identity)
+    print(f'已還原更新前的資料庫（schema v{record["schema_version"]}）；更新後的版本另存為 *.pre-restore-*。')
+    return 'restored'
+
 def require_stopped(root):
     fill_process_environ(root / '.env')
     settings = Settings.from_env()
@@ -164,6 +216,7 @@ def apply(root, stage, run=subprocess.run):
     run([str(python), '-m', 'pip', 'install', '--no-cache-dir', '-r', str(stage / 'requirements-lock.txt')], check=True)
     run([str(python), '-m', 'compileall', '-q', str(stage / 'app'), str(stage / 'scripts')], check=True)
     snapshot(root, backup)
+    snapshot_db(root, backup)            # round3 C3: the new software may migrate the schema
     pointer = root / '.updates' / 'previous.json'
     pointer.write_text(json.dumps({'backup': backup.name}))
     try:
@@ -182,6 +235,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--rollback', action='store_true')
+    parser.add_argument('--restore-db', action='store_true',
+                        help='rollback 時一併還原更新前的資料庫快照（目前的檔案會另存，不會刪除）')
     args = parser.parse_args()
     with lock(ROOT):
         if args.rollback:
@@ -191,7 +246,9 @@ def main():
             if not re.fullmatch(r'backup-[a-f0-9]{32}', name):
                 raise ValueError('Invalid backup path')
             restore(ROOT, ROOT / '.updates' / name)
-            (ROOT / '.updates' / 'previous.json').unlink()
+            state = db_rollback_check(ROOT, ROOT / '.updates' / name, restore_db=args.restore_db)
+            if state != 'newer':           # keep the pointer so --restore-db can still run
+                (ROOT / '.updates' / 'previous.json').unlink()
             print('Previous software restored. Captions and settings preserved.')
             return 0
         try:

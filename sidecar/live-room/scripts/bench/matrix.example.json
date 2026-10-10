@@ -1,0 +1,20 @@
+{
+  "_comment": "Copy to %USERPROFILE%\\zen-bench\\matrix.json and fix the paths. Nothing is downloaded by zbench.",
+  "whisper_cli": "C:\\Users\\YOU\\zen-bench\\bin\\whisper-cli.exe",
+  "whisper_server": "C:\\Users\\YOU\\zen-bench\\bin\\whisper-server.exe",
+  "segments_dir": "C:\\Users\\YOU\\zen-bench\\audio",
+  "max_segments": 50,
+  "asr_models": [
+    {"name": "breeze-q5_0", "path": "C:\\Users\\YOU\\zen-bench\\models\\ggml-breeze-asr-25-q5_0.bin",
+     "url": "https://huggingface.co/MediaTek-Research/Breeze-ASR-25", "license": "Apache-2.0"}
+  ],
+  "asr": {"threads": [4, 6, 8], "audio_ctx": [0, 768, 640, 512], "beam": [5, 1], "modes": ["cli", "resident"]},
+  "llm": {"enabled": true, "models": ["qwen3:4b", "qwen3:1.7b"], "threads": [2, 4, 6], "ctx": [2048]},
+  "embed": {"enabled": true, "model": "qwen3-embedding:0.6b", "batches": [16, 64], "threads": 2},
+  "concurrent": {"enabled": false, "minutes": 10, "asr_threads": 6, "audio_ctx": 640, "beam": 5,
+                 "llm_model": "qwen3:4b", "llm_threads": 2, "queue_max": 4, "stale_s": 8,
+                 "configs": [{"config_id": "B", "asr_threads": 6, "llm_threads": 2},
+                             {"config_id": "A", "asr_threads": 6, "llm_threads": 4},
+                             {"config_id": "C", "asr_threads": 4, "llm_threads": 2}]},
+  "watchdog_s": 3
+}

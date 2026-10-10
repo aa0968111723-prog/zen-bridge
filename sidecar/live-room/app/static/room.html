@@ -4,8 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>禪譯聽眾</title>
+<link rel="icon" href="/static/brand/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/static/brand/logo-32.png">
+<link rel="apple-touch-icon" href="/static/brand/logo-256.png">
 <style>
 [hidden] { display: none !important; }
+.tgt:lang(ja), #en:lang(ja), #history span:lang(ja) { font-family: "Yu Gothic UI","Meiryo","Hiragino Sans","Noto Sans JP",sans-serif; line-break: strict; word-break: keep-all; overflow-wrap: anywhere; }
+#en:lang(ja) { line-height: 1.6; }
+rt { font-size: .5em; ruby-position: over; }
+html.project rt, body.project rt { font-size: .45em; }
+.zh.draft, .zh .draft { color: var(--muted) !important; font-weight: 500 !important; font-style: normal; }
+html.project .draft, body.project .draft { display: none !important; }
 :root { --bg: #fbf6ee; --fg: #2a2118; --muted: #6b5644; --line: rgba(90, 60, 30, .2); --size: clamp(1.5rem, 7vw, 2.125rem); }
 html { background: var(--bg); }
 html.dark, html.project { background: #16130f; }
@@ -77,6 +86,7 @@ li.gap { color: var(--muted); text-align: center; font-size: 14px; border-top-st
   .en, .zh, #toast { transition: opacity .2s; }
 }
 </style>
+<link rel="stylesheet" href="/static/room_a11y.css">
 <script>
 /* Saved size, dark, and projection apply before first paint.
    There is no Content-Security-Policy on this page today.
@@ -115,6 +125,7 @@ li.gap { color: var(--muted); text-align: center; font-size: 14px; border-top-st
 <label>顯示 <select id="mode"><option value="both">中英</option><option value="zh">中文</option><option value="en">只看譯文</option><option value="project">投影</option></select></label>
 <label>字級 <select id="size"><option value="28">小</option><option value="34" selected>中</option><option value="46">大</option><option value="64">特大</option></select></label>
 <label>主題 <select id="theme"><option value="system" selected>跟隨系統</option><option value="light">亮色</option><option value="dark">暗色</option></select></label>
+<label id="ruby-label" hidden><input id="ruby" type="checkbox" checked> 振假名</label>
 <label id="wake-label"><input id="wake" type="checkbox" checked> 保持螢幕亮著</label>
 <p id="wake-help" hidden>這個瀏覽器不能保持螢幕亮著，請把自動鎖定改長一點。</p>
 <button id="full" type="button">全螢幕</button>
@@ -122,7 +133,7 @@ li.gap { color: var(--muted); text-align: center; font-size: 14px; border-top-st
 </div>
 <p id="stage-note" class="stage-note">等待主持人開始</p>
 <div class="stage" id="stage">
-<div class="en" id="en" lang="en"></div>
+<div class="en tgt" id="en" lang="en"></div>
 <div class="zh" id="zh"></div>
 </div>
 <p id="hist-label">最近字幕</p>
@@ -132,6 +143,7 @@ li.gap { color: var(--muted); text-align: center; font-size: 14px; border-top-st
 <script type="module">
 import { audienceClientId, connectRoom, createCaptionView, liveTail, orderedCaptions, retryCountdown } from "/static/room_client.js";
 import { GAP_TOAST_MS, HISTORY_DIVIDER, expiryNotice, gapCopy, historyStick, stageMode, stageNoteFor } from "/static/room_view.js";
+import { createRubyMemory, modeLabels, paintTarget, targetLang } from "/static/room_target.js";
 import { appearance, focusAfterProjection, fullscreenAvailable, leaveProjection, readPrefs, refreshWakeLock, releaseWakeLock, safeStorage, themeIsDark, wakeLockSupported, writePrefs } from "/static/room_prefs.js";
 const room = location.pathname.split("/").filter(Boolean).pop();
 const listenKey = new URLSearchParams(location.search).get("k") || "";
@@ -161,6 +173,8 @@ function applyAppearance() {
   if (size) size.value = prefs.size;
   if (theme) theme.value = prefs.theme;
   if (wake) wake.checked = prefs.wake !== false;
+  const rubyBox = document.querySelector("#ruby");
+  if (rubyBox) rubyBox.checked = prefs.ruby !== false;
   const supported = wakeLockSupported(navigator);
   const wakeLabel = document.querySelector("#wake-label");
   const wakeHelp = document.querySelector("#wake-help");
@@ -199,6 +213,8 @@ async function syncWake(visibility) {
 }
 applyAppearance();
 let hostLive = false;
+let privacyPaused = false;
+let resumedNotice = false;
 let kind = "connecting";
 let lastCaptionAt = 0;
 let gapDivider = false;
@@ -209,6 +225,22 @@ const zh = document.querySelector("#zh");
 const history = document.querySelector("#history");
 const stage = document.querySelector("#stage");
 const stageNoteEl = document.querySelector("#stage-note");
+// round4 #7: target language of this room (from the captions themselves).
+let tgtLang = "en";
+const rubyMemory = createRubyMemory();
+function applyTargetLang(lang) {
+  if (lang === tgtLang) return;
+  tgtLang = lang;
+  en.lang = lang;
+  const labels = modeLabels(lang);
+  const mode = document.querySelector("#mode");
+  if (mode) for (const opt of mode.options) {
+    if (opt.value === "both") opt.textContent = labels.both;
+    if (opt.value === "en") opt.textContent = labels.en;
+  }
+  const rubyLabel = document.querySelector("#ruby-label");
+  if (rubyLabel) rubyLabel.hidden = lang !== "ja";
+}
 function failed(item) {
   return item && (item.status === "missing" || item.status === "error" || item.status === "timeout" || item.status === "cancelled");
 }
@@ -220,12 +252,24 @@ function paintChrome() {
   const mode = !hasCaption && raw === "live" ? "empty" : raw;
   stage.classList.toggle("idle", mode === "idle");
   stage.classList.toggle("stale", mode === "stale" || mode === "ended");
-  stageNoteEl.textContent = failed(item) ? "這段沒有字幕" : stageNoteFor(kind, mode, hostLive);
+  stageNoteEl.textContent = privacyPaused ? "字幕暫停中" : resumedNotice ? "字幕已恢復" : failed(item) ? "這段沒有字幕" : stageNoteFor(kind, mode, hostLive);
+}
+function finalsOnly() {
+  const out = new Map();
+  for (const [id, row] of items) if (!row.draft) out.set(id, row);
+  return out;
 }
 function render() {
-  const item = liveTail(items, state.follow, state.pinned);
-  en.textContent = !item || failed(item) ? "" : (item.en || "");
+  // round4 #5: drafts are grey and live only on the stage line; projection never shows them.
+  const projecting = prefs.mode === "project";
+  const pool = projecting ? finalsOnly() : items;
+  const item = liveTail(pool, state.follow, state.pinned);
+  const drafting = !!(item && item.draft);
+  if (item && !drafting) applyTargetLang(targetLang(item, tgtLang));
+  if (!item || failed(item) || drafting) en.textContent = "";
+  else paintTarget(document, en, item, { memory: rubyMemory, rubyOn: prefs.ruby !== false });
   zh.textContent = !item || failed(item) ? "" : (item.zh || "");
+  zh.classList.toggle("draft", drafting);
   const placed = historyStick(history.scrollTop, history.scrollHeight, history.clientHeight, state.follow);
   history.textContent = "";
   if (gapDivider) {
@@ -234,7 +278,7 @@ function render() {
     mark.textContent = HISTORY_DIVIDER;
     history.appendChild(mark);
   }
-  const rows = orderedCaptions(items).slice(-12);
+  const rows = orderedCaptions(finalsOnly()).slice(-12);
   for (const row of rows) {
     const li = document.createElement("li");
     if (failed(row)) {
@@ -242,7 +286,7 @@ function render() {
     } else if (row.en) {
       li.append(document.createTextNode((row.zh || "") + "　"));
       const english = document.createElement("span");
-      english.lang = "en";
+      english.lang = targetLang(row, tgtLang);
       english.textContent = row.en;
       li.append(english);
     } else {
@@ -308,7 +352,20 @@ function connect() {
       }
       paintChrome();
     },
-    onEvent: (item) => { lastCaptionAt = Date.now(); show(item); },
+    onEvent: (item) => { resumedNotice = false; lastCaptionAt = Date.now(); show(item); },
+    onPause: (paused) => {
+      resumedNotice = privacyPaused && !paused;
+      privacyPaused = paused;
+      if (paused) for (const [id, item] of items) {
+        if (item.draft || item.status === "draft") items.delete(id);
+      }
+      render();
+    },
+    onDraft: (item) => {
+      if (privacyPaused) return;
+      view.apply(item);
+      render();
+    },
     onDelete: show,
     onExpire: (data) => {
       const note = document.querySelector("#expiry");
@@ -372,6 +429,7 @@ document.querySelector("#leave-project").onclick = () => {
   restoreProjectionFocus();
 };
 document.querySelector("#mode").onchange = (ev) => { remember({ ...prefs, mode: ev.target.value }); };
+document.querySelector("#ruby").onchange = (ev) => { remember({ ...prefs, ruby: ev.target.checked }); render(); };
 document.querySelector("#size").onchange = (ev) => { remember({ ...prefs, size: ev.target.value }); };
 document.querySelector("#wake").onchange = (ev) => {
   remember({ ...prefs, wake: ev.target.checked });

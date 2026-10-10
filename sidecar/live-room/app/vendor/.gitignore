@@ -1,0 +1,3 @@
+# Downloaded by scripts/fetch_silero_vad.py (sha256-verified). Not committed.
+*.onnx
+msvc/

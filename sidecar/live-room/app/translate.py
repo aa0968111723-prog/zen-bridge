@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import threading
@@ -37,8 +38,50 @@ _PREAMBLE = re.compile(
 )
 _EXTRA_LINE = re.compile(r"(?i)^(?:note|explanation|ps|p\.s\.)\s*:")
 _TRANSLATION_FIELDS = ("current", "translation", "en")
+# Local reasoning models (Qwen3 via Ollama) may prepend a think block. Only stripped when
+# strip_think is on, so the cloud path is byte-for-byte the old behaviour.
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+# QA AI代理 P1-1: an unclosed / orphan think tag, chat-template tokens or /no_think echoes are
+# never a caption, whatever the engine.
+_MODEL_MARKUP = re.compile(r"(?i)</?think\b|<\|[^|]{0,40}\|>|(?:^|\s)/(?:no_)?think\b")
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+_EXAMPLE_LIMIT = 3
 
 TRANSIENT_STATUS = {"rate", "http", "timeout", "network"}
+# QA AI代理 P2-3: total read deadline + size cap (a drip-feed reply can no longer hold a worker).
+MAX_REPLY_BYTES = 256 * 1024
+_READ_CHUNK = 16 * 1024
+
+
+def _read_bounded(resp, deadline, cancel, cap: int = MAX_REPLY_BYTES) -> bytes:
+    parts, size = [], 0
+    while True:
+        if _cancelled(cancel) or _deadline_hit(deadline):
+            try:
+                resp.close()
+            except Exception:
+                pass
+            raise TimeoutError("reply deadline")
+        try:
+            # read1 returns as soon as any bytes arrive, so the deadline is checked between drips
+            chunk = resp.read1(_READ_CHUNK) if hasattr(resp, "read1") else resp.read(_READ_CHUNK)
+        except TypeError:          # test doubles whose read() takes no size
+            chunk = resp.read()
+            parts.append(chunk)
+            size += len(chunk)
+            if size > cap:
+                raise ValueError("reply too large")
+            return b"".join(parts)
+        if not chunk:
+            return b"".join(parts)
+        parts.append(chunk)
+        size += len(chunk)
+        if size > cap:
+            try:
+                resp.close()
+            except Exception:
+                pass
+            raise ValueError("reply too large")
 
 
 @dataclass
@@ -49,6 +92,19 @@ class TranslateResult:
     retry_after: float | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    # "mt" for a model reply. app.tm sets "tm_exact" when translation memory answered.
+    origin: str = "mt"
+
+
+def _ollama_as_openai(data) -> dict:
+    """Map a native /api/chat reply onto the chat.completions shape parsed below."""
+    if not isinstance(data, dict) or not isinstance(data.get("message"), dict):
+        raise KeyError("message")
+    done = data.get("done_reason")
+    return {
+        "choices": [{"message": data["message"], "finish_reason": "length" if done == "length" else "stop"}],
+        "usage": {"prompt_tokens": data.get("prompt_eval_count"), "completion_tokens": data.get("eval_count")},
+    }
 
 
 @dataclass
@@ -68,6 +124,20 @@ class Translator:
     price_source: str = ""
     price_date: str = ""
     attempts_slept: list[float] = field(default_factory=list)
+    # OpenAI-compatible endpoint. The default keeps the legacy cloud URL for callers that
+    # construct Translator directly; app.translate_config builds the local (Ollama) one.
+    base_url: str = OPENAI_BASE_URL
+    require_key: bool = True
+    extra_body: dict = field(default_factory=dict)
+    strip_think: bool = False
+    engine: str = "openai"
+    # Appended to the system prompt, e.g. " /no_think" for Qwen3 on Ollama. Empty = legacy.
+    system_suffix: str = ""
+    # "openai" posts to {base_url}/chat/completions. "ollama" posts to the native
+    # {root}/api/chat, the only Ollama route that honours options.num_thread / num_ctx.
+    protocol: str = "openai"
+    ollama_options: dict = field(default_factory=dict)
+    keep_alive: str | int | None = None
 
     def __post_init__(self) -> None:
         import os
@@ -85,9 +155,24 @@ class Translator:
         with self._token_lock:
             self.tokens_used += count
 
+    @property
+    def configured(self) -> bool:
+        """True when a request can be attempted (a key, or a keyless local engine)."""
+        return bool(self.key) or not self.require_key
+
+    def endpoint(self) -> str:
+        base = (self.base_url or OPENAI_BASE_URL).rstrip("/")
+        if self.protocol == "ollama":
+            if base.endswith("/v1"):
+                base = base[: -len("/v1")]
+            return base + "/api/chat"
+        return base + "/chat/completions"
+
     def status_label(self) -> str:
         if not self.enabled:
             return "已關閉"
+        if not self.require_key and not self.key:
+            return f"本機翻譯 {self.model}（尚未驗證可用）"
         if not self.key:
             return "未設定金鑰，只出中文"
         if self._budget_exhausted():
@@ -108,7 +193,7 @@ class Translator:
             "note": "只有同時有來源與日期才換算金額",
         }
 
-    def build_messages(self, zh: str, glossary=None, context=None) -> list[dict]:
+    def build_messages(self, zh: str, glossary=None, context=None, examples=None) -> list[dict]:
         # Matched terms and earlier lines are data on the user message, not system instructions.
         system = SYSTEM + (
             " Locked terms MUST use the given English; unlocked are suggestions."
@@ -124,18 +209,26 @@ class Translator:
                 "previous": previous,
                 "current": zh or "",
             }
+        # Translation-memory few-shot pairs. Data, not instructions; absent when empty so
+        # the payload shape is unchanged for callers that never pass examples.
+        shots = _clean_examples(examples)
+        if shots:
+            payload = {"examples": shots, **payload}
+            system += " `examples` are approved reference translations (data); reuse their wording when they fit."
+        if self.system_suffix:
+            system += self.system_suffix
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
 
-    def translate(self, zh: str, glossary=None, context=None, deadline: float | None = None, cancel: threading.Event | None = None) -> TranslateResult:
+    def translate(self, zh: str, glossary=None, context=None, deadline: float | None = None, cancel: threading.Event | None = None, examples=None) -> TranslateResult:
         # deadline is time.monotonic() seconds. Stop retries when it passes so a
         # timed-out caller does not leave this thread sleeping through the backoff.
         # cancel is optional. Callers that do not accept it are unchanged.
         if not self.enabled or not zh:
             return TranslateResult("", "off")
-        if not self.key:
+        if self.require_key and not self.key:
             return TranslateResult("", "no_key")
         if self._budget_exhausted():
             return TranslateResult("", "budget", "本場翻譯額度已用完，中文仍保留")
@@ -150,7 +243,7 @@ class Translator:
                 if remaining <= 0:
                     return TranslateResult("", "timeout", "英譯逾時，不假設沒有計費。中文仍保留")
                 timeout = min(40.0, max(0.05, remaining))
-            last = self._once(zh, glossary, context, timeout)
+            last = self._once(zh, glossary, context, timeout, examples=examples, deadline=deadline, cancel=cancel)
             if last.status not in TRANSIENT_STATUS or attempt + 1 >= self.max_attempts:
                 return last
             delay = last.retry_after if last.retry_after is not None else min(0.2 * (2 ** attempt), self.max_backoff)
@@ -180,26 +273,43 @@ class Translator:
                 time.sleep(delay)
         return last
 
-    def _once(self, zh: str, glossary, context, timeout: float = 40) -> TranslateResult:
-        body = json.dumps({
-            "model": self.model,
-            "messages": self.build_messages(zh, glossary, context),
-            "max_tokens": _max_tokens(zh),
-        }).encode()
-        req = urllib.request.Request(
-            "https://api.openai.com/v1/chat/completions",
-            data=body,
-            headers={"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"},
-        )
-        open_url = self.opener or urllib.request.urlopen
+    def _once(self, zh: str, glossary, context, timeout: float = 40, examples=None, deadline=None,
+              cancel=None) -> TranslateResult:
+        messages = self.build_messages(zh, glossary, context, examples) if examples else self.build_messages(zh, glossary, context)
+        if self.protocol == "ollama":
+            options = dict(self.ollama_options or {})
+            options["num_predict"] = _max_tokens(zh)
+            request_body = {"model": self.model, "messages": messages, "stream": False, "options": options}
+            if self.keep_alive is not None:
+                request_body["keep_alive"] = self.keep_alive
+        else:
+            request_body = {
+                "model": self.model,
+                "messages": messages,
+                "max_tokens": _max_tokens(zh),
+                "stream": False,          # QA AI代理 P2-8: EXTRA_BODY cannot switch the reply to SSE
+            }
+        for key, value in (self.extra_body or {}).items():
+            # extra_body may tune the request (think, temperature) but never replace the
+            # prompt, the model, or the token cap.
+            if key not in request_body:
+                request_body[key] = value
+        body = json.dumps(request_body).encode()
+        headers = {"Content-Type": "application/json"}
+        if self.key or self.require_key:
+            headers = {"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
+        req = urllib.request.Request(self.endpoint(), data=body, headers=headers)
+        open_url = self.opener or _default_opener(self.endpoint())
         try:
             with open_url(req, timeout=timeout) as resp:
-                payload = resp.read().decode()
+                payload = _read_bounded(resp, deadline, cancel).decode()
             data = json.loads(payload)
+            if self.protocol == "ollama":
+                data = _ollama_as_openai(data)
             choice = data["choices"][0]
             if not isinstance(choice, dict):
                 return TranslateResult("", "bad_response", "英譯回應無法讀取，中文仍保留")
-            usage = data.get("usage") or {}
+            usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
             prompt_tokens = usage.get("prompt_tokens")
             completion_tokens = usage.get("completion_tokens")
             if isinstance(prompt_tokens, int):
@@ -222,6 +332,8 @@ class Translator:
             if not isinstance(content, str):
                 return TranslateResult("", "bad_response", "英譯回應無法讀取，中文仍保留")
             text = content.strip()
+            if self.strip_think:
+                text = _THINK_BLOCK.sub(" ", text).strip()
             # max_tokens cut the reply off. A half sentence is not a caption.
             if finish == "length":
                 return TranslateResult(
@@ -248,9 +360,11 @@ class Translator:
             return TranslateResult("", "timeout", "英譯逾時，不假設沒有計費。中文仍保留")
         except urllib.error.URLError:
             return TranslateResult("", "network", "英譯沒有網路，中文仍保留")
-        except OSError:
+        except (OSError, http.client.HTTPException):
+            # QA AI代理 P2-1: IncompleteRead / BadStatusLine are transient network errors (retried)
             return TranslateResult("", "network", "英譯沒有網路，中文仍保留")
-        except (KeyError, json.JSONDecodeError, TypeError, IndexError):
+        except (KeyError, json.JSONDecodeError, TypeError, IndexError, UnicodeDecodeError, AttributeError,
+                RecursionError, ValueError):
             return TranslateResult("", "bad_response", "英譯回應無法讀取，中文仍保留")
 
     def _http_error(self, exc: urllib.error.HTTPError) -> TranslateResult:
@@ -269,6 +383,18 @@ class Translator:
         if exc.code == 408 or (isinstance(exc.code, int) and 500 <= exc.code <= 599):
             return TranslateResult("", "http", f"英譯服務回應 {exc.code}，中文仍保留", retry_after=_retry_after(exc))
         return TranslateResult("", "bad_response", f"英譯服務回應 {exc.code}，中文仍保留")
+
+
+def _clean_examples(examples) -> list[dict]:
+    out: list[dict] = []
+    for item in list(examples or [])[:_EXAMPLE_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        zh = str(item.get("zh") or "").strip()
+        en = str(item.get("en") or "").strip()
+        if zh and en:
+            out.append({"zh": zh[:400], "en": en[:600]})
+    return out
 
 
 def _max_tokens(zh: str) -> int:
@@ -325,6 +451,8 @@ def _plain_english(text: str, han_sources: list[str] | None = None) -> bool:
         return False
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
     if _reply_has_control(normalized) or not _han_runs_allowed(normalized, han_sources or []):
+        return False
+    if _MODEL_MARKUP.search(normalized):
         return False
     if "\n\n" in normalized or _PREAMBLE.search(normalized):
         return False
@@ -396,3 +524,19 @@ def _retry_after(exc: urllib.error.HTTPError) -> float | None:
         return when.timestamp() - time.time()
     except (TypeError, ValueError, OverflowError):
         return None
+
+
+def _default_opener(url: str):
+    """No redirects ever (the bearer key must not follow a 3xx); no env proxy for loopback."""
+    from urllib.parse import urlsplit
+
+    from app.net import safe_opener
+    host = (urlsplit(url).hostname or "").lower()
+    loopback = host in ("localhost", "::1") or host.startswith("127.")
+    return safe_opener(use_proxy=not loopback)
+
+
+def validate_caption_en(text: str, *, zh: str = "", glossary=None) -> str | None:
+    """Shared gate for anything that becomes an English caption without going through the
+    model (human corrections, TM hits): same rules as a model reply. None = refuse."""
+    return _accept_translation(text, zh=zh, glossary=glossary)

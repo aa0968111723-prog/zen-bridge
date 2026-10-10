@@ -22,7 +22,8 @@ internal sealed class BreezeWindow : Form {
     readonly Label status = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.White, BackColor = Color.FromArgb(16,24,39), Font = new Font("Microsoft JhengHei UI", 16), Text = "正在準備中文辨識\n第一次大約要半分鐘，完成後會自動進入。\n請先不要關閉這個視窗。" };
     readonly WebView2 browser = new WebView2 { Dock = DockStyle.Fill, Visible = false };
     readonly MenuStrip menu = new MenuStrip();
-    Process service;
+    readonly ToolStripMenuItem gpuMenu = new ToolStripMenuItem("GPU 加速（實驗，下次啟動生效）");
+    Process service, adminService;
     IntPtr job;
     bool closing, stopped, ready, jobAssigned;
     string url, rememberedError, uiUrl, hostToken;
@@ -47,6 +48,17 @@ internal sealed class BreezeWindow : Form {
         if (File.Exists(icon)) Icon = new Icon(icon);
         menu.Items.Add("檢查更新", null, async delegate { await CheckUpdates(); });
         menu.Items.Add("本機設定", null, delegate { Process.Start("explorer.exe", "\"" + root + "\""); });
+        menu.Items.Add("本機後台", null, delegate { StartAdmin(); });
+        gpuMenu.Enabled = File.Exists(Path.Combine(root,"tools","whisper-vulkan","build-manifest.json"));
+        gpuMenu.Checked = GpuEnabled();
+        gpuMenu.Click += (s,e) => {
+            Directory.CreateDirectory(Path.Combine(root,"data"));
+            gpuMenu.Checked=!gpuMenu.Checked;
+            File.WriteAllText(Path.Combine(root,"data","performance.json"),
+                new JavaScriptSerializer().Serialize(new Dictionary<string,bool> { {"gpu",gpuMenu.Checked} }),Encoding.UTF8);
+            MessageBox.Show("已保存。下次開啟 App 時套用；若 GPU 初始化失敗，會自動改用 CPU。","GPU 加速");
+        };
+        menu.Items.Add(gpuMenu);
         menu.Items.Add("怎麼用", null, delegate { MessageBox.Show("1. 在主介面建立或選擇社課。\n2. 選擇麥克風與發言語言，再開始收音。\n3. 聽眾用手機掃描 QR 看保存的譯文。\n\n關閉此視窗會停止字幕。", "怎麼用"); });
         menu.Items.Add("關於", null, delegate { MessageBox.Show("禪譯 Zen Bridge " + File.ReadAllText(Path.Combine(root,"VERSION")).Trim() + "\n本機中文字幕 · 手機掃 QR 可看保存的譯文\n關閉此視窗會停止字幕服務。", "關於"); });
         Controls.Add(browser); Controls.Add(status); Controls.Add(menu);
@@ -109,6 +121,12 @@ internal sealed class BreezeWindow : Form {
             info.EnvironmentVariables["PYTHONUTF8"] = "1";
             info.EnvironmentVariables["BREEZE_OPEN_BROWSER"] = "0";
             info.EnvironmentVariables["BREEZE_ASR"] = "native";
+            if (GpuEnabled() && gpuMenu.Enabled) {
+                info.EnvironmentVariables["BREEZE_ASR_GPU"]="vulkan";
+                info.EnvironmentVariables["BREEZE_WHISPER_DIR"]=Path.Combine(root,"tools","whisper-vulkan");
+            } else if (File.Exists(Path.Combine(root,"data","performance.json"))) {
+                info.EnvironmentVariables["BREEZE_ASR_GPU"]="cpu";
+            }
             info.EnvironmentVariables["BREEZE_DESKTOP_INSTANCE"] = instance;
             info.EnvironmentVariables["ZEN_BRIDGE_UI_URL"] = uiUrl;
             info.EnvironmentVariables["ZEN_BRIDGE_AGENT_URL"] = pairing.ContainsKey("ZEN_BRIDGE_AGENT_URL") ? pairing["ZEN_BRIDGE_AGENT_URL"] : "wss://"+ui.Authority+"/asr-agent";
@@ -187,7 +205,60 @@ internal sealed class BreezeWindow : Form {
     }
     void Log(string line) {
         if (String.IsNullOrEmpty(line)) return;
-        try { lock (this) { string path=Path.Combine(root,"logs","app.log"); if (File.Exists(path) && new FileInfo(path).Length>2*1024*1024) File.WriteAllText(path,""); File.AppendAllText(path,line+Environment.NewLine,Encoding.UTF8); } } catch { }
+        try { lock (this) {
+            string path=Path.Combine(root,"logs","app.log");
+            if (File.Exists(path) && new FileInfo(path).Length>2*1024*1024) {
+                for (int i=2;i>=1;i--) {
+                    string from=Path.Combine(root,"logs","app."+i+".log");
+                    string to=Path.Combine(root,"logs","app."+(i+1)+".log");
+                    if (File.Exists(from)) { if (File.Exists(to)) File.Delete(to); File.Move(from,to); }
+                }
+                string first=Path.Combine(root,"logs","app.1.log");
+                if (File.Exists(first)) File.Delete(first);
+                File.Move(path,first);
+            }
+            File.AppendAllText(path,line+Environment.NewLine,Encoding.UTF8);
+        } } catch { }
+    }
+    bool GpuEnabled() {
+        try {
+            string path=Path.Combine(root,"data","performance.json");
+            if (!File.Exists(path)) return false;
+            var settings=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(path,Encoding.UTF8));
+            return settings.ContainsKey("gpu") && settings["gpu"] is bool && (bool)settings["gpu"];
+        } catch { return false; }
+    }
+    void StartAdmin() {
+        if (!ready || closing) return;
+        try {
+            if (adminService != null && !adminService.HasExited) {
+                OpenWeb("http://127.0.0.1:8791/admin"); return;
+            }
+            var info = new ProcessStartInfo(PythonPath(), "-m app.desktop_admin") {
+                WorkingDirectory=root, UseShellExecute=false, CreateNoWindow=true,
+                RedirectStandardOutput=true, RedirectStandardError=true
+            };
+            info.EnvironmentVariables["PYTHONUTF8"]="1";
+            info.EnvironmentVariables["PYTHONNOUSERSITE"]="1";
+            info.EnvironmentVariables["ZEN_ADMIN_HOST"]="127.0.0.1";
+            info.EnvironmentVariables["ZEN_ADMIN_PORT"]="8791";
+            info.EnvironmentVariables["ZEN_ADMIN_OPEN_BROWSER"]="1";
+            info.EnvironmentVariables["ZEN_EMBED"]="0";
+            info.EnvironmentVariables["ZEN_LIVE_URL"]=url;
+            info.EnvironmentVariables.Remove("SSLKEYLOGFILE");
+            info.EnvironmentVariables.Remove("PYTHONPATH");
+            info.EnvironmentVariables.Remove("PYTHONHOME");
+            info.EnvironmentVariables.Remove("VIRTUAL_ENV");
+            adminService=Process.Start(info);
+            if (adminService==null) throw new Exception("本機後台無法啟動。");
+            if (!AssignProcessToJobObject(job,adminService.Handle)) {
+                adminService.Kill(); throw new Exception("本機後台無法納入 App 程序管理。");
+            }
+            // Login codes and CLI credentials must never enter the launcher log.
+            adminService.OutputDataReceived+=(s,e)=>{};
+            adminService.ErrorDataReceived+=(s,e)=>{};
+            adminService.BeginOutputReadLine();adminService.BeginErrorReadLine();
+        } catch (Exception ex) { MessageBox.Show(ex.Message,"本機後台"); }
     }
     async Task StopService() {
         if (service != null) {

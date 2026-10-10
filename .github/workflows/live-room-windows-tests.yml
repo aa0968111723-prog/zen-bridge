@@ -1,0 +1,76 @@
+name: Live room Windows tests
+on:
+  pull_request:
+    paths:
+      - 'sidecar/live-room/**'
+      - '.github/workflows/live-room-windows-tests.yml'
+  push:
+    paths:
+      - 'sidecar/live-room/**'
+      - '.github/workflows/live-room-windows-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: live-room-windows-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  test:
+    name: pytest + node (windows-latest, py${{ matrix.python }})
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+    env:
+      # Mirrors production launchers (start.bat:4, verify.bat:4, doctor.bat:4,
+      # install.ps1:4) and keeps CJK test output from failing on a cp1252 console.
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: sidecar/live-room
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            sidecar/live-room/requirements-lock.txt
+            sidecar/live-room/requirements-dev.txt
+      # tests/test_node_suites.py skips its .mjs suites when node is missing or
+      # older than 22, so pin node 22 to make sure those suites really run.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: Install pinned dependencies
+        run: python -m pip install -r requirements-lock.txt -r requirements-dev.txt
+      - name: Show tool versions
+        run: |
+          python --version
+          node --version
+      - name: pytest
+        run: |
+          New-Item -ItemType Directory -Force test-results | Out-Null
+          python -m pytest -rs --junitxml=test-results/pytest-junit.xml | Tee-Object -FilePath test-results/pytest-output.txt
+          if ($LASTEXITCODE -ne 0) { throw "pytest failed with exit code $LASTEXITCODE" }
+      - name: Node suites run outside pytest
+        run: |
+          foreach ($suite in @('recorder_machine.test.mjs', 'room_client.test.mjs', 'recorder_private_pause.test.mjs', 'audience_private_pause.test.mjs')) {
+            Write-Host "== node tests/$suite"
+            node "tests/$suite"
+            if ($LASTEXITCODE -ne 0) { throw "node tests/$suite failed with exit code $LASTEXITCODE" }
+          }
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: live-room-windows-py${{ matrix.python }}-test-results
+          path: sidecar/live-room/test-results/
+          retention-days: 14
+          if-no-files-found: warn

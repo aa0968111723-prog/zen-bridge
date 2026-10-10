@@ -5,12 +5,14 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 import json
+import os
 import socket
 import time
 import urllib.error
 import urllib.request
 import threading
 
+from app.gpu_env import shared_memory_from, worker_env
 from app.native_paths import NativePaths
 
 
@@ -146,10 +148,19 @@ class ResidentAsr:
         self.startup_output = b""
         self.output_thread = None
         self.capture_startup = False
+        self.ggml_shared_memory: int | None = None
+        # round4 #9: whisper-server -nc unless BREEZE_RESIDENT_NO_CONTEXT=0
+        self.no_context = (os.getenv("BREEZE_RESIDENT_NO_CONTEXT") or "1").strip() != "0"
+        self.extra_args: list[str] = []          # e.g. ["-nf"] from app.asr_gpu (GPU worker)
 
     def _drain_stderr(self, stream) -> None:
+        carry = b""
         try:
             while block := stream.read(1024):
+                shared = shared_memory_from((carry + block).decode("utf-8", errors="replace"))
+                carry = block[-128:]
+                if shared is not None:
+                    self.ggml_shared_memory = shared
                 if self.capture_startup:
                     self.startup_output = (self.startup_output + block)[-4096:]
         finally:
@@ -217,9 +228,13 @@ class ResidentAsr:
                 cmd += ["--beam-size", str(self.beam_size)]
             if self.best_of:
                 cmd += ["--best-of", str(self.best_of)]
+            if self.no_context:
+                cmd += ["-nc"]                      # round4 #9: no carried-over text context
+            cmd += [str(a) for a in self.extra_args]
             self.startup_output = b""
             self.capture_startup = True
-            self.proc = opener(cmd, cwd=self.native_paths.cwd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            self.proc = opener(cmd, cwd=self.native_paths.cwd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                               env=worker_env())
             stream = getattr(self.proc, "stderr", None)
             if stream is not None:
                 # Always drain the pipe; keep only a bounded startup diagnostic.

@@ -16,6 +16,11 @@ from scripts.package_release import source_files
 from scripts.install_runtime import download_verified, extract_binaries, verified
 
 def prepare(output, assets, sdk=None):
+    # Optional native features must have their verified assets staged before
+    # enumerating source_files; the resulting installer works offline.
+    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_windows_runtime.py')], check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_silero_vad.py')], check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_vulkan_runtime.py')], check=True)
     output.mkdir(parents=True, exist_ok=True)
     for path in source_files():
         relative = path.relative_to(ROOT)
@@ -68,6 +73,11 @@ def prepare(output, assets, sdk=None):
         if not verified(tool_archive, tool_asset):
             tool_archive = download_verified(tool_asset, cache / tool_asset['name'])
         extract_binaries(tool_archive, output / 'tools')
+    # Vulkan server and every ggml backend come from a single verified build.
+    gpu = output / 'tools/whisper-vulkan'
+    shutil.copytree(ROOT / 'tools/whisper-vulkan', gpu, dirs_exist_ok=True)
+    for runtime_dll in (ROOT / 'app/vendor/msvc').glob('*.dll'):
+        shutil.copy2(runtime_dll, gpu / runtime_dll.name)
     command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(ROOT / 'desktop/build.ps1'), '-OutputDirectory', str(output)]
     if sdk:
         command += ['-SdkDirectory', str(sdk)]
@@ -79,6 +89,10 @@ def prepare(output, assets, sdk=None):
         'FFmpeg Gyan essentials: GPL build; source and license: https://www.gyan.dev/ffmpeg/builds/ and https://ffmpeg.org/legal.html\n'
         'Breeze-ASR: https://huggingface.co/MediaTek-Research/Breeze-ASR-25\n'
         'Microsoft WebView2 SDK/runtime: Microsoft license; https://aka.ms/webview2\n', encoding='utf-8')
+    with notices.open('a', encoding='utf-8') as writer:
+        writer.write('Silero VAD v6.2.3: MIT; https://github.com/snakers4/silero-vad\n'
+                     'Microsoft Visual C++ runtime 14.50 x64: Microsoft redistributable license; '
+                     'extracted from byte-pinned official vc_redist.x64.exe; see app/windows-runtime-manifest.json\n')
     print('Offline App payload ready:', output)
 
 if __name__ == '__main__':

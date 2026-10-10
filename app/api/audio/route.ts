@@ -1,6 +1,6 @@
 export const dynamic = 'force-dynamic';
 import { z } from 'zod';
-import { one, rows, id, saveSegment, translateText, failure } from '@/lib/server';
+import { one, rows, id, saveSegment, translateText, translateDesktopText, failure } from '@/lib/server';
 import { getEnv } from '@/lib/env';
 import { putAudio } from '@/lib/data';
 import { resolveSpeech } from '@/lib/speech/resolve';
@@ -25,6 +25,8 @@ export async function POST(request: Request) {
     const person = personId ? await one<Person>('SELECT * FROM people WHERE id=?', personId) : null;
     if (personId && !person) throw new Error('找不到講者。');
     const env = getEnv();
+    const desktopMode=z.enum(['local','cloud','hybrid']).optional().parse(form.get('desktopTranslationMode')||undefined);
+    if(desktopMode&&(!env.BREEZE_AGENT_TOKEN||!breezeHostAllowed(request,env)))return Response.json({error:'桌面翻譯需要已配對的主持 App。'},{status:403});
     const requested = z.enum(['breeze', 'qwen-live', 'openai']).optional().parse(form.get('speechProvider') || undefined);
     const speechMode = z.enum(['stream', 'chunk']).parse(form.get('speechMode') || env.SPEECH_MODE);
     const stable = form.get('stable') !== 'false';
@@ -50,9 +52,9 @@ export async function POST(request: Request) {
       const detected = part.speakerKey ? (part.speakerKey === person?.id ? person : await one<Person>('SELECT * FROM people WHERE id=?', part.speakerKey)) : null;
       const currentRole = auto ? roles[detected?.id ?? ''] ?? detected?.role ?? '待確認' : role;
       const notes = [part.note, terms.note].filter(Boolean);
-      if (source && !translation && textTranslationProvider(env)) {
-        try { translation = await translateText(source, session, detected, currentRole, direction,!!env.BREEZE_AGENT_TOKEN&&breezeHostAllowed(request,env)); }
-        catch { notes.push(textTranslationProvider(env) === 'hermes' ? 'Hermes 補譯失敗，原文已保存；請檢查 Hermes 連線與模型設定。' : '補譯失敗，原文已保存；請檢查 OPENAI_API_KEY 與 OPENAI_TRANSLATION_MODEL。'); }
+      if (source && !translation && (desktopMode || textTranslationProvider(env))) {
+        try { translation = desktopMode?await translateDesktopText(source, session, detected, currentRole, direction,desktopMode):await translateText(source, session, detected, currentRole, direction,!!env.BREEZE_AGENT_TOKEN&&breezeHostAllowed(request,env)); }
+        catch { notes.push(desktopMode ? '桌面補譯失敗，原文已保存；請在 AI 翻譯代理操作台檢查所選模型與連線。' : textTranslationProvider(env) === 'hermes' ? 'Hermes 補譯失敗，原文已保存；請檢查 Hermes 連線與模型設定。' : '補譯失敗，原文已保存；請檢查翻譯服務的連線與模型設定。'); }
       }
       ids.push(await saveSegment({ sessionId, personId: detected?.id ?? null,
         label: detected?.name ?? (direction === 'en-zh' ? '英文發言者' : '待確認講者'), role: currentRole,

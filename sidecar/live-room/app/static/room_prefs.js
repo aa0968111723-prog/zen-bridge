@@ -8,6 +8,7 @@ export const DEFAULT_PREFS = Object.freeze({
   theme: "system",
   wake: true,
   project: false,
+  ruby: true,
 });
 
 const MODES = new Set(["both", "zh", "en", "project"]);
@@ -20,7 +21,8 @@ export function sanitizePrefs(raw) {
   const size = SIZES.has(String(source.size)) ? String(source.size) : DEFAULT_PREFS.size;
   const theme = THEMES.has(source.theme) ? source.theme : DEFAULT_PREFS.theme;
   const wake = source.wake === false ? false : true;
-  return { mode, size, theme, wake, project: mode === "project" };
+  const ruby = source.ruby === false ? false : true;          // round4 T10: 振假名 on/off
+  return { mode, size, theme, wake, project: mode === "project", ruby };
 }
 
 // Reading window.localStorage itself throws when storage is blocked.
