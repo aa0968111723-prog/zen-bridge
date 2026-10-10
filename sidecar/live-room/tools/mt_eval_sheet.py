@@ -374,4 +374,9 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    # UTF-8 also works when invoked by the bundled Windows interpreter, whose
+    # redirected output otherwise defaults to an ANSI code page.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8')
     raise SystemExit(main())
