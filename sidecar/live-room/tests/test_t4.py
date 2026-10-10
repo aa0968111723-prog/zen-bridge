@@ -203,3 +203,14 @@ def test_concurrent_without_local_mt(clips, tmp_path):
     code, rows = t4.run_t4(t4.load_plan(p), a, r, tmp_path / "c.jsonl", engines(mt=lambda row: pytest.fail("no mt")))
     conc = rows[-1]
     assert code == 0 and conc["layer"] == "concurrent" and conc["a6_p95_s"] is None and conc["a5_p95_s"] is not None
+
+
+def test_mt_row_may_pick_a_gpu_server_and_layers():
+    plan = t4.load_plan({"segments": 1, "segment_s": 6.0, "reps": 1,
+                         "mt": [{"id": "q4-vk", "gguf": "%M%/a.gguf", "server": "%M%/vk/llama-server.exe",
+                                 "ngl": 99, "langs": ["en"]}]}, env={"M": "D:/z"})
+    row = plan["mt"][0]
+    assert row["server"] == "D:/z/vk/llama-server.exe" and row["ngl"] == 99
+    with pytest.raises(t4.PlanError):
+        t4.load_plan({"segments": 1, "segment_s": 6.0, "reps": 1,
+                      "mt": [{"id": "x", "gguf": "a", "ngl": "all"}]})

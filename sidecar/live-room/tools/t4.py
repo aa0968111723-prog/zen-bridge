@@ -39,7 +39,8 @@ TOP_OPTIONAL = {"cooldown_s": (int, float), "require_ac": bool, "abort_on_ev37":
 ASR_KEYS = {"id": str, "model": str, "threads": int, "audio_ctx": int, "beam": int, "prompt": str,
             "no_fallback": bool, "flash_attn": bool}
 DRAFT_KEYS = {"id": str, "dir": str, "threads": int, "precision": str}
-MT_KEYS = {"id": str, "gguf": str, "threads": int, "langs": list, "profile": str}
+MT_KEYS = {"id": str, "gguf": str, "threads": int, "langs": list, "profile": str,
+           "ngl": int, "server": str}       # ngl/server: GPU (Vulkan) llama-server rows
 MT_SAMPLE = [
     "今天我們來談因緣具足的道理。", "禪修的時候，先把呼吸放慢。", "請大家把手機調成靜音。",
     "這個問題我們下課後再討論。", "佛法不離世間覺。", "我們每個人都有自己的功課。",
@@ -98,7 +99,7 @@ def load_plan(source, env=None) -> dict:
             if row["id"] in seen:
                 raise PlanError(f"id 重複：{row['id']}")
             seen.add(row["id"])
-            for k in ("dir", "gguf", "model"):
+            for k in ("dir", "gguf", "model", "server"):
                 if k in row:
                     row[k] = _expand(row[k], env)
         if layer == "draft":
@@ -537,7 +538,8 @@ def real_engines(models_dir: Path, llama_server: Path | None) -> Engines:
 
     def mt(row):
         from app.mt_backend import HyMtLlamaServer, IndexTranslateLlamaServer
-        if llama_server is None or not Path(llama_server).is_file():
+        exe = Path(row["server"]) if row.get("server") else llama_server
+        if exe is None or not Path(exe).is_file():
             raise SystemExit("找不到 llama-server（--llama-server）。不會自動下載。")
         import socket
         with socket.socket() as s:
@@ -545,8 +547,9 @@ def real_engines(models_dir: Path, llama_server: Path | None) -> Engines:
             port = s.getsockname()[1]
         if port == 8645:
             port += 1
-        proc = subprocess.Popen([str(llama_server), "-m", row["gguf"], "-t", str(row.get("threads", 2)), "-c", "2048",
-                                 "-np", "1", "--host", "127.0.0.1", "--port", str(port)],
+        proc = subprocess.Popen([str(exe), "-m", row["gguf"], "-t", str(row.get("threads", 2)), "-c", "2048",
+                                 "-np", "1", "--host", "127.0.0.1", "--port", str(port),
+                                 "-ngl", str(int(row.get("ngl", 0)))],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 env=__import__("app.gpu_env", fromlist=["worker_env"]).worker_env())
         base = f"http://127.0.0.1:{port}"
