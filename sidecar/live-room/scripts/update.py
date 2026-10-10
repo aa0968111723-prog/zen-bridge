@@ -206,7 +206,7 @@ def apply(root, stage, run=subprocess.run):
     backup = root / '.updates' / ('backup-' + uuid.uuid4().hex)
     require_stopped(root)
     bootstrap = json.loads((stage / 'bootstrap-manifest.json').read_text())['python']
-    base_python = root / '.python' / bootstrap['version'] / 'tools/python.exe'
+    base_python = root / '.python' / bootstrap.get('directory',bootstrap['version']) / 'tools/python.exe'
     if not base_python.is_file():
         raise RuntimeError('New Python runtime required; use the new installer package first.')
     # Validate dependencies in a fresh environment before replacing any source.
