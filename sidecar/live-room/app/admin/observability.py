@@ -332,7 +332,7 @@ def register(app, ctx, *, session_row, export_rows, event_list):
                     age = None if state["last_live_ts"] is None else clock() - state["last_live_ts"]
                     rtf = rtf_number((m or {}).get("rtf"), m)   # live rtf may be the RtfMeter dict
                     payload = {"metrics": m, "live_error": err, "stale": err is not None or age is None or age > STALE_S,
-                               "age_s": age, "rtf_color": rtf_color(rtf), "ts": clock()}
+                               "age_s": age, "rtf": rtf, "rtf_color": rtf_color(rtf), "ts": clock()}
                     sent += 1
                     yield f"id: {sent}\nevent: metrics\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
                     errs = await asyncio.to_thread(lambda: event_list(None, "error", None, None, 5)["items"])

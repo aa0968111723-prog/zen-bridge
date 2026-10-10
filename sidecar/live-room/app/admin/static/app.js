@@ -110,7 +110,7 @@ pages.monitor = async () => {
       status.textContent = d.stale ? "直播資料過期或直播服務未啟動" : "即時更新中";
       cards.textContent = ""; cards.classList.toggle("stale", !!d.stale);
       const m = d.metrics || {};
-      cards.append(card("RTF", m.rtf ?? "—", d.rtf_color), card("佇列", m.pending ?? "—"), card("處理中", m.inflight ?? "—"),
+      cards.append(card("RTF", typeof d.rtf === "number" ? d.rtf.toFixed(2) : "—", d.rtf_color), card("佇列", m.pending ?? "—"), card("處理中", m.inflight ?? "—"),
         card("翻譯排隊", m.translate_queued ?? "—"), card("略過", m.translate_skipped ?? "—"), card("合併", m.translate_merged ?? "—"),
         card("延遲(秒)", m.backlog_s ?? "—"), card("聽眾", m.listeners ?? "—"));
     });

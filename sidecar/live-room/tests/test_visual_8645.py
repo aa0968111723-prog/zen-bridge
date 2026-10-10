@@ -1,7 +1,10 @@
 """CTO gate batch 1 P1: the visual LLM's local-URL check must refuse Hermes' 8645 and follow no redirect."""
 import urllib.request
 
+import asyncio
+
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 from app import visual
 
@@ -101,3 +104,25 @@ async def test_visual_trigger_needs_the_host_token():
             assert (await client.post("/api/visual/class/trigger", cookies={"token": token})).status_code == 401
     finally:
         await stop(app)
+
+
+@pytest.mark.anyio
+async def test_server_feeds_visual_v2_final_captions():
+    """Screenshot find: the bus snapshot is type "caption" but VisualHub.feed only takes "final",
+    so no diagram was ever generated in the real app. The server converts settled captions."""
+    from tests.test_round2 import app_for, push, stop, token_of
+    app = app_for()
+    fed = []
+    app.state.visual_hub.feed = lambda ev: fed.append(dict(ev)) or True
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://127.0.0.1:8780") as client:
+            token = await token_of(app, client)
+            await push(client, token, "class", "s1", 1, "今天講般若".encode(), t0_ms=0, t1_ms=6000)
+            for _ in range(50):
+                if fed:
+                    break
+                await asyncio.sleep(0.02)
+    finally:
+        await stop(app)
+    assert fed and all(ev["type"] == "final" and ev["zh"] for ev in fed)
+    assert {ev["id"] for ev in fed} == {"class:s1:1"} and isinstance(fed[0]["t0_ms"], int)

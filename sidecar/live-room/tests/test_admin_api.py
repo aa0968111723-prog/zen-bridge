@@ -429,3 +429,12 @@ def test_rtf_number_accepts_both_live_shapes():
     assert rtf_number(snap) == 0.71 and rtf_color(snap) == "amber"
     assert rtf_number({"session": {"count": 0, "rtf": {}}}, {"asr_rtf_p50": 1.2}) == 1.2
     assert rtf_number({"session": {}}) is None and rtf_color({}) == "unknown" and rtf_number(True) is None
+
+
+def test_monitor_card_uses_the_numeric_rtf():
+    """Screenshot find: the live monitor card printed [object Object] (raw RtfMeter dict)."""
+    from pathlib import Path
+    js = (Path(__file__).resolve().parents[1] / "app/admin/static/app.js").read_text(encoding="utf-8")
+    assert 'card("RTF", m.rtf' not in js and 'typeof d.rtf === "number"' in js
+    src = (Path(__file__).resolve().parents[1] / "app/admin/observability.py").read_text(encoding="utf-8")
+    assert '"rtf": rtf, "rtf_color": rtf_color(rtf), "ts": clock()}' in src

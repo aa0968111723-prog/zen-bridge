@@ -868,6 +868,10 @@ def _zen_db_path():
         return None
 
 
+# Captions with settled Chinese text (with or without the translation) feed visual V2.
+VISUAL_FINAL_STATUSES = frozenset({"zh_ready", "ready", "translate_failed", "term_violation"})
+
+
 def create_app(settings: Settings | None = None, asr=None, translator: Translator | None = None, decoder=None,
                draft_factory=None) -> FastAPI:
     if settings is None:
@@ -1102,7 +1106,11 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                 return None
             _fanout(snap)
             try:
-                visual_hub.feed(snap)          # aitest V2: non-blocking, finals only
+                # aitest V2 takes Segment.public()-style "final" events; the bus snapshot is
+                # type "caption". Screenshot find: feeding it raw meant no diagram was ever made.
+                if (snap.get("type") == "caption" and str(snap.get("zh") or "").strip()
+                        and snap.get("status") in VISUAL_FINAL_STATUSES):
+                    visual_hub.feed({**snap, "type": "final"})   # non-blocking; upserts by id
             except Exception:
                 logging.getLogger("breeze.server").exception("visual feed failed")
             if store.enabled and snap.get("id") and snap.get("type") not in {"captions_cleared", "caption_deleted", "captions_expired"}:
