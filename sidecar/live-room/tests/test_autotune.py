@@ -50,6 +50,50 @@ def test_no_vulkan(ryzen, devices):
     assert suggest(ryzen, "en")["proposed_new_keys"]["BREEZE_ASR_BACKEND"] == "cpu"
 
 
+@pytest.mark.parametrize("devices", ["Radeon", {"name": "Radeon"}, True, 1, ("Radeon",)])
+def test_non_list_vulkan_is_not_evidence_of_devices(ryzen, devices):
+    ryzen["vulkan_devices"] = devices
+    assert suggest(ryzen, "en")["proposed_new_keys"]["BREEZE_ASR_BACKEND"] == "cpu"
+
+
+@pytest.mark.parametrize("ram", [None, "8", {}, [], True, float("nan"), float("inf")])
+def test_unknown_ram_uses_conservative_quantisation(ryzen, ram):
+    ryzen["ram_available_gb"] = ram
+    result = suggest(ryzen, "ja")
+    assert result["proposed_new_keys"]["BREEZE_TRANSLATE_QUANTIZATION"] == "Q4_K_M"
+    assert any("6 GB" in warning for warning in result["warnings"])
+
+
+def test_hw_probe_unknown_value_output():
+    hw = {
+        "os": "Windows",
+        "python": "3.12.0",
+        "cpu_model": "AMD Ryzen 5 5600H",
+        "physical_cores": 6,
+        "logical_cores": 12,
+        "cpu_flags": {
+            "avx": None, "avx2": None, "fma": None, "f16c": None,
+            "avx512f": None, "avx512_vnni": None, "avx_vnni": None,
+        },
+        "ram_total_gb": None,
+        "ram_available_gb": None,
+        "on_ac_power": None,
+        "battery_percent": None,
+        "power_plan": None,
+        "vulkan_devices": [],
+        "notes": ["RAM: OSError: RAM unavailable"],
+    }
+    original = deepcopy(hw)
+    result = suggest(hw, "ja")
+    assert result["proposed_new_keys"] == {
+        "BREEZE_TRANSLATE_QUANTIZATION": "Q4_K_M",
+        "BREEZE_ASR_BACKEND": "cpu",
+    }
+    assert any("6 GB" in warning for warning in result["warnings"])
+    assert any("Power source is unknown" in warning for warning in result["warnings"])
+    assert hw == original
+
+
 @pytest.mark.parametrize("ac,override", [(False, None), (True, True), (False, True)])
 def test_battery_lowers_threads_and_warns(ryzen, ac, override):
     plugged = suggest(ryzen, "en")

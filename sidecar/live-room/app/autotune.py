@@ -5,6 +5,8 @@ are isolated in ``proposed_new_keys`` and must not be applied as runtime config.
 """
 from __future__ import annotations
 
+import math
+
 
 def suggest(hw: dict, target_lang: str, *, on_battery: bool | None = None) -> dict:
     """Suggest settings for one ``en`` or ``ja`` session without mutating inputs.
@@ -44,7 +46,9 @@ def suggest(hw: dict, target_lang: str, *, on_battery: bool | None = None) -> di
 
     quantisation = "Q4_K_M"
     if target_lang == "ja":
-        if hw.get("ram_available_gb", 0) >= 6:
+        ram = hw.get("ram_available_gb")
+        if (isinstance(ram, (int, float)) and not isinstance(ram, bool)
+                and 6 <= ram < math.inf):
             quantisation = "Q8_0"
             reasons.append("Japanese uses Q8_0 with at least 6 GB of available RAM.")
         else:
@@ -52,7 +56,8 @@ def suggest(hw: dict, target_lang: str, *, on_battery: bool | None = None) -> di
     else:
         reasons.append("English uses Q4_K_M to keep local MT memory usage low.")
 
-    backend = "vulkan" if hw.get("vulkan_devices") else "cpu"
+    devices = hw.get("vulkan_devices")
+    backend = "vulkan" if isinstance(devices, list) and devices else "cpu"
     reasons.append(f"Suggest {backend} ASR offload based only on reported Vulkan devices.")
     reasons.append("Quantisation and backend selection are proposed keys, not runtime switches.")
     reasons.append("Embeddings remain off to preserve the live ASR/MT budget.")
