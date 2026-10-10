@@ -337,6 +337,10 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
 
     @app.get("/admin/static/{name}")
     def static(name: str):
+        if name == 'mermaid.min.js':
+            return page('vendor/mermaid.min.js')
+        if name == 'mermaid-safe.js':
+            return page('mermaid-safe.js')
         if name not in {"app.js", "login.js", "app.css"}:
             raise Problem(404, "not_found", "找不到")
         return page(name)

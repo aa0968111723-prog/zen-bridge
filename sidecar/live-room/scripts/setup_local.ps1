@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   One-time setup for the zen-bridge local backend (Ollama translation, ledger, TM, VAD, admin).
@@ -32,11 +32,16 @@ if (-not (Test-Path $venvPy)) {
     if (Get-Command py -ErrorAction SilentlyContinue) { & py -3.12 -m venv .venv }
     else { & python -m venv .venv }
   } else { & $Python -m venv .venv }
+  if ($LASTEXITCODE -ne 0) { throw 'Python venv creation failed' }
 }
 & $venvPy -c "import sys; assert sys.version_info[:2] >= (3, 11), sys.version"
+if ($LASTEXITCODE -ne 0) { throw 'Python version check failed' }
 & $venvPy -m pip install --disable-pip-version-check -q -r requirements-lock.txt
+if ($LASTEXITCODE -ne 0) { throw 'Core requirements installation failed' }
 & $venvPy -m pip install --disable-pip-version-check -q -r requirements-local.txt
 if ($LASTEXITCODE -ne 0) { throw 'pip install failed' }
+& $venvPy scripts\fetch_windows_runtime.py
+if ($LASTEXITCODE -ne 0) { throw 'App-local Microsoft runtime preparation failed' }
 
 Step '2/4 Ollama models'
 if ($SkipOllama) { Write-Host 'skipped (-SkipOllama)' }
@@ -44,7 +49,9 @@ elseif (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
   Write-Warning 'ollama 不在 PATH。請先從 https://ollama.com/download 安裝，再重跑本腳本。'
 } else {
   & ollama pull $TranslateModel
+  if ($LASTEXITCODE -ne 0) { throw 'Translation model download failed' }
   & ollama pull $EmbedModel
+  if ($LASTEXITCODE -ne 0) { throw 'Embedding model download failed' }
   & ollama list
 }
 

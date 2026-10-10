@@ -53,6 +53,8 @@ class SileroVad:
         self.threshold = threshold
         self._lock = threading.Lock()
         if session_factory is None:
+            from app.windows_runtime import ensure_windows_runtime
+            ensure_windows_runtime()
             import onnxruntime as ort
             opts = ort.SessionOptions()
             opts.intra_op_num_threads = threads

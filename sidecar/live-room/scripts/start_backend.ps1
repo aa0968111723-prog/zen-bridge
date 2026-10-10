@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Start the live room with the local backend flags, and/or the admin backend (127.0.0.1:8791).
@@ -47,13 +47,15 @@ $env:BREEZE_TRANSLATE_PRIORITY = $TranslatePriority
 $env:ZEN_LEDGER = $(if ($Ledger) { '1' } else { '0' })
 $env:BREEZE_TM = $(if ($TM) { '1' } else { '0' })
 $env:BREEZE_VAD = $(if ($Vad) { 'silero' } else { 'off' })
-$env:ZEN_EMBED = $(if ($NoEmbed) { '0' } else { '1' })
+# QA hold: idle detection can misclassify an active classroom as offline.
+# Keep disabled until the reviewed incremental patch is accepted.
+$env:ZEN_EMBED = '0'
 $env:ZEN_ADMIN_PORT = "$AdminPort"
 
 if ($Admin) {
   if ($OpenAdmin) { $env:ZEN_ADMIN_OPEN_BROWSER = '1' }
   Write-Host "啟動後台 http://127.0.0.1:$AdminPort/admin （新視窗）"
-  Start-Process -FilePath $py -ArgumentList '-m', 'app.admin.run' -WorkingDirectory $root
+  Start-Process -FilePath $py -ArgumentList '-m', 'app.admin.run' -WorkingDirectory $root -WindowStyle Hidden
 }
 if ($Live) {
   Write-Host ("啟動直播服務：engine={0} model={1} threads={2} queue={3} stale={4}s/{5} ledger={6} tm={7} vad={8}" -f `

@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Run the zen-bridge local benchmark BEFORE enabling any local-backend feature (hardware.md §6).
@@ -22,6 +22,9 @@ param(
   [string]$Python = ""
 )
 $ErrorActionPreference = 'Stop'
+if (-not $Check) {
+  throw 'Benchmark 暫停：新版 QA 指出 7 個 P0；請先接收修正版 patch，再做效能測試。-Check 只執行預檢。'
+}
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bench = Join-Path $here 'bench'
 New-Item -ItemType Directory -Force -Path $Root, "$Root\results", "$Root\audio" | Out-Null

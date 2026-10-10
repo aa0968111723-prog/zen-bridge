@@ -26,35 +26,20 @@ def resolve_bind(env: dict | None = None) -> tuple[str, int]:
 
 def main(argv: list[str] | None = None) -> None:
     bind, port = resolve_bind()
+    if (os.getenv("ZEN_EMBED") or "0").strip() == "1":
+        raise SystemExit('Embedding 暫停：閒置判斷 QA 修正與實機驗收尚未完成。')
     import uvicorn
 
     from app.admin.db import data_dir, default_db_path, identity_db_path
-    from app.admin.live_client import LiveDown, LiveRoomClient
+    from app.admin.live_client import LiveRoomClient
     from app.admin.security import load_or_create_token
     from app.admin.server import create_admin_app
 
     token_file = data_dir() / "admin.token"
     digest, plain = load_or_create_token(token_file)
     live = LiveRoomClient()
-    embed_handler = None
-    if (os.getenv("ZEN_EMBED") or "1").strip() != "0":
-        from app.embed import backfill_handler, embedder_from_env, gate_from_env
-        from app.runtime_tuning import env_float, env_int
-        from app.admin import db as zdb
-
-        def probe():
-            try:
-                return live.metrics()
-            except LiveDown:
-                return None            # live room not running: nothing to compete with
-        embedder = embedder_from_env()
-        embed_handler = backfill_handler(lambda: zdb.connect(default_db_path()), embedder, gate_from_env(probe),
-                                         batch=env_int("ZEN_EMBED_BATCH", 16, minimum=1),
-                                         defer_s=env_float("ZEN_EMBED_DEFER_S", 30.0, minimum=1.0))
-        embed_handler.model = embedder.model
     app = create_admin_app(default_db_path(), token_hash_hex=digest, port=port, identity_path=identity_db_path(),
-                           live_client=live, embed_handler=embed_handler,
-                           embed_scan_s=60.0 if embed_handler else 0.0)
+                           live_client=live, embed_handler=None, embed_scan_s=0.0)
     code_url = f"http://127.0.0.1:{port}/admin/login#code={app.state.codes.issue()}"
     print(f"Zen 後台：http://127.0.0.1:{port}/admin", file=sys.stderr)
     print(f"一次性登入網址（5 分鐘內有效、只能用一次）：{code_url}", file=sys.stderr)

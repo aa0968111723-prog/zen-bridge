@@ -8,7 +8,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ('VERSION', 'README.md', '.env.example', 'requirements.txt', 'requirements-lock.txt',
+FILES = ('VERSION', 'README.md', '.env.example', 'requirements.txt', 'requirements-lock.txt', 'requirements-local.txt',
          'runtime-manifest.json', 'bootstrap-manifest.json', 'install.bat', 'install.ps1',
          'install-shortcut.ps1', 'start.bat', 'doctor.bat', 'verify.bat', 'update.bat',
          'update.ps1', 'rollback.bat')

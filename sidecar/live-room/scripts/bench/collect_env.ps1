@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # collect_env.ps1 — read-only environment capture for zbench (hardware.md §6.2).
 # Changes NO system setting: no registry, power plan, BIOS, driver, Defender or TdrDelay.
 # Any field that cannot be read is written as null; the script never fails because of one.
