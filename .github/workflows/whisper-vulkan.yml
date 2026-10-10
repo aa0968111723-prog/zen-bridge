@@ -1,5 +1,8 @@
 name: Build matching Windows Vulkan ASR runtime
 on:
+  push:
+    branches: [feat/local-translation-backend]
+    paths: [.github/workflows/whisper-vulkan.yml]
   workflow_dispatch:
 permissions:
   contents: read
