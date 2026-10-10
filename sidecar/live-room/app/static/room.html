@@ -199,6 +199,8 @@ async function syncWake(visibility) {
 }
 applyAppearance();
 let hostLive = false;
+let privacyPaused = false;
+let resumedNotice = false;
 let kind = "connecting";
 let lastCaptionAt = 0;
 let gapDivider = false;
@@ -220,7 +222,7 @@ function paintChrome() {
   const mode = !hasCaption && raw === "live" ? "empty" : raw;
   stage.classList.toggle("idle", mode === "idle");
   stage.classList.toggle("stale", mode === "stale" || mode === "ended");
-  stageNoteEl.textContent = failed(item) ? "這段沒有字幕" : stageNoteFor(kind, mode, hostLive);
+  stageNoteEl.textContent = privacyPaused ? "字幕暫停中" : resumedNotice ? "字幕已恢復" : failed(item) ? "這段沒有字幕" : stageNoteFor(kind, mode, hostLive);
 }
 function render() {
   const item = liveTail(items, state.follow, state.pinned);
@@ -308,7 +310,15 @@ function connect() {
       }
       paintChrome();
     },
-    onEvent: (item) => { lastCaptionAt = Date.now(); show(item); },
+    onEvent: (item) => { resumedNotice = false; lastCaptionAt = Date.now(); show(item); },
+    onPause: (paused) => {
+      resumedNotice = privacyPaused && !paused;
+      privacyPaused = paused;
+      if (paused) for (const [id, item] of items) {
+        if (item.draft || item.status === "draft") items.delete(id);
+      }
+      render();
+    },
     onDelete: show,
     onExpire: (data) => {
       const note = document.querySelector("#expiry");

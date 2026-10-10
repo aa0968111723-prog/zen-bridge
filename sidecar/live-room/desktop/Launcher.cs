@@ -187,7 +187,20 @@ internal sealed class BreezeWindow : Form {
     }
     void Log(string line) {
         if (String.IsNullOrEmpty(line)) return;
-        try { lock (this) { string path=Path.Combine(root,"logs","app.log"); if (File.Exists(path) && new FileInfo(path).Length>2*1024*1024) File.WriteAllText(path,""); File.AppendAllText(path,line+Environment.NewLine,Encoding.UTF8); } } catch { }
+        try { lock (this) {
+            string path=Path.Combine(root,"logs","app.log");
+            if (File.Exists(path) && new FileInfo(path).Length>2*1024*1024) {
+                for (int i=2;i>=1;i--) {
+                    string from=Path.Combine(root,"logs","app."+i+".log");
+                    string to=Path.Combine(root,"logs","app."+(i+1)+".log");
+                    if (File.Exists(from)) { if (File.Exists(to)) File.Delete(to); File.Move(from,to); }
+                }
+                string first=Path.Combine(root,"logs","app.1.log");
+                if (File.Exists(first)) File.Delete(first);
+                File.Move(path,first);
+            }
+            File.AppendAllText(path,line+Environment.NewLine,Encoding.UTF8);
+        } } catch { }
     }
     async Task StopService() {
         if (service != null) {

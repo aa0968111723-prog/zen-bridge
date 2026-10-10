@@ -2085,6 +2085,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "room_id": room_id,
             "epoch": bus.epoch(room_id),
             "host_live": bool(room.get("session_active")),
+            "paused": pipeline.is_paused(room_id),
         }
         wants_backfill = int(replay or 0) == 1 or (cursor > 0 and bool(resumed.get("gap")))
         if wants_backfill:

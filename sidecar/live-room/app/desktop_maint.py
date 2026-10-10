@@ -53,7 +53,7 @@ class DesktopMaintenance:
         hours = _num(env, "ZEN_BACKUP_INTERVAL_H", 24.0)
         return cls(zdb.default_db_path(env), zdb.identity_db_path(env), zdb.backup_dir(env),
                    backup_every_s=hours * 3600.0 if hours > 0 else float("inf"),
-                   retention_every_s=0.0 if (env.get("ZEN_RETENTION") or "1").strip() == "0" else 86400.0,
+                   retention_every_s=86400.0 if (env.get("ZEN_RETENTION") or "0").strip() == "1" else 0.0,
                    first_s=_num(env, "ZEN_MAINT_FIRST_S", 120.0))
 
     # ---------------------------------------------------------------- one pass

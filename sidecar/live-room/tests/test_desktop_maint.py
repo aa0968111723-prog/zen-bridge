@@ -36,7 +36,7 @@ def test_first_pass_makes_verified_backup_then_skips(tmp_path):
 def test_interval_zero_disables_backup_but_not_retention(tmp_path):
     db = make_db(tmp_path)
     m = DesktopMaintenance.from_env({"ZEN_DB_PATH": str(db), "ZEN_BACKUP_DIR": str(tmp_path / "b"),
-                                     "ZEN_DATA_DIR": str(tmp_path), "ZEN_BACKUP_INTERVAL_H": "0"})
+                                     "ZEN_DATA_DIR": str(tmp_path), "ZEN_BACKUP_INTERVAL_H": "0", "ZEN_RETENTION": "1"})
     out = m.run_once()
     assert out["backup"] is None and out["retention"] is not None
     assert not zdb.list_backups(tmp_path / "b")
@@ -46,6 +46,12 @@ def test_retention_off_and_missing_db(tmp_path):
     m = DesktopMaintenance.from_env({"ZEN_DB_PATH": str(tmp_path / "none.sqlite3"),
                                      "ZEN_BACKUP_DIR": str(tmp_path / "b"), "ZEN_RETENTION": "0"})
     assert m.retention_every_s == 0
+
+
+def test_retention_requires_explicit_opt_in(tmp_path):
+    m = DesktopMaintenance.from_env({"ZEN_DB_PATH": str(tmp_path / "none.sqlite3"),
+                                     "ZEN_BACKUP_DIR": str(tmp_path / "b")})
+    assert m.retention_every_s == 0, 'Installing the App must not opt into deleting old user records'
     assert m.run_once()["skipped"] == "no database"
 
 

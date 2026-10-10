@@ -85,7 +85,7 @@ export function createCaptureController(deps) {
     if (!blob || typeof blob.size !== "number" || blob.size <= 0) return Promise.resolve();
     const epoch = flightEpoch;
     const job = Promise.resolve()
-      .then(() => deps.upload(meta, blob))
+      .then(() => epoch === flightEpoch ? deps.upload(meta, blob) : undefined)
       .then((result) => {
         if (epoch !== flightEpoch) return;
         uploads.push({ meta, bytes: blob.size, result });
@@ -234,8 +234,38 @@ export function createCaptureController(deps) {
     get gaps() { return gaps; },
     canEditRoom() { return state === "idle" || state === "error"; },
     fail,
+    async pause() {
+      if (state !== "recording" && state !== "waiting") return;
+      generation += 1;
+      stopRequested = true;
+      timerBusy = false;
+      clearTimer();
+      abandonInflight();
+      const current = recorder;
+      recorder = null;
+      setState("paused");
+      releaseStream();
+      try { deps.abortUploads?.(); } catch { /* local capture remains paused */ }
+      await stopRecorder(current); // Deliberately discard the unfinished private slice.
+    },
+    async resume() {
+      if (state !== "paused") return;
+      const my = ++generation;
+      const mic = await deps.openMic();
+      if (my !== generation || state !== "paused") { closeStream(mic); return; }
+      stream = mic;
+      for (const track of stream.getTracks()) {
+        track.addEventListener?.("ended", () => {
+          if (my === generation && (state === "recording" || state === "waiting")) fail("麥克風中斷或被拔除");
+        });
+      }
+      stopRequested = false;
+      setState("recording");
+      await beginSegment(my);
+      if (my === generation && state === "recording") armTimer(my);
+    },
     async start() {
-      if (state === "preparing" || state === "recording" || state === "waiting" || state === "draining") {
+      if (state === "preparing" || state === "recording" || state === "waiting" || state === "draining" || state === "paused") {
         throw new Error("已經在聽，請先停止");
       }
       abandonInflight();
@@ -274,7 +304,7 @@ export function createCaptureController(deps) {
       armTimer(my);
     },
     async stop() {
-      if (state !== "recording" && state !== "waiting" && state !== "preparing" && state !== "draining") return;
+      if (state !== "recording" && state !== "waiting" && state !== "preparing" && state !== "draining" && state !== "paused") return;
       const my = generation;
       generation += 1;
       stopRequested = true;

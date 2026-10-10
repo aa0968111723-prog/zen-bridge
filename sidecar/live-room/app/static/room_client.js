@@ -192,7 +192,7 @@ function stateManual(kind, attempt) {
 }
 
 export function connectRoom({
-  room, url, onState, onEvent, onGap, onDelete, onClear, onBackfill, onReset, onHost, onExpire,
+  room, url, onState, onEvent, onGap, onDelete, onClear, onBackfill, onReset, onHost, onExpire, onPause,
   openSocket, sleep, now, staleMs, random, schedule, cancelSchedule, isForeground, network, watchEvery,
   extraHelloMs,
 }) {
@@ -313,6 +313,10 @@ export function connectRoom({
 
   function deliver(data) {
     if (!data || typeof data !== "object") return;
+    if (data.type === "paused" || data.type === "resumed") {
+      if (onPause) onPause(data.type === "paused");
+      return;
+    }
     cursor = noteCursor(cursor, data.cursor);
     if (data.type === "caption_deleted") {
       if (data.id) versions.delete((data.session_id || "") + ":" + data.id);
@@ -737,6 +741,7 @@ export function connectRoom({
               return;
             }
             if (data.type === "hello") {
+              if (onPause) onPause(data.paused === true);
               failures = 0;
               sawHello = true;
               waitingSince = 0;

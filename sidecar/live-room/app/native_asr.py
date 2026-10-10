@@ -61,7 +61,7 @@ class NativeResidentAsr(ResidentAsr):
         except (ValueError, OSError):
             pass
         finally:
-            self.messages.put({'ok': False, 'error': '本機辨識程序已結束，請重新啟動 App。'})
+            self.messages.put({'ok': False, 'worker_exited': True, 'error': '本機辨識程序已結束，請重新啟動 App。'})
             stream.close()
 
     def _receive(self, timeout):
@@ -162,6 +162,10 @@ class NativeResidentAsr(ResidentAsr):
                 self.proc.stdin.flush()
                 response = self._receive(self.inference_timeout_s)
                 ok = response.get('ok', False)
+                # Windows may deliver pipe EOF before proc.poll() sees the exit.
+                # Treat the reader's explicit EOF as fatal before the next clip.
+                if not ok and response.get('worker_exited'):
+                    self.close()
                 if not ok and not self.health():
                     self._note_failure()       # timeout or worker exit: next segment restarts it
                 text = response.get('text', '')

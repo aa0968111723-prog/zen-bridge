@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import random
 import threading
 import time
@@ -144,11 +145,14 @@ class LiveRoomClient:
             parsed = None
         return status, parsed
 
-    def port_refused(self, timeout: float = 0.5) -> bool:
+    def port_refused(self, timeout: float | None = None) -> bool:
         """True only when the live-room port actively refuses a TCP connection (App not running)."""
         import socket
         from urllib.parse import urlsplit
         parts = urlsplit(self.base)
+        # Windows can take just over two seconds to report WSAECONNREFUSED.
+        # A shorter probe misclassifies an explicit refusal as an unknown timeout.
+        timeout = (3.0 if os.name == 'nt' else 0.5) if timeout is None else timeout
         try:
             with socket.create_connection((parts.hostname, parts.port or 80), timeout=timeout):
                 return False
@@ -160,7 +164,7 @@ class LiveRoomClient:
     def _fetch_token(self) -> str:
         with self._token_lock:
             if self._token is None:
-                status, data = self._send("GET", "/api/host-token", timeout=2.0)
+                status, data = self._send("GET", "/api/host-token", timeout=3.0 if os.name == 'nt' else 2.0)
                 self.token_fetches += 1
                 if status != 200 or not isinstance(data, dict) or not data.get("token"):
                     raise LiveDown(f"host-token unavailable ({status})")

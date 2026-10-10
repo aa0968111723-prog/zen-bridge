@@ -63,6 +63,7 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 <div>
 <button id="go">開始聽</button>
 <button id="stop" disabled>停止</button>
+<button id="private-pause" disabled style="color:#b91c1c" aria-pressed="false">私密暫停</button>
 <button id="try" class="secondary" type="button">試音</button>
 </div>
 <p id="phase">收音狀態：待命</p>
@@ -112,6 +113,9 @@ function hideGuide() {
 try { if (localStorage.getItem("breeze-guide") === "1") hideGuide(); } catch (err) {}
 document.querySelector("#hide-guide").onclick = hideGuide;
 const stopBtn = document.querySelector("#stop");
+const privatePauseBtn = document.querySelector("#private-pause");
+let privatePauseConfirmed = false;
+const audioRequests = new Set();
 const lines = [];
 let token = "";
 let ready = false;
@@ -128,6 +132,7 @@ const phaseLabels = {
   recording: "聽講中",
   waiting: "處理積壓，已暫停產生新錄音；此時說話不會加入字幕",
   draining: "送出尾段",
+  paused: "私密暫停：麥克風已關閉",
   error: "收音中斷",
 };
 function line(text) {
@@ -507,6 +512,7 @@ const ctl = createCaptureController({
   roomId: () => roomEl.value || "class",
   newId: () => crypto.randomUUID().replace(/-/g, "").slice(0, 16),
   openMic: () => navigator.mediaDevices.getUserMedia({ audio: deviceId() }),
+  abortUploads: () => { for (const request of audioRequests) request.abort(); },
   onUploadError: (meta, err) => {
     line("第 " + meta.seq + " 段上傳未確認完成：" + (err?.message || "網路錯誤") + "；請檢查連線與字幕。停止後可匯出已接收內容。");
     status.className = "warn";
@@ -532,6 +538,7 @@ const ctl = createCaptureController({
     }
     async function post(retryFlag) {
       const abort = new AbortController();
+      audioRequests.add(abort);
       const timeout = setTimeout(() => abort.abort(), 300000);
       try {
         return await fetch(address, {
@@ -546,6 +553,7 @@ const ctl = createCaptureController({
         });
       } finally {
         clearTimeout(timeout);
+        audioRequests.delete(abort);
       }
     }
     let resp = await post(false);
@@ -569,6 +577,7 @@ const ctl = createCaptureController({
       line("失敗：" + message);
       throw new Error(message);
     }
+    if (ctl.state === "paused") return { ok: true, status: "cancelled" };
     showCaption(data, false);
     if (data.zh || data.error) line(data.zh || data.error);
     return data;
@@ -590,6 +599,9 @@ function lockRoom() {
   roomEl.disabled = !ctl.canEditRoom() || Boolean(holdRoom);
   go.disabled = !ready || !token || !ctl.canEditRoom() || Boolean(holdRoom);
   stopBtn.disabled = ctl.canEditRoom();
+  privatePauseBtn.disabled = !["recording", "waiting", "paused"].includes(ctl.state);
+  privatePauseBtn.textContent = ctl.state === "paused" ? (privatePauseConfirmed ? "恢復收音" : "重試確認暫停") : "私密暫停";
+  privatePauseBtn.setAttribute("aria-pressed", String(ctl.state === "paused"));
   const extra = ctl.state === "error" && ctl.lastError ? "：" + ctl.lastError : "";
   phaseEl.textContent = "收音狀態：" + (phaseLabels[ctl.state] || ctl.state) + extra;
 }
@@ -619,10 +631,34 @@ go.onclick = async () => {
     lockRoom();
   }
 };
+privatePauseBtn.onclick = async () => {
+  const current = ctl.session;
+  if (!current) return;
+  privatePauseBtn.disabled = true;
+  try {
+    if (ctl.state === "paused" && privatePauseConfirmed) {
+      const response = await hostFetch("/api/rooms/" + encodeURIComponent(current.roomId) + "/resume", { method: "POST" });
+      if (!response.ok) throw new Error("恢復尚未確認；麥克風保持關閉。");
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      await ctl.resume();
+      if (ctl.state === "recording") privatePauseConfirmed = false;
+      line("字幕與收音已恢復。");
+    } else {
+      const captureStopped = ctl.pause();
+      const response = await hostFetch("/api/rooms/" + encodeURIComponent(current.roomId) + "/pause", { method: "POST" });
+      await captureStopped;
+      if (!response.ok) throw new Error("麥克風已關閉，但伺服器暫停未確認；請重試確認。");
+      privatePauseConfirmed = true;
+      line("私密暫停已確認；未完成的錄音與待翻字幕已作廢。");
+    }
+  } catch (error) { line(error.message || "操作未完成，請確認連線。"); }
+  finally { lockRoom(); }
+};
 stopBtn.onclick = async () => {
   stopBtn.disabled = true;
   const current = ctl.session;
   await ctl.stop();
+  privatePauseConfirmed = false;
   if (current) {
     const endBody = { room_id: current.roomId, session_id: current.id, last_seq: ctl.lastSeq || 0 };
     await hostFetch("/api/session/end", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(endBody) });
