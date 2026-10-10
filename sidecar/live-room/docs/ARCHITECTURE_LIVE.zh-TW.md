@@ -198,9 +198,9 @@ sequenceDiagram
 
 | 工作 | 執行緒 | 建議放置（假設 SMT 相鄰） | 優先權 | EcoQoS | 可否設 affinity | 控制（現有／**新增提議**） |
 |---|---|---|---|---|---|---|
-| Breeze 定稿 ASR（native worker 子程序） | **4**〔推估，HW §5.3 配置 B〕 | 實體核 C0–C3（LP 0–7），用**軟** CPU Sets 優先（HW §5.2） | ABOVE_NORMAL | 關 | 可（我們啟動的子程序） | `BREEZE_ASR_THREADS`（`settings.py:84`，現預設 6）、`BREEZE_ASR_PRIORITY`、`BREEZE_ASR_ECOQOS_OFF`（`asr_tuning.py:13-14`）；**`ZEN_HW_ASR_CPUS`**（新增提議） |
+| Breeze 定稿 ASR（native worker 子程序） | **4**〔推估，HW §5.3 配置 B〕 | 實體核 C0–C3（LP 0–7），用**軟** CPU Sets 優先（HW §5.2）；預設**不**硬綁，等 T4 證明有用才開 | ABOVE_NORMAL | 關 | 可（我們啟動的子程序） | `BREEZE_ASR_THREADS`（`settings.py:84`，現預設 6）、`BREEZE_ASR_PRIORITY`、`BREEZE_ASR_ECOQOS_OFF`（`asr_tuning.py:13-14`）；perf 草稿 `ZEN_HW_AFFINITY=1` |
 | 草稿 ASR X-ASR | **1**（固定；int8 不允許 > 1） | C4 的第二個 LP（LP 9）〔推估〕 | NORMAL（高於 MT 等待執行緒） | 關 | 可（執行緒層級 `SetThreadSelectedCpuSets`，新增提議） | `BREEZE_DRAFT_THREADS`（現有，`draft_asr.py`）；**`ZEN_HW_DRAFT_CPUS`**（新增提議） |
-| MT（Ollama runner） | `num_thread` **2** | 不設（做不到），OS 自然落在 Breeze 沒占的 C4–C5 | Ollama 自己的（zen 改不了） | — | **不可**（HW §5.2 末段） | `BREEZE_TRANSLATE_NUM_THREAD`（`runtime_tuning.py` 文件，`start_backend.ps1:21` 預設 2） |
+| MT（Ollama runner） | `num_thread` **2** | 預設不設，OS 自然落在 Breeze 沒占的 C4–C5 | BELOW_NORMAL（盡力） | — | **不保證**：HW §5.2 末段說 zen 不能控制 Ollama runner；perf 的 `hw_tune.py` 草稿用 PID 尋找 runner 再 `OpenProcess`，同一使用者時可能成功、失敗會回 `denied`。runner 重啟（換模型、keep_alive 到期）後 PID 改變，設定失效，**降級 L3 換模型後必須重套** | `BREEZE_TRANSLATE_NUM_THREAD`（`runtime_tuning.py` 文件，`start_backend.ps1:21` 預設 2）；perf 草稿 `ZEN_HW_MT_PRIORITY`（未交件） |
 | MT 等待執行緒（zen 內） | `BREEZE_TRANSLATE_WORKERS`=1 | 不設 | BELOW_NORMAL | — | — | `BREEZE_TRANSLATE_PRIORITY`（`runtime_tuning.py`） |
 | live-room 主程序（FastAPI、WebSocket、SQLite ledger、VAD） | event loop＋executor；Silero VAD `intra_op=1`（`vad.py:60`） | 不設，浮動在 LP 8–11 與閒置核 | NORMAL | 不關（I/O 為主） | — | — |
 | 後台 admin 程序 | — | 不設 | BELOW_NORMAL〔推估〕 | 可開 | — | **`ZEN_ADMIN_PRIORITY`**（新增提議） |
@@ -210,6 +210,7 @@ sequenceDiagram
 說明：
 - 重執行緒合計 Breeze 4＋MT 2＝6＝實體核數（HW §4.1 原則）。草稿 1 執行緒在 box 平均只占 0.086 顆核（box 量測（Xeon，非 5600H），RTF×1 核），放在 SMT 兄弟上。
 - **現有預設矛盾**：`runtime_tuning.py` 的說明寫「ASR 6＋LLM 2 on 6 physical cores; keep ASR threads + this <= physical cores」，6＋2＝8 已經超過。live 設定建議改成 `BREEZE_ASR_THREADS=4`；T4 用 `concurrent` 層比較 `ASR 6＋MT 2` 和 `ASR 4＋MT 2` 的 A3 p95 和 A5 p95 再定案（R4 §3.3 選擇規則）。HW §5.3 推估 4 核會讓 ASR RTF 變差約 1.3–1.5 倍，所以這是要量的取捨，不是定論。
+- **草稿算不算一顆重核**：perf 的 `hw_tune.recommend_threads()` 草稿把草稿 1 執行緒算成重執行緒，結果是 Breeze 4＋MT **1**＋草稿 1（arch 23:2x 以 `recommend_threads(6,12,draft_threads=1)` 確認）。本文主張草稿不算（平均 0.086 顆核，box 量測（Xeon，非 5600H）），保留 MT 2。MT 從 2 降到 1 執行緒會讓每句翻譯變慢〔推估，生成受頻寬限制，降幅 UNKNOWN〕。兩者差異交給 T4 `concurrent` 層決定，在此之前以本表為準。
 - 若 T4 量到 Breeze 4 執行緒的 RTF p95 ≥ 0.9，而 MT 空閒比例高，改用 HW §5.3 配置 A（Breeze 6、不設 affinity、MT 靠 `num_thread=2`＋錯開）。
 
 ### 5.2 記憶體預算（15.4 GB 機器）
@@ -313,7 +314,7 @@ sequenceDiagram
 | 降級控制器 | `ZEN_DEGRADE`＝auto/off/manual | **新增提議** | off（T4 前）→ auto | `app/degrade.py`（新） |
 | 降級門檻 | `ZEN_DEGRADE_RTF_HI`=0.9、`ZEN_DEGRADE_RTF_LO`=0.7、`ZEN_DEGRADE_RTF_N`=10、`ZEN_DEGRADE_MEM_LOW_MB`=1500、`ZEN_DEGRADE_MEM_OK_MB`=2500、`ZEN_DEGRADE_RECOVER_S`=120、`ZEN_DEGRADE_MODEL_HOLD_S`=600 | **新增提議** | 同左（0.9 有來源，其餘推估） | `app/degrade.py`（新） |
 | 電池時等級 | `ZEN_DEGRADE_ON_BATTERY`=2 | **新增提議** | 2 | `app/degrade.py`（新） |
-| CPU 放置 | `ZEN_HW_ASR_CPUS`、`ZEN_HW_DRAFT_CPUS`、`ZEN_ADMIN_PRIORITY` | **新增提議**（若 perf 的 `hw_tune.py` 已定名，以 perf 為準） | 自動（依 SMT 對應計算） | `app/hw_tune.py`（perf） |
+| CPU 放置 | perf 草稿已用 `ZEN_HW_POLICY`=split/asr_first、`ZEN_HW_AFFINITY`=0/1、`ZEN_HW_MT_PRIORITY`、`ZEN_HW_TIMER_RES`（**未交件**，以交件版為準）；本文另提 `ZEN_HW_DRAFT_CPUS`（草稿執行緒的 CPU Set）、`ZEN_ADMIN_PRIORITY` | perf 草稿／**新增提議** | split／0 | `app/hw_tune.py`（perf） |
 | 分段延遲視窗 | `BREEZE_LATENCY_WINDOW` | round4（執行手） | 512 | `app/latency.py`（wt-r4） |
 
 ---
