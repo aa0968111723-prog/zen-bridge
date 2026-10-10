@@ -25,6 +25,12 @@ jobs:
         run: python -m pip install -r requirements-lock.txt -r requirements-dev.txt
       - name: Windows functional and existing regression gates
         run: python -m pytest -q tests
+      - name: Privacy capture and audience controls
+        run: |
+          node tests/recorder_machine.test.mjs
+          node tests/room_client.test.mjs
+          node tests/recorder_private_pause.test.mjs
+          node tests/audience_private_pause.test.mjs
       - name: Validate PowerShell 5.1 parsing
         shell: powershell
         run: |

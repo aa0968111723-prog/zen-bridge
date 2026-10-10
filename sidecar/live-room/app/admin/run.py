@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> None:
                            backup_scan_s=3600.0, backup_every_s=max(hours, 1.0) * 3600 if hours > 0 else float("inf"),
                            # DBA D4: retention runs daily unless ZEN_RETENTION=0
                            metrics_sample_s=float(os.getenv("ZEN_METRICS_SAMPLE_S") or 15),
-                           retention_every_s=0.0 if (os.getenv("ZEN_RETENTION") or "1").strip() == "0" else 86400.0)
+                           retention_every_s=86400.0 if (os.getenv("ZEN_RETENTION") or "0").strip() == "1" else 0.0)
     code_url = f"http://127.0.0.1:{port}/admin/login#code={app.state.codes.issue()}"
     print(f"Zen 後台：http://127.0.0.1:{port}/admin", file=sys.stderr)
     from app.admin.db import backup_dir, same_disk
