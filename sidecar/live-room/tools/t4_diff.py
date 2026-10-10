@@ -23,6 +23,15 @@ ALL_METRICS = {name for names in METRICS.values() for name in names} | {
     "a3_p95_s", "a5_p95_s", "a6_p95_s", "b2_rtf_p95", "gate_fail",
 }
 ROW_MEASUREMENTS = ALL_METRICS | {"encode_ms_p50", "decode_ms_p50", "gen_tok_s_p50"}
+THROUGHPUT_METRICS = {"gen_tok_s_p50"}
+
+
+def _is_measurement(name: str, value) -> bool:
+    return (
+        name.endswith(("_p50", "_p95", "_s", "_ms"))
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    )
 
 
 class InputError(ValueError):
@@ -77,17 +86,22 @@ def _parse_rows(path: Path) -> list[dict]:
             or row["gate_fail"] < 0
         ):
             raise InputError(f"{path}: row {index} gate_fail must be a non-negative integer")
+        for name, value in row.items():
+            if _is_measurement(name, value) and (
+                not math.isfinite(value) or value < 0
+            ):
+                raise InputError(f"{path}: row {index} metric {name} must be finite and non-negative")
     return rows
 
 
 def _configuration(row: dict) -> dict:
     configuration = {
         name: value for name, value in row.items()
-        if name not in METADATA and name not in ROW_MEASUREMENTS
+        if name not in METADATA
+        and name not in ROW_MEASUREMENTS
+        and not _is_measurement(name, value)
     }
-    if not configuration:
-        configuration = {"id": row["id"]}
-    return configuration
+    return {"id": row["id"], **configuration}
 
 
 def _row_key(row: dict) -> tuple[str, str]:
@@ -109,6 +123,10 @@ def _metric_result(name: str, base, new, threshold_pct: float) -> dict:
     pct = _pct_delta(base, new)
     if name == "gate_fail":
         status = "REGRESSION" if delta > 0 else "IMPROVED" if delta < 0 else "UNCHANGED"
+    elif name in THROUGHPUT_METRICS:
+        status = "REGRESSION" if pct is not None and pct < -threshold_pct else (
+            "IMPROVED" if pct is not None and pct > threshold_pct else "UNCHANGED"
+        )
     elif base == 0:
         status = "REGRESSION" if new > 0 else "UNCHANGED"
     elif pct > threshold_pct:
@@ -147,6 +165,10 @@ def compare(base_rows: list[dict], new_rows: list[dict], threshold_pct: float = 
         metric_names = list(METRICS.get(old["layer"], ()))
         if old["layer"] not in METRICS:
             metric_names = sorted(ALL_METRICS - {"gate_fail"})
+        metric_names.extend(
+            name for row in (old, new) for name, value in row.items()
+            if _is_measurement(name, value) and name not in metric_names
+        )
         if "gate_fail" in old or "gate_fail" in new:
             metric_names.append("gate_fail")
         metrics = {

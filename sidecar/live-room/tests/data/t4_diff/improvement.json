@@ -1,7 +1,7 @@
 [
   {
     "layer": "draft",
-    "id": "renamed-draft",
+    "id": "draft-int8-t1",
     "model": "x-asr-480",
     "quant": "int8",
     "backend": "cpu",

@@ -26,11 +26,11 @@ def test_regression_and_json_report(capsys, tmp_path):
     }
 
 
-def test_improvement_uses_configuration_not_display_id(capsys):
+def test_improvement_uses_configuration(capsys):
     assert run_diff("improvement.json", capsys) == 0
     output = capsys.readouterr().out
     assert "IMPROVED" in output
-    assert "renamed-draft" in output
+    assert "draft-int8-t1" in output
     assert "Added configurations" not in output
     assert "Removed configurations" not in output
 
@@ -92,3 +92,27 @@ def test_zero_baseline_increase_is_a_regression():
     result = t4_diff._metric_result("rtf_p95", 0, 0.01, 10)
     assert result["delta_pct"] is None
     assert result["status"] == "REGRESSION"
+
+
+def test_real_t4_rows_match_distinct_ids_and_same_thread_counts():
+    rows = t4_diff._parse_rows(DATA / "real_t4_rows.json")
+    result = t4_diff.compare(rows, rows)
+    assert len(result["comparisons"]) == 7
+    assert not result["added"] and not result["removed"]
+    drafts = [row for row in result["comparisons"] if row["layer"] == "draft"]
+    assert {row["id"] for row in drafts} == {"draft-int8-t1", "draft-fp32-t1"}
+
+    baseline_with_future_metric = [dict(row) for row in rows]
+    changed = [dict(row) for row in rows]
+    for collection in (baseline_with_future_metric, changed):
+        for row in collection:
+            if row["layer"] == "draft":
+                row["future_stage_ms"] = 1.0
+    next(row for row in changed if row["id"] == "draft-int8-t1")["future_stage_ms"] = 2.0
+    comparison = t4_diff.compare(baseline_with_future_metric, changed)
+    draft = next(
+        row for row in comparison["comparisons"]
+        if row["layer"] == "draft" and row["id"] == "draft-int8-t1"
+    )
+    assert draft["metrics"]["future_stage_ms"]["status"] == "REGRESSION"
+    assert not comparison["added"] and not comparison["removed"]
