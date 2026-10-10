@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>禪譯主持</title>
+<link rel="icon" href="/static/brand/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/static/brand/logo-32.png">
+<link rel="apple-touch-icon" href="/static/brand/logo-256.png">
 <style>
 :root { color-scheme: light; }
 body { margin: 0; font-family: "Segoe UI", "PingFang TC", sans-serif; background: #f3eadb; color: #2a2118; }
@@ -41,11 +44,13 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 #first-run ol { margin: 8px 0 0; padding-left: 1.2em; }
 #first-run li { margin: 6px 0; }
 #log { white-space: pre-wrap; min-height: 140px; max-height: 280px; overflow: auto; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand img { border-radius: 8px; }
 </style>
 </head>
 <body>
 <main>
-<h1>禪譯主持</h1>
+<h1 class="brand"><img src="/static/brand/logo-128.png" alt="" width="40" height="40">禪譯主持</h1>
 <p class="lead">這台是主持端。同一個 Wi-Fi 的手機掃下面的 QR。沒有金鑰時只出中文。</p>
 <div class="card" id="first-run">
 <p><strong>第一次使用，只要三步</strong></p>
@@ -74,6 +79,7 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 <p id="caption-zh"></p>
 <p id="status"></p>
 <p id="metrics"></p>
+<p id="extra-links" class="lead">其他畫面：<a id="link-overlay" target="_blank" rel="noopener">OBS 疊加字幕</a>　<a id="link-visual" target="_blank" rel="noopener">示意圖（V2）</a>　<a href="http://127.0.0.1:8791/admin/" target="_blank" rel="noopener">後台</a></p>
 <p class="share-title">聽眾掃這裡</p>
 <img id="qr" alt="聽眾 QR" width="220">
 <p id="url"></p>
@@ -391,6 +397,9 @@ async function setup() {
   const data = await fetch("/api/setup?room_id=" + encodeURIComponent(roomEl.value), { headers, cache: "no-store" }).then((r) => r.json());
   rememberRoom(data);
   draftAvailable = !!data.draft_available;
+  const linkRoom = encodeURIComponent(roomEl.value || "class");
+  document.querySelector("#link-overlay").href = "/overlay/" + linkRoom;
+  document.querySelector("#link-visual").href = "/visual?room=" + linkRoom + (data.listen_key ? "&k=" + encodeURIComponent(data.listen_key) : "");
   const draftRow = document.querySelector("#draft-row");
   if (draftRow) draftRow.hidden = !draftAvailable;
   const qr = document.querySelector("#qr");

@@ -956,6 +956,10 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
         metrics_sample_s=metrics_sample_s, staging_self_approve=self_approve,
         llama_probe=llama_probe or (lambda: _tcp_probe("127.0.0.1", 8080))))
 
+    # uiux-a: live performance page /admin/perf (real /api/metrics A2-A6 p50/p95 + RTF)
+    from app.admin import perf_routes
+    perf_routes.register(app, SimpleNamespace(api=API, need=need, live=live, Problem=Problem, clock=clock))
+
     # LoopbackOnly is the outermost layer (added last).
     app.add_middleware(LoopbackOnly, port=port)
     return app

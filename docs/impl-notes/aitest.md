@@ -1,61 +1,61 @@
-﻿# aitest∩╝êAI Σ╗úτÉåµ╕¼Φ⌐ªσ░êσ«╢∩╝ëΓÇö τñ║µäÅσ£û V2 Σ║ñΣ╗╢Φ¬¬µÿÄ
+# aitest（AI 代理測試專家）— 示意圖 V2 交件說明
 
-- σêåµö»∩╝Ü`impl/aitest`∩╝êworktree∩╝Ü`C:\Users\MacMiRyzen5\Documents\zen-bridge-impl\aitest`∩╝ë
-- base commit∩╝Ü`bea2e5c`∩╝êgrok/integrate∩╝îπÇîround4 #2: T4 prompt 'current' = live app promptπÇì∩╝ë
-- τ¿ïσ╝Å commit∩╝Ü
+- 分支：`impl/aitest`（worktree：`C:\Users\MacMiRyzen5\Documents\zen-bridge-impl\aitest`）
+- base commit：`bea2e5c`（grok/integrate，「round4 #2: T4 prompt 'current' = live app prompt」）
+- 程式 commit：
   - `9d562b02ceab43ff1f94f56dc5de4eb54c264a52` feat(visual): V2 visual_routes router + independent visual channel + viewer page
   - `6da10c7b0dc72081ad13549f892437cebebdc1ca` feat(visual): viewer forwards ?k= listen key to /ws/visual for ws_guard
-- µ£¼ NOTES.md σÅªΣ╗ÑΣ╕ÇσÇï commit µÅÉΣ║ñσ£¿Σ╕èΦ┐░σà⌐σÇï commit Σ╣ïσ╛î∩╝ê`git log -1 impl/aitest` σì│µÿ»∩╝ëπÇé
-- V1 Σ╛åµ║É∩╝êσö»Φ«ÇΦñçΦú╜∩╝ë∩╝Ü`zen-bridge-visual-v1` σêåµö» `grok-bot/visual-v1` commit `721b2f0` τÜä `sidecar/live-room/app/visual.py`πÇéσà⌐µú╡µ¿╣Θâ╜µ▓Æµ£ë `docs/VISUAL.md`∩╝îµëÇΣ╗ÑΣ╗ïΘ¥óΣ╛¥ V1 µ¿íτ╡äµ£¼Φ║½∩╝ê`visual_draft` schemaπÇü`VisualLLM.complete(messages, *, timeout_s)`∩╝ëπÇé
+- 本 NOTES.md 另以一個 commit 提交在上述兩個 commit 之後（`git log -1 impl/aitest` 即是）。
+- V1 來源（唯讀複製）：`zen-bridge-visual-v1` 分支 `grok-bot/visual-v1` commit `721b2f0` 的 `sidecar/live-room/app/visual.py`。兩棵樹都沒有 `docs/VISUAL.md`，所以介面依 V1 模組本身（`visual_draft` schema、`VisualLLM.complete(messages, *, timeout_s)`）。
 
-## σüÜΣ║åΣ╗ÇΘ║╝
+## 做了什麼
 
-µû░σó₧µ¬öµíê∩╝êσà¿Θâ¿σ£¿ `sidecar/live-room/`∩╝îµ▓Æµ£ëµö╣Σ╗╗Σ╜òµùóµ£ëµ¬öµíê∩╝ë∩╝Ü
+新增檔案（全部在 `sidecar/live-room/`，沒有改任何既有檔案）：
 
-| µ¬öµíê | σàºσ«╣ |
+| 檔案 | 內容 |
 |---|---|
-| `app/visual.py` | σ╛₧ V1 τº╗µñìπÇéV2 µû░σó₧∩╝Ü`strip_think()`∩╝êσÄ╗µÄë `<think>ΓÇª</think>`πÇüµ£¬ΘûëσÉêτÜä `<think>`πÇüσÅ¬µ£ëτ╡Éσ░╛τÜä `</think>`∩╝ë∩╝¢σÄ╗Θçìµö╣τö¿**µ¡úΦªÅσîûΘ¢£µ╣è**∩╝êNFKC∩╝ïcasefold∩╝îσÄ╗µÄëτ⌐║τÖ╜∩╝Åµ¿ÖΘ╗₧∩╝Åτ¼ªΦÖƒ∩╝ëΣ╕öσÅ¬σ£¿ `dedupe_window_ms`∩╝êΘáÉΦ¿¡ 10 σêåΘÉÿ∩╝îτÆ░σóâΦ«èµò╕ `BREEZE_VISUAL_DEDUPE_WINDOW_MS`∩╝ëσàºµ£ëµòê∩╝¢`is_presentable()`∩╝êτ⌐║σìíπÇüσÅ¬µ£ëΣ╜öΣ╜ìµ¿ÖΘíîπÇüµ«ÿτòÖ think µ¿Öτ▒ñΣ╕Çσ╛ïΣ╕ìσ╗úµÆ¡∩╝ë∩╝¢`build_llm_from_env()` µö╣τé║**σÅ¬µÄÑσÅù loopback**∩╝ê127.x / localhost / ::1∩╝ë∩╝îΘ¥₧µ£¼µ⌐ƒ URL Σ╕Çσ╛ïσü£τö¿∩╝îΣ╕ìµ£âµèèσ¡ùσ╣òΘÇüσç║τ¡åΘ¢╗πÇé |
-| `app/visual_routes.py` | `VisualSubscriber`∩╝êµ»ÅΣ╜ìΦºÇτ£ïΦÇàµ£ëτòîΣ╜çσêùπÇüµ╗┐Σ║åΣ╕ƒµ£ÇΦêè∩╝ëπÇü`VisualChannel`∩╝êτì¿τ½ïτÜäµ»Åµê┐Φ¿éΘû▒ΦÇàΘ¢åσÉêΦêçΘçìµÆ¡µ¡╖σÅ▓∩╝¢σÅ¬µö╢ `visual_draft` / `visual_hello`∩╝îσ¡ùσ╣òΣ║ïΣ╗╢Σ╕ƒΘÇ▓Σ╛åµ£â `ValueError`∩╝ëπÇü`VisualHub`∩╝êµ»Åµê┐Σ╕ÇσÇï `VisualGenerator`∩╝ÜΦº╕τÖ╝πÇüµ»Åµê┐σå╖σì╗πÇüσÄ╗ΘçìπÇüLLM ΘÇ╛µÖé∩╝ÅΘî»Φ¬ñµö╣τö¿ΦíôΦ¬₧σìí∩╝¢`feed()` σÅ»σ╛₧Σ╗╗Σ╜òσƒ╖Φíîτ╖Æσæ╝σÅ½∩╝îµ£â `call_soon_threadsafe` σ¢₧Σ║ïΣ╗╢Φ┐┤σ£ê∩╝ëπÇü`build_visual_router()`∩╝êAPIRouter∩╝ëπÇé |
-| `app/static/visual.html`∩╝ï`visual.js` | τì¿τ½ïΦºÇτ£ïΘáü `/visual?room=<µê┐Θûô>[&k=<listen key>]`∩╝îΘÇú `/ws/visual`∩╝îσì│µÖéΘí»τñ║τñ║µäÅσ£ûσìí∩╝êµ¿ÖΘíîΣ╕¡Φï▒πÇüσàºµûçπÇüΦíôΦ¬₧πÇüMermaid σÄƒσºïτó╝∩╝ëπÇéσà¿Θâ¿τö¿ `textContent`∩╝îΣ╕ìΦºúµ₧Éµ¿íσ₧ïΦ╝╕σç║τé║ HTMLπÇé`visual.js` µÿ» ES module∩╝êµ£ë `export`∩╝îτ¼ªσÉê `test_static_cache.py` σ░ì `static/*.js` τÜäΦªüµ▒é∩╝ëπÇé |
-| `tests/test_visual_routes.py` | 30 σÇïµ╕¼Φ⌐ª∩╝êσüç LLMπÇüσüçµÖéΘÉÿ∩╝îτäíτ╢▓Φ╖»πÇüτäíµ¿íσ₧ï∩╝ëπÇé |
+| `app/visual.py` | 從 V1 移植。V2 新增：`strip_think()`（去掉 `<think>…</think>`、未閉合的 `<think>`、只有結尾的 `</think>`）；去重改用**正規化雜湊**（NFKC＋casefold，去掉空白／標點／符號）且只在 `dedupe_window_ms`（預設 10 分鐘，環境變數 `BREEZE_VISUAL_DEDUPE_WINDOW_MS`）內有效；`is_presentable()`（空卡、只有佔位標題、殘留 think 標籤一律不廣播）；`build_llm_from_env()` 改為**只接受 loopback**（127.x / localhost / ::1），非本機 URL 一律停用，不會把字幕送出筆電。 |
+| `app/visual_routes.py` | `VisualSubscriber`（每位觀看者有界佇列、滿了丟最舊）、`VisualChannel`（獨立的每房訂閱者集合與重播歷史；只收 `visual_draft` / `visual_hello`，字幕事件丟進來會 `ValueError`）、`VisualHub`（每房一個 `VisualGenerator`：觸發、每房冷卻、去重、LLM 逾時／錯誤改用術語卡；`feed()` 可從任何執行緒呼叫，會 `call_soon_threadsafe` 回事件迴圈）、`build_visual_router()`（APIRouter）。 |
+| `app/static/visual.html`＋`visual.js` | 獨立觀看頁 `/visual?room=<房間>[&k=<listen key>]`，連 `/ws/visual`，即時顯示示意圖卡（標題中英、內文、術語、Mermaid 原始碼）。全部用 `textContent`，不解析模型輸出為 HTML。`visual.js` 是 ES module（有 `export`，符合 `test_static_cache.py` 對 `static/*.js` 的要求）。 |
+| `tests/test_visual_routes.py` | 30 個測試（假 LLM、假時鐘，無網路、無模型）。 |
 
-Router τ½»Θ╗₧∩╝Ü
+Router 端點：
 
-- `GET /visual` ΦºÇτ£ïΘáüπÇü`GET /visual/visual.js`
-- `GET /api/visual/{room_id}`∩╝Ü`{room_id, enabled, subscribers, skipped, dropped_jobs, history}`
-- `POST /api/visual/{room_id}/trigger[?force=1]`∩╝ÜΣ╕╗µîüΣ║║µëïσïòΦº╕τÖ╝∩╝¢ΘáÉΦ¿¡ `host_guard` σÅ¬σàüΦ¿▒µ£¼µ⌐ƒ∩╝êloopback∩╝ëτö¿µê╢τ½»
-- `WS /ws/visual?room_id=...[&k=...]`∩╝ÜσàêΘÇü `{"type":"visual_hello","room_id","enabled","history":[...]}`∩╝îΣ╣ïσ╛îµ»Åσ╝╡µû░σìíΘÇüΣ╕Çσëç `visual_draft`∩╝êV1 schema∩╝ëπÇéΦêç `/ws/listen` σ«îσà¿σêåΘûïπÇé
+- `GET /visual` 觀看頁、`GET /visual/visual.js`
+- `GET /api/visual/{room_id}`：`{room_id, enabled, subscribers, skipped, dropped_jobs, history}`
+- `POST /api/visual/{room_id}/trigger[?force=1]`：主持人手動觸發；預設 `host_guard` 只允許本機（loopback）用戶端
+- `WS /ws/visual?room_id=...[&k=...]`：先送 `{"type":"visual_hello","room_id","enabled","history":[...]}`，之後每張新卡送一則 `visual_draft`（V1 schema）。與 `/ws/listen` 完全分開。
 
-## µ╕¼Φ⌐ªµîçΣ╗ñΦêçτ╡Éµ₧£
+## 測試指令與結果
 
 ```powershell
 cd C:\Users\MacMiRyzen5\Documents\zen-bridge-impl\aitest\sidecar\live-room
 C:\Users\MacMiRyzen5\Documents\zen-bridge-grok\sidecar\live-room\.venv\Scripts\python.exe -m pytest tests/test_visual_routes.py -q -p no:cacheprovider
 ```
 
-τ╡Éµ₧£∩╝êτ¡åΘ¢╗ DESKTOP-P8RGA3A σ»ªµ╕¼∩╝î2026-10-10 23:39 σÅ░σîùµÖéΘûôσëìσ╛î∩╝ë∩╝Ü**30 passed, 0 failed, 1 warning∩╝î1.23ΓÇô1.29 s**∩╝¢µ£¼µ¼íΘûïτÖ╝σà▒Φ╖æ 6 µ¼í∩╝îµ£Çσ╛îσà⌐µ¼í∩╝êµ£Çτ╡éτ¿ïσ╝Åτó╝∩╝ëΦêçσàêσëì 4 µ¼íτÜå 30 passed∩╝êµ¬óµƒÑΘ¥₧σü╢τÖ╝∩╝ëπÇéwarning µÿ» starlette τÜä `httpx` µúäτö¿µÅÉτñ║∩╝îΦêçµ£¼µ¿íτ╡äτäíΘù£πÇéΣ╛¥ΦªÅσ«ÜσÅ¬Φ╖æµ£¼µ¬ö∩╝î**µ▓Æµ£ëΦ╖æσà¿σÑù**πÇé
+結果（筆電 DESKTOP-P8RGA3A 實測，2026-10-10 23:39 台北時間前後）：**30 passed, 0 failed, 1 warning，1.23–1.29 s**；本次開發共跑 6 次，最後兩次（最終程式碼）與先前 4 次皆 30 passed（檢查非偶發）。warning 是 starlette 的 `httpx` 棄用提示，與本模組無關。依規定只跑本檔，**沒有跑全套**。
 
-µ╢╡Φôï∩╝ÜΦº╕τÖ╝∩╝êσ«Üτ¿┐µ╗┐ 30 s µëìΦº╕τÖ╝πÇüΘ¥₧ final∩╝Åσú₧Σ║ïΣ╗╢σ┐╜τòÑ∩╝ëπÇüσå╖σì╗∩╝êσüçµÖéΘÉÿσëìΘÇ▓σëìσ╛î∩╝ëπÇüµ¡úΦªÅσîûσÄ╗ΘçìΦêçµÖéΘûôτ¬ùΘüÄµ£ƒπÇüµëïσïò forceπÇüµ»Åµê┐σå╖σì╗∩╝ïµê┐ΘûôΘÜöΘ¢óπÇüσú₧µê┐ΦÖƒπÇüσü£τö¿µÖéΣ╕ìσïòΣ╜£πÇüΘá╗ΘüôσêåΘ¢ó∩╝êσ¡ùσ╣òσ₧ïσêÑΦó½µïÆπÇürouter µ▓Æµ£ë `/ws/listen`∩╝ëπÇüµàóΦ¿éΘû▒ΦÇàΣ╕ƒµ£ÇΦêèΣ╕öΣ╕ìµïûτ┤»σ┐½Φ¿éΘû▒ΦÇàπÇüτÖ╝Σ╜êσàºσ«╣µÿ»τì¿τ½ïσë»µ£¼πÇüLLM Σ╛ïσñûΓåÆΦíôΦ¬₧σìíπÇüLLM ΘÇ╛µÖé∩╝ê0.05 s∩╝ëΓåÆΦíôΦ¬₧σìíπÇüτäíΦíôΦ¬₧µÖéσñ▒µòùΣ╕ìσ╗úµÆ¡πÇü6 τ¿«σ₧âσ£╛Φ╝╕σç║Σ╕ìσ╗úµÆ¡πÇüthink σë¥ΘÖñ∩╝êσÉ½ code fenceπÇüµ¼äΣ╜ìσàº think∩╝ëπÇüΣ╕ìσ«ëσà¿ Mermaid ΘÖìτ┤ÜπÇüΦ╖¿σƒ╖Φíîτ╖Æ feedπÇüΘáÉΦ¿¡ LLM σÅ¬ΘÖÉµ£¼µ⌐ƒΣ╕öΘáÉΦ¿¡Θù£ΘûëπÇüΦºÇτ£ïΘáü∩╝ÅJS µ£ëΣ╛¢µçëπÇüWebSocket hello∩╝ïσì│µÖéσìí∩╝ïµê┐ΘûôΘÜöΘ¢ó∩╝ïµÖÜσê░ΘçìµÆ¡πÇüws_guard µïÆτ╡òπÇüµëïσïòΦº╕τÖ╝τ½»Θ╗₧ΦêçΘáÉΦ¿¡µ£¼µ⌐ƒΘÖÉσ«ÜπÇé
+涵蓋：觸發（定稿滿 30 s 才觸發、非 final／壞事件忽略）、冷卻（假時鐘前進前後）、正規化去重與時間窗過期、手動 force、每房冷卻＋房間隔離、壞房號、停用時不動作、頻道分離（字幕型別被拒、router 沒有 `/ws/listen`）、慢訂閱者丟最舊且不拖累快訂閱者、發佈內容是獨立副本、LLM 例外→術語卡、LLM 逾時（0.05 s）→術語卡、無術語時失敗不廣播、6 種垃圾輸出不廣播、think 剝除（含 code fence、欄位內 think）、不安全 Mermaid 降級、跨執行緒 feed、預設 LLM 只限本機且預設關閉、觀看頁／JS 有供應、WebSocket hello＋即時卡＋房間隔離＋晚到重播、ws_guard 拒絕、手動觸發端點與預設本機限定。
 
-## µÄ¢Φ╝ëµû╣σ╝Å∩╝êτö▒µò┤σÉêΦÇàµö╣ server.py∩╝¢µêæµ▓Æµ£ëσïò server.py / pipeline.py∩╝ë
+## 掛載方式（由整合者改 server.py；我沒有動 server.py / pipeline.py）
 
-σ£¿ `app/server.py` τÜä `create_app()` σàº∩╝Ü
+在 `app/server.py` 的 `create_app()` 內：
 
-1. µ¬öΘá¡ import∩╝Ü
+1. 檔頭 import：
    ```python
    from app.visual_routes import VisualHub, build_visual_router
    ```
-2. `bus = RoomBus(...)`∩╝êτ┤äτ¼¼ 882 Φíî∩╝ëΣ╣ïσ╛îσ╗║τ½ï hub∩╝Ü
+2. `bus = RoomBus(...)`（約第 882 行）之後建立 hub：
    ```python
-   visual_hub = VisualHub.from_env(glossary_provider=<σ¢₧σé│Φ⌐▓µê┐ΦíôΦ¬₧ rows τÜäσç╜σ╝Å∩╝îσÅ»τé║ async∩╝¢µ▓Æµ£ëσ░▒τ£üτòÑ>)
+   visual_hub = VisualHub.from_env(glossary_provider=<回傳該房術語 rows 的函式，可為 async；沒有就省略>)
    ```
-   µ▓Æµ£ëΦ¿¡σ«Ü `BREEZE_VISUAL_LLM_BASE_URL`∩╝ï`BREEZE_VISUAL_LLM_MODEL` µÖé hub µÿ»σü£τö¿τÜä∩╝êΘáüΘ¥óΘí»τñ║πÇîτñ║µäÅσ£ûµ£¬σòƒτö¿πÇì∩╝ë∩╝îΣ╕ìσ╜▒Θƒ┐σ¡ùσ╣òπÇé
-3. `app.mount("/static", ...)`∩╝êτ┤äτ¼¼ 1290 Φíî∩╝ëΣ╣ïσ╛î∩╝Ü
+   沒有設定 `BREEZE_VISUAL_LLM_BASE_URL`＋`BREEZE_VISUAL_LLM_MODEL` 時 hub 是停用的（頁面顯示「示意圖未啟用」），不影響字幕。
+3. `app.mount("/static", ...)`（約第 1290 行）之後：
    ```python
    app.state.visual_hub = visual_hub
    app.include_router(build_visual_router(visual_hub, ws_guard=_visual_ws_guard))
    ```
-   σ╗║Φ¡░τÜä `_visual_ws_guard`∩╝êµö╛σ£¿ `/ws/listen` σ«Üτ╛⌐ΘÖäΦ┐æ∩╝îΘçìτö¿µùóµ£ëµ¬óµƒÑ∩╝ë∩╝Ü
+   建議的 `_visual_ws_guard`（放在 `/ws/listen` 定義附近，重用既有檢查）：
    ```python
    def _visual_ws_guard(ws, room_id):
        if not audience_origin_allowed(ws.headers.get("origin"), ws.headers.get("host", ""), settings, _audience_extra_hosts()):
@@ -63,34 +63,34 @@ C:\Users\MacMiRyzen5\Documents\zen-bridge-grok\sidecar\live-room\.venv\Scripts\p
        room = book.get(room_id)
        return room is None or _listener_authorized(ws, room, ws.query_params.get("k", ""))
    ```
-   ∩╝êΣ╕ìσé│ `ws_guard` Σ╣ƒΦâ╜Φ╖æ∩╝îΣ╜åσ░▒µ▓Æµ£ë origin∩╝Ålisten key µ¬óµƒÑπÇé∩╝ë
-4. **Φº╕τÖ╝Θ╗₧**∩╝Üσ£¿ `on_event()`∩╝êτ┤äτ¼¼ 1083 Φíî∩╝ë`_fanout(snap)` Σ╣ïσ╛îσèáΣ╕ÇΦíî∩╝Ü
+   （不傳 `ws_guard` 也能跑，但就沒有 origin／listen key 檢查。）
+4. **觸發點**：在 `on_event()`（約第 1083 行）`_fanout(snap)` 之後加一行：
    ```python
    visual_hub.feed(snap)
    ```
-   `feed()` σÅ¬τ£ï `type == "final"`πÇüσÉêµ│ò room_idπÇüµ£ë zh Φêç t0/t1 τÜäΣ║ïΣ╗╢∩╝îσà╢Θñÿτ¢┤µÄÑσ¢₧ False∩╝¢σ«âΣ╕ìσüÜ I/OπÇüΣ╕ìτ¡ëσ╛à∩╝îσÅ»σ╛₧Σ╗╗Σ╜òσƒ╖Φíîτ╖Æσæ╝σÅ½πÇéµëÇΣ╗Ñ**Σ╕ìΘ£ÇΦªüµö╣ pipeline.py**ΓÇöΓÇöpipeline τÜäσ«Üτ¿┐∩╝ê`Segment.public()` τÜä `type: "final"`∩╝ëµ£¼Σ╛åσ░▒τ╢ôΘüÄ `on_event` ΓåÆ `bus.publish`πÇéΦïÑµò┤σÉêΦÇàσüÅσÑ╜σ£¿ pipeline τ½»σæ╝σÅ½∩╝îΣ╜ìτ╜«µÿ» pipeline τöóτöƒ `status in {"ready","silent"}` τÜä Segment Σ╕ªΘÇüσç║ `public()` τÜäσ£░µû╣∩╝îσæ╝σÅ½σÉîΣ╕ÇσÇï `visual_hub.feed(segment.public())`πÇé
-5. µê┐Θûôτ╡Éµ¥ƒ∩╝Üσ£¿ `bus.retire(room_id)` / `bus.drop(room_id)`∩╝êτ┤äτ¼¼ 1118πÇü1127 Φíî∩╝ëµùü `await visual_hub.close_room(room_id)`∩╝êΦïÑΦ⌐▓ΦÖòΣ╕ìµÿ» async∩╝îτö¿ `asyncio.get_running_loop().create_task(...)`∩╝ëπÇé
-6. Θù£µ⌐ƒ∩╝Üσ£¿ lifespan τÜä `shutdown()` σàº `await visual_hub.stop()`πÇé
+   `feed()` 只看 `type == "final"`、合法 room_id、有 zh 與 t0/t1 的事件，其餘直接回 False；它不做 I/O、不等待，可從任何執行緒呼叫。所以**不需要改 pipeline.py**——pipeline 的定稿（`Segment.public()` 的 `type: "final"`）本來就經過 `on_event` → `bus.publish`。若整合者偏好在 pipeline 端呼叫，位置是 pipeline 產生 `status in {"ready","silent"}` 的 Segment 並送出 `public()` 的地方，呼叫同一個 `visual_hub.feed(segment.public())`。
+5. 房間結束：在 `bus.retire(room_id)` / `bus.drop(room_id)`（約第 1118、1127 行）旁 `await visual_hub.close_room(room_id)`（若該處不是 async，用 `asyncio.get_running_loop().create_task(...)`）。
+6. 關機：在 lifespan 的 `shutdown()` 內 `await visual_hub.stop()`。
 
-µ£¼µ⌐ƒµ¿íσ₧ïτ»äΣ╛ï∩╝êσÅ¬Φ¿¡τÆ░σóâΦ«èµò╕∩╝îΣ╕ìµö╣ Ollama Φ¿¡σ«Ü∩╝ë∩╝Ü`BREEZE_VISUAL_LLM_BASE_URL=http://127.0.0.1:11434/v1`πÇü`BREEZE_VISUAL_LLM_MODEL=<σ╖▓σ«ëΦú¥τÜäµ£¼µ⌐ƒµ¿íσ₧ïσÉì>`πÇé
+本機模型範例（只設環境變數，不改 Ollama 設定）：`BREEZE_VISUAL_LLM_BASE_URL=http://127.0.0.1:11434/v1`、`BREEZE_VISUAL_LLM_MODEL=<已安裝的本機模型名>`。
 
-τ£ïσ╛ùσê░τÜäΦ«èσîû∩╝ÜµÄ¢Σ╕èσ╛îΘûï `http://127.0.0.1:<port>/visual?room=class`∩╝îσ░▒Φâ╜τ£ïσê░τñ║µäÅσ£ûΘá╗ΘüôτÜäσì│µÖéτïÇµàïΦêçσìíτëçπÇé
+看得到的變化：掛上後開 `http://127.0.0.1:<port>/visual?room=class`，就能看到示意圖頻道的即時狀態與卡片。
 
-## σÅâµò╕Φêçµò╕σ¡ùΣ╛åµ║É
+## 參數與數字來源
 
-- Φº╕τÖ╝τ¬ù 30ΓÇô60 sπÇüσå╖σì╗ 30 sπÇüLLM ΘÇ╛µÖé 15 sπÇüµ»Åµê┐σ╖ÑΣ╜£Σ╜çσêù 2πÇüµ£ÇσñÜ 12 ΦíîπÇüΦíôΦ¬₧ 24 σÇï∩╝Üµ▓┐τö¿ V1 `app/visual.py`∩╝êcommit 721b2f0∩╝ëΘáÉΦ¿¡σÇ╝∩╝îµ£¬σ£¿τ¡åΘ¢╗σüÜµòêΦâ╜ΘçÅµ╕¼πÇé
-- σÄ╗ΘçìµÖéΘûôτ¬ù 10 σêåΘÉÿπÇüµ»ÅΦºÇτ£ïΦÇàΣ╜çσêù 8 σëçπÇüΘçìµÆ¡µ¡╖σÅ▓ 5 σ╝╡πÇüµ»Åµê┐µ£ÇσñÜ 64 Σ╜ìΦºÇτ£ïΦÇà∩╝Üµ£¼µ¼íΦ¿¡Φ¿êΘü╕σÇ╝∩╝îµ£¬ΘçÅµ╕¼πÇé
-- µ╕¼Φ⌐ªΦÇùµÖé 1.23ΓÇô1.29 s∩╝Üτ¡åΘ¢╗σ»ªµ╕¼πÇé
+- 觸發窗 30–60 s、冷卻 30 s、LLM 逾時 15 s、每房工作佇列 2、最多 12 行、術語 24 個：沿用 V1 `app/visual.py`（commit 721b2f0）預設值，未在筆電做效能量測。
+- 去重時間窗 10 分鐘、每觀看者佇列 8 則、重播歷史 5 張、每房最多 64 位觀看者：本次設計選值，未量測。
+- 測試耗時 1.23–1.29 s：筆電實測。
 
-## σ╖▓τƒÑΘÖÉσê╢
+## 已知限制
 
-- Mermaid σÅ¬Θí»τñ║σÄƒσºïτó╝µûçσ¡ù∩╝îµ▓Æµ£ëµ╕▓µƒôµêÉσ£û∩╝êΣ╕ìσ╝òσàÑσñûΘâ¿ JS σç╜σ╝Åσ║½∩╝¢Φªüµ╕▓µƒôΘ£Çµèè mermaid µö╛ΘÇ▓ vendor Σ╕ªσÅªσ»½ CSP σ«ëσà¿τÜäµ╕▓µƒô∩╝ëπÇé
-- ΦºÇτ£ïΘáüµ▓Æµ£ëΘÇúσê░ host.html∩╝Åroom.html∩╝êΘéúΣ║¢µ¬öµíêτªüµ¡óΣ┐«µö╣∩╝ë∩╝¢Θ£Çµò┤σÉêΦÇàσÅªσèáΘÇúτ╡Éµêûτ¢┤µÄÑΘûï `/visual`πÇé
-- `VisualHub` τ╢üσ«Üτ¼¼Σ╕ÇσÇïσæ╝σÅ½σ«âτÜäΣ║ïΣ╗╢Φ┐┤σ£ê∩╝¢σ£¿ uvicorn σû«Σ╕ÇΦ┐┤σ£êΣ╕ïµ▓ÆσòÅΘíîπÇéΦïÑ `close_room` µ▓ÆµÄÑ∩╝îµê┐ΘûôτÜä generator µ£âτòÖσê░Θù£µ⌐ƒπÇé
-- ΘáÉΦ¿¡ `host_guard` σÅ¬Φ¬ì loopback τö¿µê╢τ½»∩╝¢ΦïÑΣ╕╗µîüΣ║║σ╛₧σêÑσÅ░Φú¥τ╜«µôìΣ╜£∩╝îΘ£Çσé│σàÑΣ╜┐τö¿Σ╕╗µîüΣ║║ token τÜä guardπÇé
-- µ▓ÆΦ╖æσà¿σÑùµ╕¼Φ⌐ª∩╝êΣ╛¥τ¡åΘ¢╗Φ¿ÿµå╢Θ½öΦªÅσ«Ü∩╝ëπÇé`test_static_cache.py` µ£âµÄâ `static/*.js` Φªüµ▒éσÉ½ `export ` Σ╕öσÅ»Θçìµû░Θ⌐ùΦ¡ë∩╝¢`visual.js` σ╖▓µÿ» ES module∩╝îµçëσÅ»ΘÇÜΘüÄ∩╝îΣ╜åΘ£Çµò┤σÉêΦÇàΦ╖æσà¿σÑùτó║Φ¬ìπÇé
-- σü£τö¿τïÇµàïΣ╕ï `/api/visual/...` Φêç `/ws/visual` Σ╗ìσÅ»ΘÇú∩╝îσÅ¬µÿ» `enabled: false`πÇüΣ╕ìµ£âµ£ëσìíτëçπÇé
+- Mermaid 只顯示原始碼文字，沒有渲染成圖（不引入外部 JS 函式庫；要渲染需把 mermaid 放進 vendor 並另寫 CSP 安全的渲染）。
+- 觀看頁沒有連到 host.html／room.html（那些檔案禁止修改）；需整合者另加連結或直接開 `/visual`。
+- `VisualHub` 綁定第一個呼叫它的事件迴圈；在 uvicorn 單一迴圈下沒問題。若 `close_room` 沒接，房間的 generator 會留到關機。
+- 預設 `host_guard` 只認 loopback 用戶端；若主持人從別台裝置操作，需傳入使用主持人 token 的 guard。
+- 沒跑全套測試（依筆電記憶體規定）。`test_static_cache.py` 會掃 `static/*.js` 要求含 `export ` 且可重新驗證；`visual.js` 已是 ES module，應可通過，但需整合者跑全套確認。
+- 停用狀態下 `/api/visual/...` 與 `/ws/visual` 仍可連，只是 `enabled: false`、不會有卡片。
 
 ## BLOCKED
 
-τäíπÇé
+無。

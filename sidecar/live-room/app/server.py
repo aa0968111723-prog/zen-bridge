@@ -23,6 +23,9 @@ from app.asr import CliAsr, ResidentAsr
 from app.native_asr import NativeResidentAsr
 from app.audio import AudioError, convert_to_wav, ffmpeg_bin, wav_duration_seconds
 from app.draft_hub import DraftHub
+from app.hw_routes import make_router as make_hw_router
+from app.overlay_routes import router as overlay_router
+from app.visual_routes import VisualHub, build_visual_router
 from app.mt_backend import TargetLangError, validate_tgt_lang
 from app.auth import audience_origin_allowed, new_host_token, origin_is_allowed, require_host, require_local_host, same_secret
 from app.dispatch import ListenerSlot, RoomBus, for_listener
@@ -884,6 +887,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
     book = RoomBook(settings.max_rooms, settings.room_idle_s)
     bus = RoomBus(settings.history_limit, caption_cap=getattr(settings, "room_caption_cap", 5000))
     store = CaptionStore(settings.data_path or None)
+    visual_hub = VisualHub.from_env()          # V2 visuals (aitest): off unless BREEZE_VISUAL_LLM_* set
     if asr is None:
         if settings.asr_mode == "native":
             asr = NativeResidentAsr(model, threads=settings.asr_threads,
@@ -1090,6 +1094,10 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             if snap is None:
                 return None
             _fanout(snap)
+            try:
+                visual_hub.feed(snap)          # aitest V2: non-blocking, finals only
+            except Exception:
+                logging.getLogger("breeze.server").exception("visual feed failed")
             if store.enabled and snap.get("id") and snap.get("type") not in {"captions_cleared", "caption_deleted", "captions_expired"}:
                 store.submit_save(snap)
             _ledger_submit(snap, event)
@@ -1129,6 +1137,10 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         else:
             bus.drop(room_id)
         pipeline.drop_room(room_id)
+        try:
+            asyncio.get_running_loop().create_task(visual_hub.close_room(room_id))
+        except RuntimeError:
+            pass
         if retained:
             pipeline.note_retained_order(room_id, retained)
         _seal_replay(room_id)
@@ -1242,6 +1254,10 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             await asyncio.gather(*pending, return_exceptions=True)
         tasks.clear()
         close_jobs.clear()
+        try:
+            await visual_hub.stop()
+        except Exception:
+            logging.getLogger("breeze.server").exception("visual hub stop failed")
         await pipeline.aclose()
         if hasattr(asr, "close"):
             asr.close()
@@ -1291,6 +1307,19 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
 
     static_files = RevalidatingStaticFiles(directory=STATIC)
     app.mount("/static", static_files, name="static")
+    # Teammate routers (integrator wiring, grok/integrate):
+    app.include_router(overlay_router)                                   # fullstack: OBS /overlay
+    app.include_router(make_hw_router(lambda r: require_host(r, token, settings)))   # perf: /api/hw/status
+
+    def _visual_ws_guard(ws, room_id):
+        if not audience_origin_allowed(ws.headers.get("origin"), ws.headers.get("host", ""), settings,
+                                       _audience_extra_hosts()):
+            return False
+        room = book.get(room_id)
+        return room is None or _listener_authorized(ws, room, ws.query_params.get("k", ""))
+
+    app.state.visual_hub = visual_hub
+    app.include_router(build_visual_router(visual_hub, ws_guard=_visual_ws_guard))   # aitest: /visual
     app.state.settings = settings
     app.state.token = token
     app.state.pipeline = pipeline

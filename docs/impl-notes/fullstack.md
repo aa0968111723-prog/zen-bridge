@@ -1,98 +1,98 @@
-﻿# fullstack NOTES∩╝ÜOBS σ¡ùσ╣òτûèσèáσ▒ñ∩╝êzen-bridge τª¬ΘçïµíîΘ¥óτ┐╗Φ¡»∩╝ë
+# fullstack NOTES：OBS 字幕疊加層（zen-bridge 禪釋桌面翻譯）
 
-## σüÜΣ║åΣ╗ÇΘ║╝
-µû░σó₧ OBS τÇÅΦª╜σÖ¿Σ╛åµ║Éτö¿τÜäΘÇÅµÿÄσ¡ùσ╣òτûèσèáσ▒ñ∩╝ÜσÅ¬Θí»τñ║µ£Çµû░ 2 µ«╡σ¡ùσ╣òπÇüen/ja σ¡ùσ₧ï∩╝êσÉ½Σ╕¡µûçσÄƒµûçσ¡ùσ₧ï∩╝ëπÇüURL σÅâµò╕µÄºσê╢σñûΦºÇπÇüµ▓┐τö¿µùóµ£ëΦºÇτ£╛ WebSocket `/ws/listen` Σ╕ªΦç¬σïòΘÇÇΘü┐ΘçìΘÇúπÇéµ▓Æµ£ë logoπÇüµ▓Æµ£ëσñûΘâ¿ CDNπÇüσÅ¬τö¿ `textContent`πÇé**µ£¬Σ┐«µö╣ server.py µêû BRIEF τªüτó░τÜäΣ╗╗Σ╜òµ¬öµíêπÇé**
+## 做了什麼
+新增 OBS 瀏覽器來源用的透明字幕疊加層：只顯示最新 2 段字幕、en/ja 字型（含中文原文字型）、URL 參數控制外觀、沿用既有觀眾 WebSocket `/ws/listen` 並自動退避重連。沒有 logo、沒有外部 CDN、只用 `textContent`。**未修改 server.py 或 BRIEF 禁碰的任何檔案。**
 
-- σêåµö»∩╝Ü`impl/fullstack`∩╝êworktree `C:\Users\MacMiRyzen5\Documents\zen-bridge-impl\fullstack`∩╝ë
-- σƒ║µ║û∩╝Ü`grok/integrate` @ `bea2e5c`∩╝êround4 #2: T4 prompt 'current' = live app prompt∩╝ë
-- τ¿ïσ╝Å commit∩╝Ü`727f35d`∩╝êσ«îµò┤ SHA Φªïµûçµ£½∩╝ë∩╝¢µ£¼ NOTES.md σÅªΣ╕ÇσÇï commit
-- µû░σó₧µ¬öµíê∩╝êτÜåσ£¿ `sidecar/live-room/` Σ╕ï∩╝îτ┤öµû░σó₧πÇüΣ╕ìµö╣µùóµ£ëµ¬ö∩╝ë∩╝Ü
-  - `app/overlay_routes.py`∩╝ÜFastAPI `APIRouter`∩╝î`GET /overlay`πÇü`GET /overlay/{room_id}`
-  - `app/static/overlay.html`πÇü`app/static/overlay.js`
-  - `tests/test_overlay_routes.py`∩╝êpytest 9 Θáà∩╝ëπÇü`tests/overlay.test.mjs`∩╝êNode `node:test` 17 Θáà∩╝ë
+- 分支：`impl/fullstack`（worktree `C:\Users\MacMiRyzen5\Documents\zen-bridge-impl\fullstack`）
+- 基準：`grok/integrate` @ `bea2e5c`（round4 #2: T4 prompt 'current' = live app prompt）
+- 程式 commit：`727f35d`（完整 SHA 見文末）；本 NOTES.md 另一個 commit
+- 新增檔案（皆在 `sidecar/live-room/` 下，純新增、不改既有檔）：
+  - `app/overlay_routes.py`：FastAPI `APIRouter`，`GET /overlay`、`GET /overlay/{room_id}`
+  - `app/static/overlay.html`、`app/static/overlay.js`
+  - `tests/test_overlay_routes.py`（pytest 9 項）、`tests/overlay.test.mjs`（Node `node:test` 17 項）
 
-## µ╕¼Φ⌐ªτ╡Éµ₧£
-- τ¡åΘ¢╗∩╝êDESKTOP-P8RGA3A∩╝îσà▒τö¿ venv Python 3.12.10∩╝ë∩╝Ü`python -m pytest tests/test_overlay_routes.py -q` ΓåÆ **8 passed, 1 skipped**∩╝êskip = τ¡åΘ¢╗µ▓Æµ£ë node∩╝îNode µ╕¼Φ⌐ªΘáàτ¢«Φ╖│ΘüÄ∩╝ëπÇéΣ╛¥µîçτñ║µ£¬Φ╖æσà¿σÑùπÇé
-- box∩╝êXeon∩╝îΘ¥₧ 5600H∩╝¢τ¢╕σÉîµ¬öµíê∩╝îσƒ║µ║ûτé║ box µ▓Öτ¢Æ `4b84597`∩╝ë∩╝Ü`node --test tests/overlay.test.mjs` ΓåÆ **17/17 pass**∩╝êNode 20.19.2 Φêç 22.23.3 Θâ╜ΘüÄ∩╝ë∩╝¢pytest σÉîµ¬ö 9 passedπÇé
-- box σà¿σÑù∩╝êσÅâΦÇâτö¿∩╝îσƒ║µ║û `4b84597`∩╝ë∩╝Ü966 passedπÇü24 skipped∩╝¢`test_sim_srt.py`∩╝Å`test_sim_backlog.py` τÜä 100 σêåΘÉÿµ¿íµô¼µÖéΘûôΘûÇµ¬╗σ£¿ box Θ½ÿΦ▓áΦ╝ë∩╝êload avg ~12∩╝ëΣ╕ïσñ▒µòù∩╝îΦêç overlay τäíΘù£∩╝êoverlay τ┤öµû░σó₧µ¬öπÇüµ£¬Φó½σ«âσÇæσî»σàÑ∩╝ë∩╝¢µ£¬Φâ╜σ£¿ box σ«îµêÉσƒ║µ║ûσ░ìτàºσì│Φó½µö╣µ┤╛σê░τ¡åΘ¢╗πÇé
-- σÅªσ£¿ box Θ⌐ùΦ¡ë∩╝Üτ£ƒσ»ª `create_app()` µÄ¢Σ╕è router σ╛î∩╝îσ╕╢σÉîµ║É `Origin` ΘÇú `/ws/listen` µ£âΘÇÜΘüÄ origin µ¬óµƒÑ∩╝êµö╢σê░ `room_unavailable`∩╝îΘ¥₧ 1008 µïÆτ╡ò∩╝ëπÇé
+## 測試結果
+- 筆電（DESKTOP-P8RGA3A，共用 venv Python 3.12.10）：`python -m pytest tests/test_overlay_routes.py -q` → **8 passed, 1 skipped**（skip = 筆電沒有 node，Node 測試項目跳過）。依指示未跑全套。
+- box（Xeon，非 5600H；相同檔案，基準為 box 沙盒 `4b84597`）：`node --test tests/overlay.test.mjs` → **17/17 pass**（Node 20.19.2 與 22.23.3 都過）；pytest 同檔 9 passed。
+- box 全套（參考用，基準 `4b84597`）：966 passed、24 skipped；`test_sim_srt.py`／`test_sim_backlog.py` 的 100 分鐘模擬時間門檻在 box 高負載（load avg ~12）下失敗，與 overlay 無關（overlay 純新增檔、未被它們匯入）；未能在 box 完成基準對照即被改派到筆電。
+- 另在 box 驗證：真實 `create_app()` 掛上 router 後，帶同源 `Origin` 連 `/ws/listen` 會通過 origin 檢查（收到 `room_unavailable`，非 1008 拒絕）。
 
-## µÄÑτ╖Ü∩╝êµò┤σÉêΦÇà∩╝î`app/server.py` τÜä `create_app()` σàºπÇü`app.mount("/static", ...)` Σ╣ïσ╛î∩╝ë
+## 接線（整合者，`app/server.py` 的 `create_app()` 內、`app.mount("/static", ...)` 之後）
 
-τûèσèáσ▒ñτ╢▓σ¥Ç∩╝Ü`http://127.0.0.1:<port>/overlay/<µê┐ΘûôΣ╗úΦÖƒ>`∩╝ê`<port>` τé║ app τÜäµ£ìσïÖσƒá∩╝îΦêç host Θáüτ¢╕σÉî∩╝ëπÇé
+疊加層網址：`http://127.0.0.1:<port>/overlay/<房間代號>`（`<port>` 為 app 的服務埠，與 host 頁相同）。
 
 ```python
 from app.overlay_routes import router as overlay_router
 app.include_router(overlay_router)
 ```
 
-`overlay.js` τö▒µùóµ£ë `/static` µÄ¢Φ╝ë∩╝ê`RevalidatingStaticFiles`∩╝î`no-cache`∩╝ëµÅÉΣ╛¢∩╝îΣ╕ìΘ£Çσà╢Σ╗ûµÄÑτ╖ÜπÇé
-σ¡ùσ╣òΦ╡░µùóµ£ëΦºÇτ£╛τ½» WebSocket `/ws/listen`∩╝êσÉî room.html τÜäσìöσ«Ü∩╝Ü`hello` / caption / `caption_deleted` / `captions_cleared` / `captions_expired` / `ping`ΓåÆ`pong` / `room_unavailable`∩╝ë∩╝î**µ▓Æµ£ëµû░σó₧Φ│çµûÖΦ╖»σ╛æµêûτ½»Θ╗₧**πÇé
+`overlay.js` 由既有 `/static` 掛載（`RevalidatingStaticFiles`，`no-cache`）提供，不需其他接線。
+字幕走既有觀眾端 WebSocket `/ws/listen`（同 room.html 的協定：`hello` / caption / `caption_deleted` / `captions_cleared` / `captions_expired` / `ping`→`pong` / `room_unavailable`），**沒有新增資料路徑或端點**。
 
-## OBS Φ¿¡σ«Ü
+## OBS 設定
 
-Σ╛åµ║É ΓåÆ ∩╝ï ΓåÆ πÇîτÇÅΦª╜σÖ¿πÇìΓåÆ URL σí½ `http://127.0.0.1:<port>/overlay/<µê┐ΘûôΣ╗úΦÖƒ>?lang=en&size=56`∩╝îσ»¼Θ½ÿΦ¿¡µêÉσá┤µÖ»Φºúµ₧Éσ║ª∩╝êσªé 1920├ù1080∩╝ë∩╝îσï╛πÇîΘáüΘ¥óΣ╕ìσÅ»ΦªïµÖéΘù£ΘûëΣ╛åµ║ÉπÇìσÅ»τ£üΦ│çµ║É∩╝¢Σ╕ìΘ£ÇΦªüΦç¬Φ¿é CSS∩╝êΦâîµÖ»µ£¼Φ║½σ░▒µÿ»ΘÇÅµÿÄ∩╝ëπÇé
-ΦïÑµê┐Θûôµ£ëΦºÇτ£╛ΘçæΘæ░∩╝îσèáΣ╕è `&k=<listen key>`∩╝êσ░▒µÿ» QR τó╝τ╢▓σ¥ÇΦúí `?k=` τÜäσÇ╝∩╝ëπÇé
+來源 → ＋ → 「瀏覽器」→ URL 填 `http://127.0.0.1:<port>/overlay/<房間代號>?lang=en&size=56`，寬高設成場景解析度（如 1920×1080），勾「頁面不可見時關閉來源」可省資源；不需要自訂 CSS（背景本身就是透明）。
+若房間有觀眾金鑰，加上 `&k=<listen key>`（就是 QR 碼網址裡 `?k=` 的值）。
 
-## URL σÅâµò╕
+## URL 參數
 
-µëÇµ£ëσÅâµò╕Θâ╜µ£âΘ⌐ùΦ¡ë∩╝¢Σ╕ìσÉêµ│òσ░▒τö¿ΘáÉΦ¿¡σÇ╝∩╝îµò╕σ¡ùΦ╢àσç║τ»äσ£ìσ░▒σñ╛σê░ΘéèτòîπÇéµƒÑΦ⌐óσ¡ùΣ╕▓**Σ╕ìµ£â**σÅìσ░äσê░ HTML∩╝êΘáüΘ¥óµÿ»Θ¥£µàïµ¬ö∩╝ëπÇé
+所有參數都會驗證；不合法就用預設值，數字超出範圍就夾到邊界。查詢字串**不會**反射到 HTML（頁面是靜態檔）。
 
-| σÅâµò╕ | σÇ╝ | ΘáÉΦ¿¡ | Φ¬¬µÿÄ |
+| 參數 | 值 | 預設 | 說明 |
 |---|---|---|---|
-| Φ╖»σ╛æ `/overlay/{room_id}` µêû `room` | `[A-Za-z0-9_-]{1,64}` | `class` | µê┐ΘûôΣ╗úΦÖƒ∩╝¢Φ╖»σ╛æσä¬σàêπÇéΦ╖»σ╛æΣ╕ìσÉêµ│òσ¢₧ 400 |
-| `k` | `[A-Za-z0-9_\-.~]{1,256}` | τ⌐║ | ΦºÇτ£╛ΘçæΘæ░∩╝êroom µ£ëΦ¿¡µÖéσ┐àσí½∩╝ë |
-| `lang` | `en` \| `ja` | `en` | µ£¼σá┤τ¢«µ¿ÖΦ¬₧Φ¿Ç∩╝îµ▒║σ«Üσ¡ùσ₧ïΦêç `lang` σ▒¼µÇº |
-| `show` | `tgt` \| `zh` \| `both` | `tgt` | Θí»τñ║Φ¡»µûç∩╝ÅΣ╕¡µûçσÄƒµûç∩╝Åσà⌐ΦÇà∩╝êσÄƒµûç 0.8em σ£¿Σ╕è∩╝ë |
-| `lines` | 1ΓÇô2∩╝êµò┤µò╕∩╝ë | 2 | τò½Θ¥óΣ╕èµ£ÇσñÜσ╣╛µ«╡σ¡ùσ╣ò∩╝îτí¼Σ╕èΘÖÉ 2 |
-| `size` | 12ΓÇô160 | 48 | σ¡ùτ┤Ü px |
-| `scale` | 0.25ΓÇô4 | 1 | Σ╣ÿσ£¿ `size` Σ╕è∩╝¢µ£Çτ╡éσ¡ùτ┤Üσñ╛σ£¿ 8ΓÇô320 px |
-| `pos` | `bottom` \| `top` \| `middle` | `bottom` | σ₧éτ¢┤Σ╜ìτ╜« |
-| `align` | `center` \| `left` \| `right` | `center` | µûçσ¡ùσ░ìΘ╜è |
-| `color` | `#rgb` / `#rrggbb`∩╝ê`#` σÅ»τ£üπÇüσÅ»σ»½ `%23`∩╝ë | `#ffffff` | σ¡ùΦë▓ |
-| `outline` | σÉîΣ╕è | `#000000` | µÅÅΘéèΦë▓ |
-| `ow` | 0ΓÇô12 | 3 | µÅÅΘéèσ»¼ px∩╝ê8 µû╣σÉæ text-shadow∩╝ë∩╝î0 = τäíµÅÅΘéè |
-| `shadow` | 0 \| 1 | 1 | ΘíìσñûτÜäµƒöσÆîΘÖ░σ╜▒ |
-| `margin` | 0ΓÇô400 | 40 | Φ╖¥Σ╕è∩╝ÅΣ╕ïτ╖ú px |
-| `maxw` | 30ΓÇô100 | 90 | σ¡ùσ╣òσìÇσ»¼σ║ª∩╝êvw∩╝ë |
-| `hide` | 0ΓÇô600 τºÆ | 0 | τäíµû░σ¡ùσ╣òσñÜΣ╣àσ╛îµ╕àτ⌐║τò½Θ¥ó∩╝¢0 = Σ╕ìµ╕à |
+| 路徑 `/overlay/{room_id}` 或 `room` | `[A-Za-z0-9_-]{1,64}` | `class` | 房間代號；路徑優先。路徑不合法回 400 |
+| `k` | `[A-Za-z0-9_\-.~]{1,256}` | 空 | 觀眾金鑰（room 有設時必填） |
+| `lang` | `en` \| `ja` | `en` | 本場目標語言，決定字型與 `lang` 屬性 |
+| `show` | `tgt` \| `zh` \| `both` | `tgt` | 顯示譯文／中文原文／兩者（原文 0.8em 在上） |
+| `lines` | 1–2（整數） | 2 | 畫面上最多幾段字幕，硬上限 2 |
+| `size` | 12–160 | 48 | 字級 px |
+| `scale` | 0.25–4 | 1 | 乘在 `size` 上；最終字級夾在 8–320 px |
+| `pos` | `bottom` \| `top` \| `middle` | `bottom` | 垂直位置 |
+| `align` | `center` \| `left` \| `right` | `center` | 文字對齊 |
+| `color` | `#rgb` / `#rrggbb`（`#` 可省、可寫 `%23`） | `#ffffff` | 字色 |
+| `outline` | 同上 | `#000000` | 描邊色 |
+| `ow` | 0–12 | 3 | 描邊寬 px（8 方向 text-shadow），0 = 無描邊 |
+| `shadow` | 0 \| 1 | 1 | 額外的柔和陰影 |
+| `margin` | 0–400 | 40 | 距上／下緣 px |
+| `maxw` | 30–100 | 90 | 字幕區寬度（vw） |
+| `hide` | 0–600 秒 | 0 | 無新字幕多久後清空畫面；0 = 不清 |
 
-σ¡ùσ₧ï∩╝êτäíσñûΘâ¿ CDN∩╝îσà¿τö¿µ£¼µ⌐ƒσ¡ùσ₧ï∩╝ë∩╝Ü
-- en∩╝Ü`Segoe UI, Helvetica Neue, Arial, Noto Sans, Liberation Sans, sans-serif`
-- ja∩╝Ü`Noto Sans JP, Noto Sans CJK JP, Source Han Sans JP, Yu Gothic UI, Yu Gothic, Meiryo UI, Meiryo, Hiragino Sans, Hiragino Kaku Gothic ProN, MS PGothic, sans-serif`∩╝ê`line-break: strict`∩╝ë
-- zh∩╝êσÄƒµûç∩╝ë∩╝Ü`Noto Sans TC, Noto Sans CJK TC, Source Han Sans TC, Microsoft JhengHei UI, Microsoft JhengHei, PingFang TC, Heiti TC, sans-serif`
+字型（無外部 CDN，全用本機字型）：
+- en：`Segoe UI, Helvetica Neue, Arial, Noto Sans, Liberation Sans, sans-serif`
+- ja：`Noto Sans JP, Noto Sans CJK JP, Source Han Sans JP, Yu Gothic UI, Yu Gothic, Meiryo UI, Meiryo, Hiragino Sans, Hiragino Kaku Gothic ProN, MS PGothic, sans-serif`（`line-break: strict`）
+- zh（原文）：`Noto Sans TC, Noto Sans CJK TC, Source Han Sans TC, Microsoft JhengHei UI, Microsoft JhengHei, PingFang TC, Heiti TC, sans-serif`
 
-## Φíîτé║
+## 行為
 
-- σÅ¬Θí»τñ║µ£Çµû░ 2 µ«╡∩╝êΣ╛¥ `session_ord`ΓåÆ`seq`ΓåÆ`cursor` µÄÆσ║Å∩╝ë∩╝¢σÉîΣ╕Çµ«╡Σ╗Ñ `version` Φ╝âµû░ΦÇàΦªåΦôï∩╝¢σ░Üµ£¬τ┐╗σÑ╜µêûτ┐╗Φ¡»σñ▒µòù∩╝ê`status` = missing/error/timeout/cancelled∩╝ëτÜäµ«╡σ£¿ `tgt` µ¿íσ╝ÅΣ╕ìΘí»τñ║∩╝îµëÇΣ╗Ñτò½Θ¥óσü£σ£¿Σ╕èΣ╕Çµ«╡σ«îµêÉτÜäΦ¡»µûçπÇé
-- µ»Åµ«╡µ£ÇσñÜτ┤äσà⌐ΦíîΦªûΦª║σêù∩╝¢σ«╣σÖ¿µ║óσç║µÖéσ╛₧Σ╕èµû╣Φúüσêç∩╝îµ£Çµû░µûçσ¡ùΣ╕Çσ«Üσ£¿τò½Θ¥óσàºπÇé
-- ΘçìΘÇú∩╝Ü`[0.5,1] ├ù min(30 s, 1 s┬╖2^(n-1))`∩╝îΣ╝║µ£ìσÖ¿τÜä `retry_after_ms` τò╢Σ╕ïΘÖÉ∩╝êµ£ÇσñÜ 60 s∩╝ë∩╝¢`4401`∩╝êΘçæΘæ░σñ▒µòê∩╝ëµ»Å 60 s Φ⌐ªΣ╕Çµ¼í∩╝¢`ended` µ»Å 15 s Φ⌐ªΣ╕Çµ¼í∩╝êΣ╕ïΣ╕Çσá┤σÉîµê┐Θûôµ£âΦç¬σïòµÄÑΣ╕è∩╝ëπÇéµ░╕Σ╕ìσü£µ¡óπÇé
-- µö╢σê░ `ping` σ¢₧ `pong`∩╝îΘü┐σàìΣ╝║µ£ìσÖ¿ΘûÆτ╜«ΘÇ╛µÖéµû╖τ╖ÜπÇé
-- σÅ¬τö¿ `textContent`∩╝Å`createElement`∩╝¢ΘÇúτ╖ÜτïÇµàïσ»½σ£¿ `body[data-state]`∩╝êτò½Θ¥óΣ╕èΣ╕ìΘí»τñ║Σ╗╗Σ╜òτïÇµàïµûçσ¡ù∩╝ëπÇé
-- σ¢₧µçëµ¿ÖΘá¡∩╝Ü`Cache-Control: no-cache`∩╝êσÉî repo µàúΣ╛ï∩╝ëπÇü`X-Content-Type-Options: nosniff`πÇüCSP `default-src 'none'; script-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'`ΓÇª
+- 只顯示最新 2 段（依 `session_ord`→`seq`→`cursor` 排序）；同一段以 `version` 較新者覆蓋；尚未翻好或翻譯失敗（`status` = missing/error/timeout/cancelled）的段在 `tgt` 模式不顯示，所以畫面停在上一段完成的譯文。
+- 每段最多約兩行視覺列；容器溢出時從上方裁切，最新文字一定在畫面內。
+- 重連：`[0.5,1] × min(30 s, 1 s·2^(n-1))`，伺服器的 `retry_after_ms` 當下限（最多 60 s）；`4401`（金鑰失效）每 60 s 試一次；`ended` 每 15 s 試一次（下一場同房間會自動接上）。永不停止。
+- 收到 `ping` 回 `pong`，避免伺服器閒置逾時斷線。
+- 只用 `textContent`／`createElement`；連線狀態寫在 `body[data-state]`（畫面上不顯示任何狀態文字）。
+- 回應標頭：`Cache-Control: no-cache`（同 repo 慣例）、`X-Content-Type-Options: nosniff`、CSP `default-src 'none'; script-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'`…
 
-## µ╕¼Φ⌐ª
+## 測試
 
 ```bash
 cd sidecar/live-room
-node --test tests/overlay.test.mjs                 # Node ΓëÑ18 σì│σÅ»∩╝ênode:test∩╝ë∩╝îΣ╕ìτö¿τ╡òσ░ìΦ╖»σ╛æ
-python -m pytest tests/test_overlay_routes.py -q    # Σ╣ƒµ£âσæ╝σÅ½Σ╕èΘ¥óτÜä node µ╕¼Φ⌐ª∩╝¢τäí node σëç skip
-python -m pytest tests -q                           # σà¿σÑù
+node --test tests/overlay.test.mjs                 # Node ≥18 即可（node:test），不用絕對路徑
+python -m pytest tests/test_overlay_routes.py -q    # 也會呼叫上面的 node 測試；無 node 則 skip
+python -m pytest tests -q                           # 全套
 ```
 
 
-## σ╖▓τƒÑΘÖÉσê╢πÇüσüçΦ¿¡Φêçσ╛àµ▒║σòÅΘíî
+## 已知限制、假設與待決問題
 
-1. **ja Φ¡»µûçµ¼äΣ╜ì**∩╝Üτ¢«σëìΦºÇτ£╛τ½»τÖ╜σÉìσû«∩╝ê`app/dispatch.py` `_LISTENER_PASS`∩╝ëσÅ¬µ£ë `zh`πÇü`en`∩╝îΣ╕¡ΓåÆµùÑσá┤µ¼íτÜäΦ¡»µûçµÄ¿µ╕¼Σ╣ƒµö╛σ£¿ `en` µ¼äπÇéoverlay σ£¿ `lang=ja` µÖéΦïÑΣ║ïΣ╗╢σ╕╢ `ja` µ¼äµ£âσä¬σàêτö¿∩╝îσÉªσëçτö¿ `en`πÇéΦïÑΣ╣ïσ╛îµö╣µêÉ `tgt`/`tgt_lang` µ¼äΣ╜ì∩╝îΘ£ÇΦªüσ░Åµö╣ `lineText()`πÇé
-2. **Σ╜öτö¿ΦºÇτ£╛σ╕¡Σ╜ì**∩╝Üoverlay µÿ»Σ╕ÇσÇïµÖ«ΘÇÜΦºÇτ£╛ΘÇúτ╖Ü∩╝îµ£âΦ¿êσàÑ `max_listeners`πÇéΦïÑΦªü OBS Σ╕ìΣ╜öΣ╜ì∩╝îΘ£ÇΦªüσ╛îτ½»σÅªΘûï host σ░êτö¿Θá╗Θüô∩╝êµ£¬σüÜ∩╝îσ¢áΣ╕ìΦâ╜µö╣ server.py∩╝ëπÇé
-3. **Origin**∩╝ÜOBS σ╛₧σÉîΣ╕Ç host Φ╝ëσàÑΘáüΘ¥ó∩╝îOrigin Φêç Host τ¢╕σÉî∩╝îτ¼ªσÉê `audience_origin_allowed`πÇéΦïÑ OBS τö¿ `127.0.0.1` ΦÇî share host µÿ» LAN IP∩╝îΣ╣ƒµÿ»σÉîµ║ÉΦ½ïµ▒é∩╝îΣ╕ìσÅùσ╜▒Θƒ┐πÇé
-4. µ£¬σ£¿τ£ƒτÜä OBS∩╝ÅCEF Σ╕èµëïσïòΘ⌐ùΦ¡ë∩╝êbox τäí OBS∩╝ë∩╝¢σ╗║Φ¡░µò┤σÉêΦÇàσ£¿ 5600H Σ╕èΘûïΣ╕Çµ¼íτó║Φ¬ìµÅÅΘéèΦêçµùÑµûçσ¡ùσ₧ïπÇé
-5. `/overlay` ΘáüΘ¥óµ▓Æµ£ëΦ╡░ `RevalidatingStaticFiles` τÜä `?v=` µê│Φ¿ÿ∩╝êτé║Θü┐σàì overlay_routes σî»σàÑ server.py ΘÇáµêÉσ╛¬τÆ░σî»σàÑ∩╝ë∩╝¢Θ¥á `no-cache` Θçìµû░Θ⌐ùΦ¡ë∩╝îσ╖▓Φ╢│σñáπÇé
+1. **ja 譯文欄位**：目前觀眾端白名單（`app/dispatch.py` `_LISTENER_PASS`）只有 `zh`、`en`，中→日場次的譯文推測也放在 `en` 欄。overlay 在 `lang=ja` 時若事件帶 `ja` 欄會優先用，否則用 `en`。若之後改成 `tgt`/`tgt_lang` 欄位，需要小改 `lineText()`。
+2. **佔用觀眾席位**：overlay 是一個普通觀眾連線，會計入 `max_listeners`。若要 OBS 不佔位，需要後端另開 host 專用頻道（未做，因不能改 server.py）。
+3. **Origin**：OBS 從同一 host 載入頁面，Origin 與 Host 相同，符合 `audience_origin_allowed`。若 OBS 用 `127.0.0.1` 而 share host 是 LAN IP，也是同源請求，不受影響。
+4. 未在真的 OBS／CEF 上手動驗證（box 無 OBS）；建議整合者在 5600H 上開一次確認描邊與日文字型。
+5. `/overlay` 頁面沒有走 `RevalidatingStaticFiles` 的 `?v=` 戳記（為避免 overlay_routes 匯入 server.py 造成循環匯入）；靠 `no-cache` 重新驗證，已足夠。
 
 ## BLOCKED
-- τ¡åΘ¢╗µ▓Æµ£ë Node.js∩╝î`tests/overlay.test.mjs` τäíµ│òσ£¿τ¡åΘ¢╗σƒ╖Φíî∩╝êpytest σîàΦú¥µ£âΦç¬σïò skip∩╝ë∩╝¢σ╖▓σ£¿ box τö¿ Node 20∩╝Å22 Φ╖æΘüÄ 17/17πÇéΦïÑµò┤σÉêΦÇàΦªüσ£¿τ¡åΘ¢╗Φ╖æ∩╝îΘ£ÇΦªüσÅ»µö£σ╝Å Node ΓëÑ18∩╝êµ£¬Φç¬ΦíîΣ╕ïΦ╝ëσ«ëΦú¥∩╝ëπÇé
-- τäí OBS σÅ»σüÜσ»ªµ⌐ƒτ¢«ΦªûΘ⌐ùΦ¡ë∩╝êµÅÅΘéèπÇüµùÑµûçσ¡ùσ₧ï fallback σ»ªΘÜ¢ΦÉ╜σ£¿σô¬σÑùσ¡ùσ₧ï∩╝ëπÇé
+- 筆電沒有 Node.js，`tests/overlay.test.mjs` 無法在筆電執行（pytest 包裝會自動 skip）；已在 box 用 Node 20／22 跑過 17/17。若整合者要在筆電跑，需要可攜式 Node ≥18（未自行下載安裝）。
+- 無 OBS 可做實機目視驗證（描邊、日文字型 fallback 實際落在哪套字型）。
 
-## σ«îµò┤ commit SHA
-- τ¿ïσ╝Å commit∩╝Ü`727f35d8444b6aae5a4bb0a242c0e38af5109283`
-- σƒ║µ║û∩╝Ü`bea2e5c3cac2ab7d3f35bdaa25cf2702c1b8894d`∩╝êgrok/integrate∩╝ë
+## 完整 commit SHA
+- 程式 commit：`727f35d8444b6aae5a4bb0a242c0e38af5109283`
+- 基準：`bea2e5c3cac2ab7d3f35bdaa25cf2702c1b8894d`（grok/integrate）
