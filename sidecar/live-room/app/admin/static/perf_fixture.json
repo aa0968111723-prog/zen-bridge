@@ -1,0 +1,15 @@
+{
+  "_note": "示範用假數字（不是量測值）；形狀與 8780 /api/metrics 相同：latency = app/latency.py StageLatency.snapshot()，RTF 欄位 = app/rtf.py RtfMeter.snapshot()。",
+  "pending": 1,
+  "backlog_s": 2.4,
+  "asr_samples": 48,
+  "asr_rtf_p50": 0.6,
+  "asr_rtf_p95": 0.77,
+  "latency": {
+    "A2": {"name": "upload", "n": 48, "p50_ms": 120, "p95_ms": 260},
+    "A3": {"name": "queue", "n": 48, "p50_ms": 300, "p95_ms": 1400},
+    "A4": {"name": "decode_vad", "n": 48, "p50_ms": 60, "p95_ms": 110},
+    "A5": {"name": "asr", "n": 48, "p50_ms": 3600, "p95_ms": 4600},
+    "A6": {"name": "mt", "n": 45, "p50_ms": 930, "p95_ms": 3300}
+  }
+}
