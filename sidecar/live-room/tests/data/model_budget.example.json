@@ -4,22 +4,22 @@
       "name": "Breeze ASR (final)",
       "backend": "vulkan",
       "threads": 4,
-      "model_ram_gb": 0.0,
-      "extra_ram_gb": 0.0
+      "model_ram_gb": 1.08,
+      "extra_ram_gb": 0.5
     },
     {
       "name": "X-ASR int8 (draft)",
       "backend": "cpu",
       "threads": 1,
-      "model_ram_gb": 0.0,
-      "extra_ram_gb": 0.0
+      "model_ram_gb": 0.2,
+      "extra_ram_gb": 0.07
     },
     {
       "name": "Hy-MT2 GGUF Q4",
       "backend": "cpu",
       "threads": 2,
-      "model_ram_gb": 0.0,
-      "extra_ram_gb": 0.0
+      "model_ram_gb": 1.13,
+      "extra_ram_gb": 0.4
     }
   ]
 }

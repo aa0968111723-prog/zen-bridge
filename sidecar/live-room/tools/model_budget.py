@@ -37,11 +37,17 @@ def _read_inputs(hardware, config):
     if not isinstance(config, dict):
         raise BudgetInputError("config JSON must be an object")
 
-    available_ram = _number(
-        hardware.get("ram_available_gb"), "hardware.ram_available_gb"
-    )
+    if hardware.get("ram_available_gb") is None:
+        raise BudgetInputError(
+            "hardware.ram_available_gb is required and must be a number"
+        )
+    if hardware.get("logical_cores") is None:
+        raise BudgetInputError(
+            "hardware.logical_cores is required and must be a positive integer"
+        )
+    available_ram = _number(hardware["ram_available_gb"], "hardware.ram_available_gb")
     logical_cores = _positive_integer(
-        hardware.get("logical_cores"), "hardware.logical_cores"
+        hardware["logical_cores"], "hardware.logical_cores"
     )
 
     devices = hardware.get("vulkan_devices", [])

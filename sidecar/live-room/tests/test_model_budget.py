@@ -42,7 +42,8 @@ WORKERS = {
 
 def test_recommended_example_config_has_expected_workers():
     path = Path(__file__).parent / "data" / "model_budget.example.json"
-    workers = json.loads(path.read_text(encoding="utf-8"))["workers"]
+    config = json.loads(path.read_text(encoding="utf-8"))
+    workers = config["workers"]
 
     assert [
         (worker["name"], worker["backend"], worker["threads"]) for worker in workers
@@ -52,16 +53,17 @@ def test_recommended_example_config_has_expected_workers():
         ("Hy-MT2 GGUF Q4", "cpu", 2),
     ]
 
+    assert model_budget.check_budget(HW, config)["fits"]
+    assert not model_budget.check_budget(HW | {"ram_available_gb": 2.0}, config)["fits"]
+
 
 def test_fits_with_headroom_and_cpu_budget():
     report = model_budget.check_budget(HW, WORKERS)
 
     assert report["fits"]
-    assert report["ram"] == {
-        "required_gb": 4.6,
-        "available_gb": 4.8,
-        "headroom_gb": 1.0,
-    }
+    assert report["ram"]["required_gb"] == pytest.approx(4.6)
+    assert report["ram"]["available_gb"] == 4.8
+    assert report["ram"]["headroom_gb"] == 1.0
     assert report["cpu"] == {"requested_threads": 3, "available_threads": 11}
 
 
@@ -168,6 +170,18 @@ def test_cli_returns_two_for_invalid_json(tmp_path, capsys):
 
     assert model_budget.main(["--hw", str(hw_path), "--config", config_path]) == 2
     assert "invalid JSON" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("field", ["ram_available_gb", "logical_cores"])
+def test_cli_returns_two_with_clear_message_for_null_probe_field(tmp_path, capsys, field):
+    hardware = HW | {field: None}
+    hw_path = _write_json(tmp_path / "hw.json", hardware)
+    config_path = _write_json(tmp_path / "config.json", WORKERS)
+
+    result = model_budget.main(["--hw", hw_path, "--config", config_path])
+
+    assert result == 2
+    assert f"hardware.{field}" in capsys.readouterr().err
 
 
 def test_cli_refuses_to_overwrite_json(tmp_path, capsys):
