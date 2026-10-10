@@ -96,8 +96,11 @@ class _SessionLang:
     history: list = field(default_factory=list)     # [(from_seq, lang, at)]
 
 
+SESSION_LANG_LOCKED_MESSAGE = "這個場次的翻譯語言在開始時就固定了；要換語言，請先按「停止」，再用新的語言開始新場次。"
+
+
 class SessionTargets:
-    """One target language per session; a switch only applies from the next segment."""
+    """One target language per session, fixed at its start (PR #29); switching needs a new session."""
 
     def __init__(self, default: str = "en", clock=time.time):
         self.default = validate_tgt_lang(default)
@@ -112,19 +115,23 @@ class SessionTargets:
         return lang
 
     def switch(self, room_id: str, session_id: str, lang: str, *, last_seq: int) -> dict | None:
-        """Apply ``lang`` from ``last_seq + 1``. Returns the event to record, or None if unchanged."""
+        """One target language per session (PR #29 product rule): a running session never changes.
+
+        Before the session's first slice the choice is simply recorded. Once it has started, a different
+        language is refused (returns a ``tgt_lang_refused`` event the host UI shows); the same language
+        is a no-op (None). To translate into the other language, end the session and start a new one."""
         lang = validate_tgt_lang(lang)
         with self._lock:
             cur = self._by.get((room_id, session_id))
             if cur is None:
-                cur = self._by[(room_id, session_id)] = _SessionLang(self.default, 0, [(0, self.default, self._clock())])
-            if cur.history[-1][1] == lang:
+                self._by[(room_id, session_id)] = _SessionLang(lang, 0, [(0, lang, self._clock())])
                 return None
-            frm = max(int(last_seq) + 1, cur.history[-1][0])
-            cur.history.append((frm, lang, self._clock()))
-            cur.lang, cur.from_seq = lang, frm
-        return {"kind": "tgt_lang_changed", "room_id": room_id, "session_id": session_id,
-                "tgt_lang": lang, "from_seq": frm}
+            if cur.lang == lang:
+                return None
+            kept = cur.lang
+        return {"kind": "tgt_lang_refused", "room_id": room_id, "session_id": session_id,
+                "tgt_lang": kept, "requested": lang, "after_seq": int(last_seq),
+                "message": SESSION_LANG_LOCKED_MESSAGE}
 
     def known(self, room_id: str, session_id: str) -> bool:
         with self._lock:

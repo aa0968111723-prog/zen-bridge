@@ -669,6 +669,7 @@ go.onclick = async () => {
     if (opened.ok) rememberRoom(await opened.json());
     listenCaptions(room, true);
     await ctl.start();
+    sessionTgtLang = document.querySelector("#tgt-lang").value || "en";
     const activeRoom = ctl.session ? ctl.session.roomId : room;
     await hostFetch("/api/session/active", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: activeRoom, active: true }) });
     line("開始聽了。每一段都是完整錄音。");
@@ -705,10 +706,23 @@ privatePauseBtn.onclick = async () => {
   } catch (error) { line(error.message || "操作未完成，請確認連線。"); }
   finally { lockRoom(); }
 };
+// PR #29: one target language per session. Changing it mid-session is refused here (the server's
+// SessionTargets refuses it too); the new choice applies to the next session.
+let sessionTgtLang = "";
+const SESSION_LANG_LOCKED = "這個場次的翻譯語言在開始時就固定了；要換語言，請先按「停止」，再用新的語言開始新場次。";
+document.querySelector("#tgt-lang").addEventListener("change", (ev) => {
+  if (ctl.session && sessionTgtLang && ev.target.value !== sessionTgtLang) {
+    ev.target.value = sessionTgtLang;
+    status.className = "warn";
+    status.textContent = SESSION_LANG_LOCKED;
+    line(SESSION_LANG_LOCKED);
+  }
+});
 stopBtn.onclick = async () => {
   stopBtn.disabled = true;
   const current = ctl.session;
   await ctl.stop();
+  sessionTgtLang = "";
   privatePauseConfirmed = false;
   if (current) {
     const endBody = { room_id: current.roomId, session_id: current.id, last_seq: ctl.lastSeq || 0 };
