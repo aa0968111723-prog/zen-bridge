@@ -2,18 +2,17 @@
 
 本文件僅整理目前程式碼中真正存在的設定與環境變數，並附上定義來源。所有效能數字與建議都以「待實測」標示，不做未驗證的量化承諾。
 
-適用對象：Windows 筆電、以 zh -> en 或 zh -> ja 單一目標語言跑 live captions，且以本倉庫 `sidecar/live-room` 的現有實作為準。
+適用對象：Windows 筆電、以 zh → en 單一目標語言跑 live captions，且以本倉庫 `sidecar/live-room` 的現有實作為準。zh → ja 尚未接入即時管線（規劃中）。
 
 ## 1. 開場前檢查
 
 1. 插電與電源計畫
-   - 這個 repo 沒有在程式中直接改寫 Windows 電源計畫；真正的安全檢查在 benchmark 工具裡會判斷 AC/DC 狀態，並在電池模式下保守失敗。
-   - 相關定義：`scripts/bench/zbench.py` 的 `on_battery()` 與 `_win_ac_line_status()`，以及 `classify()` 會在電池狀態下不把結果判為 OK。
-   - 也就是說，「插電 + Windows 電源計畫設為 最佳效能」屬於使用者手動操作，不是程式自動設定。
+   - 建議插電，並由使用者手動將 Windows 電源模式設為「最佳效能」；repo 不會自動變更電源設定。
+   - 只有 `scripts/bench/zbench.py` 有 AC/DC 檢查：`on_battery()`、`_win_ac_line_status()` 與 `classify()` 會在電池或電源狀態不明時避免將結果判為 OK。`tools/bench_pipeline.py` 與 `tools/rtf_check.py` 沒有這項防護。
 
 2. 背景同步、瀏覽器分頁與其他干擾
    - 本倉庫沒有自動關閉背景同步或瀏覽器分頁的設定；這類操作必須由使用者自行處理。
-   - `scripts/bench/zbench.py` 明確要求：直播房間必須空閒，不能有即時串流；若電池狀態不明或是電池模式，結果不應被視為有效量測。
+   - `scripts/bench/zbench.py` 明確要求：直播房間必須空閒，不能有即時串流。對所有量測工具，建議都在 AC 電源與「最佳效能」模式下執行；依量測慣例，電池結果視為無效，但 `bench_pipeline.py` 和 `rtf_check.py` 不會因此拒絕執行。
 
 3. Defender 排除（使用者自行決定）
    - 目前程式碼沒有任何自動加入 Windows Defender 排除的邏輯，也沒有自動調整 Defender 設定的 env 變數。
@@ -107,13 +106,15 @@
 
 來源：`app/translate_config.py`、`app/runtime_tuning.py`。
 
-### 3.2 `ja` 的量化建議
+### 3.2 zh → ja（尚未接入即時管線（規劃中））的量化建議
+
+目前即時管線僅支援 zh → en：`create_app()` 使用 `app.translate.Translator`。`app/mt_backend.py` 的模組文件也指出，其中可處理 en/ja 的 backend 尚未接入 pipeline。zh → ja 因此是規劃中，不能視為目前可用的 live captions 模式。
 
 目前 repo 沒有任何 `BREEZE_MT_*_QUANT`、`BREEZE_TRANSLATE_QUANT`、`BREEZE_..._Q4`、`BREEZE_..._Q8` 這類明確量化開關。
 
 `app/translate_config.py` 只把 `num_thread`、`num_ctx`、`keep_alive` 與 model 名稱當作本機翻譯參數；它沒有把「量化格式」作為設定項。
 
-`app/mt_backend.py` 的 Hy-MT2 backend 可以設定：
+`app/mt_backend.py` 的 Hy-MT2 backend（尚未接入即時管線）可以設定：
 
 - `BREEZE_MT_BACKEND`
 - `BREEZE_MT_BASE_URL`
@@ -122,9 +123,9 @@
 - `BREEZE_MT_TEMPERATURE`
 - `BREEZE_MT_MAX_TOKENS`
 
-但它沒有 `ja` 專用精度量化開關。實際每 session 的目標語言由 `SessionTargets` 維護，預設為 `"en"`，且可切到 `"ja"`；範圍是 `TARGET_LANGS = ("en", "ja")`。這是 session-level 配置，不是量化層級配置。
+但它沒有 `ja` 專用精度量化開關。此 backend 的 `SessionTargets` 維護每 session 的目標語言，預設為 `"en"`，且可切到 `"ja"`；範圍是 `TARGET_LANGS = ("en", "ja")`。這是尚未接入即時管線的 session-level 配置，不代表 ja captions 已能 live 執行，也不是量化層級配置。
 
-因此，若你想討論「ja 可能需要較高精度量化」，這個 repo 中目前沒有正式設計好的 env knob；任何這類調整都只能標示為「待實測」。
+因此，若你想討論「ja 可能需要較高精度量化」，這個 repo 中目前沒有正式設計好的 env knob；zh → ja 尚未接入即時管線（規劃中），任何這類調整都只能標示為「待實測」。
 
 來源：`app/mt_backend.py`、`app/translate_config.py`。
 
@@ -173,7 +174,7 @@
 
 ### 6.1 `tools/bench_pipeline.py`
 
-此腳本會模擬 pipeline 的 ASR / translation 量測，並由 `PRESETS` 定義不同情境（`A` / `B` / `soak`）。
+此腳本是合成情境／fake-ASR 負載測試：以假 ASR、模擬翻譯延遲和 `PRESETS` 定義的情境（`A` / `B` / `soak`）驅動 pipeline，量測 pipeline backlog 與吞吐量，不是實際模型的準確度或延遲測試。
 
 實際命令：
 
@@ -183,7 +184,7 @@ python tools/bench_pipeline.py --scenario B --json .\bench_B.json
 python tools/bench_pipeline.py --scenario soak --json .\bench_soak.json
 ```
 
-它會依據 `app/server.py` 的 `create_app`、`app/settings.py` 的 `Settings`、以及 `app.asr` / `app.translate` 的行為來模擬真實排程；不會發送任何外部 API 呼叫。
+它會透過 `app/server.py` 的 `create_app` 和 `app/settings.py` 的 `Settings` 驅動實際 pipeline 排程，但使用 fake ASR 與模擬翻譯，不會發送外部 API 呼叫，也不能代表真實模型的準確度或延遲。量到的 backlog／吞吐量只適用於這些合成負載。
 
 輸出重點：
 
@@ -207,7 +208,7 @@ python tools/rtf_check.py run --n 4 --audio sample.wav
 
 `tools/rtf_check.py` 也明確寫了：
 
-- PASS 定義為「本次 session RTF p95 < 0.9」
+- PASS 定義為「本次 session RTF p95 < 0.9」；此門檻的實機適用性仍「待實測」
 - 但實機結果仍須在真正主持機上驗證，否則要以「尚未驗證」表示
 
 這代表：你可以在本機跑量測，但「該台機器的正式認證」需要在正式直播主機上重跑。
@@ -255,9 +256,8 @@ python tools/rtf_check.py run --n 4 --audio sample.wav
 
 ### Q3：電池模式下數字不可信
 
-- 這是 repo 的明確要求：benchmark 會在電池模式下保守失敗，不把結果判定為 OK。
-- 具體實作見 `scripts/bench/zbench.py` 的 `on_battery()` 與 `classify()`；它會在 AC 狀態不明時保守判定。
-- 所以只要你在電池模式或未確認電源狀態下跑 benchmark，數字都不應該被當成正式有效結果，應標示為「待實測」或直接停用測試。
+- 只有 `scripts/bench/zbench.py` 會檢查電池狀態，並在電池或 AC 狀態不明時避免將結果判為 OK；`tools/bench_pipeline.py` 和 `tools/rtf_check.py` 不會因電池狀態拒絕執行。
+- 建議插電並將 Windows 電源模式設為「最佳效能」後再執行量測。這是量測慣例，不是 `bench_pipeline.py` 或 `rtf_check.py` 的程式限制；電池測得的數字依慣例視為無效並標示「待實測」。
 
 來源：`scripts/bench/zbench.py`。
 
@@ -273,9 +273,10 @@ python tools/rtf_check.py run --n 4 --audio sample.wav
 - 這份指南中提到的所有設定，只有以下幾類是本倉庫中可見且實際存在的：
   - `Settings` / `.env`（`app/settings.py`）
   - ASR tuning（`app/asr_tuning.py`、`app/native_worker.py`、`app/native_asr.py`）
-  - MT / local translation（`app/translate_config.py`、`app/runtime_tuning.py`）
+  - MT / local translation（`app/translate_config.py`、`app/runtime_tuning.py`）；目前即時模式僅 zh → en，zh → ja 尚未接入即時管線（規劃中）
   - VAD / draft ASR（`app/vad.py`、`app/draft_asr.py`）
   - benchmark / RTF 驗證工具（`tools/bench_pipeline.py`、`tools/rtf_check.py`）
+- `tools/bench_pipeline.py` 是 synthetic/fake-ASR 負載測試，只量測合成情境中的 pipeline backlog 與吞吐量，不代表真實模型準確度或延遲；實機量測建議在 AC 電源及 Windows「最佳效能」模式下執行，電池結果依慣例無效。
 - 任何關於「GPU 效能」、「記憶體上限」、「ja 更高精度量化」和「實機定量 benchmark」的數字，均以「待實測」表示，且不應在未實際量測前當成正式設定值。
 
 這份文件只記錄當前代碼中已定義的內容；未來若要加入新的 GPU/OpenVINO/Vulkan 或更精細的 ASR/MT 量化選項，應先在程式碼中新增實際 env 變數與定義，並再補回正式的測試與文件說明。
