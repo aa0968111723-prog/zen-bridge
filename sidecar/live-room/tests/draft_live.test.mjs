@@ -68,7 +68,7 @@ const html = readFileSync(new URL("../app/static/room.html", import.meta.url), "
 assert.match(html, /\.zh\.draft[^{]*\{[^}]*color: var\(--muted\)/);
 assert.match(html, /body\.project \.draft[^{]*\{[^}]*display: none/);
 assert.match(html, /orderedCaptions\(finalsOnly\(\)\)/);
-assert.match(html, /onDraft: \(item\) => \{\n\s+if \(privacyPaused\) return;/);
+assert.match(html, /onDraft: \(item\) => \{\r?\n\s+if \(privacyPaused\) return;/);
 // drafts are written with textContent only (XSS)
 assert.equal(/innerHTML/.test(html), false);
 console.log("draft_live ok");

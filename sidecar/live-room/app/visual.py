@@ -377,6 +377,12 @@ def is_loopback_url(url: str) -> bool:
         return False
     if parts.username is not None or parts.password is not None:
         return False
+    try:
+        # CISO round 2: the same parser/validator as translation (8645, credentials, query, loopback).
+        from app.translate_config import TranslateConfigError, validate_base_url
+        validate_base_url(str(url).strip())
+    except (TranslateConfigError, ValueError):
+        return False
     if host in LOOPBACK_HOSTS:
         return True
     import ipaddress
