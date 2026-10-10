@@ -1653,6 +1653,7 @@ class Pipeline:
                         return segment
                     record_s = time.monotonic() - asr_started
                     self.latency.note(segment, "A5", record_s * 1000)
+                    self.latency.mark("A7", segment.id)      # M-03: closed on the first listener write
                     blank = bool(getattr(asr, "blank", False))
                     asr_ok = bool(asr.ok) and not blank
             except Exception as exc:

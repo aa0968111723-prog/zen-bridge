@@ -287,9 +287,9 @@ def rss_bytes() -> int:
 
 
 class Conn:
-    def __init__(self, ws: WebSocket, maxsize: int):
+    def __init__(self, ws: WebSocket, maxsize: int, on_sent=None):
         self.ws = ws
-        self.slot = ListenerSlot(ws.send_json, maxsize=maxsize)
+        self.slot = ListenerSlot(ws.send_json, maxsize=maxsize, on_sent=on_sent)
         self.slot.last_pong = time.monotonic()
         self.client_id = ""
         self.supplement = False
@@ -1333,7 +1333,9 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         return room is not None and _listener_authorized(request, room, request.query_params.get("k", ""))
 
     app.include_router(build_visual_router(visual_hub, ws_guard=_visual_ws_guard,
-                                           http_guard=_visual_http_guard))   # aitest: /visual
+                                           http_guard=_visual_http_guard,
+                                           # CTO P2: the manual trigger is a host action (token + origin)
+                                           host_guard=lambda request: require_host(request, token, settings)))   # aitest: /visual
     app.state.settings = settings
     app.state.token = token
     app.state.pipeline = pipeline
@@ -1619,7 +1621,16 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                 continue
             conn.slot.offer(event)
 
-    drafts = DraftHub(draft_factory, publish=_publish_draft, is_paused=pipeline.is_paused)
+    drafts = DraftHub(draft_factory, publish=_publish_draft, is_paused=pipeline.is_paused,
+                      latency=pipeline.latency)
+
+    def _listener_sent(msg: dict) -> None:
+        # CTO M-03: A7 = ASR done -> first completed listener write of that caption; B1 closes on the
+        # first draft write of a seq. Each closes once (finish pops the mark).
+        key = msg.get("id") if isinstance(msg, dict) else None
+        if not key or not msg.get("zh"):
+            return
+        pipeline.latency.finish("B1" if msg.get("type") == "draft" else "A7", str(key))
     app.state.drafts = drafts
 
     @app.post("/api/rooms/{room_id}/pause")
@@ -2284,7 +2295,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             })
             await ws.close(code=1013)
             return
-        conn = Conn(ws, settings.listener_queue)
+        conn = Conn(ws, settings.listener_queue, on_sent=_listener_sent)
         conn.client_id = client_id
         conn.supplement = supplement_flag
         room["listeners"].add(conn)

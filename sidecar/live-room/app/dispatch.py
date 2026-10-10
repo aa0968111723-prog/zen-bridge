@@ -341,8 +341,10 @@ class RoomBus:
 class ListenerSlot:
     """Bounded per-connection send queue. offer() never waits on the socket."""
 
-    def __init__(self, sender: Callable[[dict], Awaitable[None]], maxsize: int = 32, send_timeout: float = 2.0):
+    def __init__(self, sender: Callable[[dict], Awaitable[None]], maxsize: int = 32, send_timeout: float = 2.0,
+                 on_sent: Callable[[dict], None] | None = None):
         self.sender = sender
+        self.on_sent = on_sent                     # M-03: latency hook after a completed write
         self.q: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
         self.send_timeout = send_timeout
         self.task: asyncio.Task | None = None
@@ -369,6 +371,11 @@ class ListenerSlot:
                 except asyncio.TimeoutError:
                     self.alive = False
                     return
+                if self.on_sent is not None:
+                    try:
+                        self.on_sent(msg)
+                    except Exception:              # a metrics hook never breaks delivery
+                        pass
                 if cancellation_pending():
                     raise asyncio.CancelledError()
                 if not self.alive:

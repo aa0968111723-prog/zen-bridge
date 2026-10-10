@@ -77,3 +77,22 @@ async def test_visual_history_needs_listen_key():
             assert (await client.get("/api/visual/class", headers=auth(token))).status_code == 200
     finally:
         await stop(app)
+
+
+@pytest.mark.anyio
+async def test_visual_trigger_needs_the_host_token():
+    from httpx import ASGITransport, AsyncClient
+    from tests.test_round2 import app_for, auth, open_room, stop, token_of
+    app = app_for()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://127.0.0.1:8780") as client:
+            token = await token_of(app, client)
+            await open_room(client, token, "class")
+            assert (await client.post("/api/visual/class/trigger")).status_code == 401
+            assert (await client.post("/api/visual/class/trigger", headers={"authorization": "Bearer nope"})).status_code == 401
+            ok = await client.post("/api/visual/class/trigger", headers=auth(token))
+            assert ok.status_code == 200 and ok.json()["accepted"] is False   # disabled without a visual LLM
+            evil = await client.post("/api/visual/class/trigger", headers={**auth(token), "origin": "http://evil.example"})
+            assert evil.status_code == 403
+    finally:
+        await stop(app)

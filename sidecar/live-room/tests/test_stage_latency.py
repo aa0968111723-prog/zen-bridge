@@ -40,7 +40,7 @@ async def test_fake_asr_1s_and_mt_half_second_show_in_metrics():
             assert r.status_code == 200, r.text
         m = (await client.get("/api/metrics", headers=auth(token))).json()
         lat = m["latency"]
-        assert set(lat) == {"A2", "A3", "A4", "A5", "A6"}
+        assert set(lat) == {"A2", "A3", "A4", "A5", "A6", "A7", "B1"}   # CTO M-03 adds A7, B1
         assert lat["A5"]["n"] == 2 and 950 <= lat["A5"]["p50_ms"] <= 1300
         assert lat["A6"]["n"] == 2 and 450 <= lat["A6"]["p50_ms"] <= 800
         assert lat["A2"]["n"] == 2 and 100 <= lat["A2"]["p50_ms"] <= 1500

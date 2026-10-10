@@ -42,8 +42,9 @@ class DraftSession:
 
 class DraftHub:
     def __init__(self, factory: Callable[[], DraftAsr] | None = None, *, publish: Callable[[dict], None],
-                 is_paused: Callable[[str], bool] = lambda room: False, clock=time.monotonic):
+                 is_paused: Callable[[str], bool] = lambda room: False, clock=time.monotonic, latency=None):
         self.factory = factory or draft_from_env
+        self.latency = latency                     # M-03 B1: first packet of a seq -> first draft write
         self.publish = publish
         self.is_paused = is_paused
         self.clock = clock
@@ -116,6 +117,8 @@ class DraftHub:
                 sess.committed, sess.partial = [], ""
             return None
         with sess.lock:
+            if self.latency is not None:
+                self.latency.mark("B1", f"{sess.room_id}:{sess.session_id}:{sess.seq}")
             for p in sess.engine.feed(pcm16):
                 if p.is_endpoint:
                     if p.text:
