@@ -14,6 +14,8 @@ from app.admin import db
 
 
 def main(argv=None) -> int:
+    from app.console import safe_console
+    safe_console()
     ap = argparse.ArgumentParser(prog="python -m app.admin.restore")
     ap.add_argument("backup", nargs="?")
     ap.add_argument("--identity", default=None)

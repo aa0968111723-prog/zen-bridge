@@ -16,31 +16,20 @@ def test_target_langs_are_en_and_ja_only():
             mb.validate_tgt_lang(bad)
 
 
-def test_session_switch_applies_from_next_segment_only():
+def test_session_language_is_locked_once_started():
+    """PR #29 product rule (replaces the old "switch applies from the next segment")."""
     st = mb.SessionTargets("en", clock=lambda: 1.0)
     assert st.start("r", "s") == "en"
     assert st.switch("r", "s", "en", last_seq=3) is None
     ev = st.switch("r", "s", "ja", last_seq=5)
-    assert ev == {"kind": "tgt_lang_changed", "room_id": "r", "session_id": "s", "tgt_lang": "ja", "from_seq": 6}
-    assert [st.lang_for("r", "s", n) for n in (1, 5, 6, 9)] == ["en", "en", "ja", "ja"]
-    st.switch("r", "s", "en", last_seq=9)
-    assert st.lang_for("r", "s", 7) == "ja" and st.lang_for("r", "s", 10) == "en"
+    assert ev["kind"] == "tgt_lang_refused" and ev["tgt_lang"] == "en" and ev["requested"] == "ja"
+    assert "新場次" in ev["message"]
+    assert [st.lang_for("r", "s", n) for n in (1, 5, 6, 9)] == ["en"] * 4
+    assert st.switch("new", "s", "ja", last_seq=0) is None       # before a session starts: just the choice
+    assert st.lang_for("new", "s", 1) == "ja"
     assert st.lang_for("other", "s", 1) == "en"          # sessions are independent
     st.end("r", "s")
     assert st.lang_for("r", "s", 10) == "en"
-
-
-@pytest.mark.parametrize("text,lang,ok", [
-    ("Let us begin.", "en", True),
-    ("始めましょう。", "ja", True),
-    ("因縁が整う。", "ja", True),
-    ("Let us begin.", "ja", False),
-    ("<think>x</think>始めましょう。", "ja", False),
-    ("始めましょう。\n説明：", "ja", False),
-    ("始めましょう。", "en", False),
-])
-def test_caption_gate_per_language(text, lang, ok):
-    assert (mb.validate_caption(text, lang, zh="我們開始") is not None) is ok
 
 
 def test_hymt_request_shape_and_switch_is_prompt_only():

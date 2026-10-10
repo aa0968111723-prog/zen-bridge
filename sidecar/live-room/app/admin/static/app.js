@@ -60,6 +60,14 @@ const fmtTime = (ts) => ts ? new Date(ts * 1000).toLocaleString("zh-TW", {timeZo
 const pages = {};
 let stopPage = () => {};
 
+// Opt-in GPU ASR (BREEZE_ASR_GPU): requested / active / fell back to CPU and why.
+const asrGpuText = (g) => {
+  if (!g || !g.requested) return "CPU（預設）";
+  if (g.active && g.active !== "cpu") return `GPU ${g.active}` + (g.device ? `（${g.device}）` : "") + (g.selftest_ms != null ? `，自我測試 ${g.selftest_ms} ms` : "");
+  return `CPU（GPU ${g.requested} 失敗，已改用 CPU）`;
+};
+const asrGpuColor = (g) => (!g || !g.requested) ? "" : (g.active && g.active !== "cpu" ? "green" : "red");
+
 pages.overview = async () => {
   const [ov, inv, hw, pipe, feed] = await Promise.all([getJson("/overview"), getJson("/overview/inventory"),
     getJson("/overview/hardware"), getJson("/overview/pipeline"), getJson("/overview/feed")]);
@@ -67,7 +75,9 @@ pages.overview = async () => {
   const g = el("div", null, {class: "grid"});
   for (const [name, v] of Object.entries(ov.components)) g.append(card(name, v.status + (v.uptime_s ? `（已運行 ${Math.round(v.uptime_s)} 秒）` : ""), v.status === "up" || v.status === "ok" ? "green" : "red"));
   g.append(card("RTF", ov.rtf ?? "—", rtfColor(ov.rtf) + (ov.stale ? " stale" : "")));
+  g.append(card("ASR 加速", asrGpuText(ov.asr_gpu), asrGpuColor(ov.asr_gpu)));
   s1.append(g);
+  if (ov.asr_gpu && ov.asr_gpu.requested && ov.asr_gpu.error) s1.append(el("p", "GPU：" + ov.asr_gpu.error, {class: "warn"}));
   if (ov.stale) s1.append(el("p", "直播資料已過期（超過 10 秒沒有更新）"));
   const s2 = section("硬體資源");
   if (!hw.available) s2.append(el("p", "psutil 不可用，無法取得硬體資訊。"));
@@ -110,7 +120,7 @@ pages.monitor = async () => {
       status.textContent = d.stale ? "直播資料過期或直播服務未啟動" : "即時更新中";
       cards.textContent = ""; cards.classList.toggle("stale", !!d.stale);
       const m = d.metrics || {};
-      cards.append(card("RTF", m.rtf ?? "—", d.rtf_color), card("佇列", m.pending ?? "—"), card("處理中", m.inflight ?? "—"),
+      cards.append(card("RTF", typeof d.rtf === "number" ? d.rtf.toFixed(2) : "—", d.rtf_color), card("佇列", m.pending ?? "—"), card("處理中", m.inflight ?? "—"),
         card("翻譯排隊", m.translate_queued ?? "—"), card("略過", m.translate_skipped ?? "—"), card("合併", m.translate_merged ?? "—"),
         card("延遲(秒)", m.backlog_s ?? "—"), card("聽眾", m.listeners ?? "—"));
     });
@@ -212,6 +222,14 @@ pages.review = async () => {
       const u = q.tm_pending[i]; const span = tr.cells[2].firstChild;
       span.append(btn("核准", async () => { await api(`/tm/${u.id}/approve`, {method: "POST"}); render(); }, `核准 ${u.src_text}`),
         btn("駁回", async () => { await api(`/tm/${u.id}/reject`, {method: "POST"}); render(); }, `駁回 ${u.src_text}`));
+    });
+    // round3 §5-1: corrections wait in staging; only an admin's approval writes TM / glossary.
+    const st = q.staging_pending || [];
+    section("待審修正（staging）").append(table(["類型", "中文", "提議", ""], st.map(u => [u.kind === "term" ? "詞彙" : "翻譯記憶", u.src_text, u.tgt_text, can("admin") ? el("span") : "等待管理員"]), "待審修正"));
+    if (can("admin")) [...$("#page").querySelectorAll("table[aria-label=待審修正] tbody tr")].forEach((tr, i) => {
+      const u = st[i]; const span = tr.cells[3].firstChild;
+      span.append(btn("核准", async () => { await api(`/staging/${u.id}/approve`, {method: "POST", headers: {"If-Match": u.etag}, json: {}}); render(); }, `核准 ${u.src_text}`),
+        btn("退回", async () => { const reason = prompt("退回原因"); if (!reason) return; await api(`/staging/${u.id}/reject`, {method: "POST", headers: {"If-Match": u.etag}, json: {reason}}); render(); }, `退回 ${u.src_text}`));
     });
   }
 };

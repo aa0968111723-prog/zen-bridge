@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import tempfile
 import sys
 import time
 import wave
@@ -66,10 +68,68 @@ def model_kwargs(args) -> dict:
         print_progress=False, print_realtime=False, print_timestamps=False, no_context=True)
 
 
+_TIMING = re.compile(r"\b(sample|encode|decode|batchd|prompt|total) time\s*=\s*([0-9.]+)\s*ms")
+_FALLBACKS = re.compile(r"fallbacks\s*=\s*([0-9]+)\s*p\s*/\s*([0-9]+)\s*h")
+
+
+def parse_whisper_timings(text: str) -> dict:
+    """whisper_print_timings lines -> {"encode_ms", "decode_ms", ..., "fallbacks"} (missing keys omitted)."""
+    out: dict = {}
+    for name, ms in _TIMING.findall(text or ""):
+        out[f"{name}_ms"] = round(float(ms), 2)
+    m = _FALLBACKS.search(text or "")
+    if m:
+        out["fallbacks"] = int(m.group(1)) + int(m.group(2))
+    return out
+
+
+def capture_native_stderr(fn) -> str:
+    """Run ``fn`` with C-level fd 2 pointed at a temp file and return what it wrote (then echo it to the
+    real stderr so the rotating worker log keeps it). Root cause of null encode/decode ms in T4: the
+    timings only ever went to stderr, never into the per-clip stats."""
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+    saved = os.dup(2)
+    with tempfile.TemporaryFile() as tmp:
+        os.dup2(tmp.fileno(), 2)
+        try:
+            fn()
+        finally:
+            try:
+                sys.stderr.flush()
+            except Exception:
+                pass
+            os.dup2(saved, 2)
+            os.close(saved)
+        tmp.seek(0)
+        text = tmp.read().decode("utf-8", "replace")
+    if text:
+        try:
+            sys.stderr.write(text)
+            sys.stderr.flush()
+        except Exception:
+            pass
+    return text
+
+
+def _reset_timings(engine) -> None:
+    try:
+        import _pywhispercpp as pw
+        ctx = getattr(engine, "_ctx", None)
+        if ctx is not None and hasattr(pw, "whisper_reset_timings"):
+            pw.whisper_reset_timings(ctx)
+    except Exception:
+        pass
+
+
 def transcribe_clip(engine, pcm, prompt: str, language: str, args, clock=time.perf_counter) -> dict:
     seconds = len(pcm) / SR
     ctx = audio_ctx_for(seconds, args.context, args.context_min)
     cap = max_tokens_for(seconds, args.max_tokens)
+    if args.timings:
+        _reset_timings(engine)           # per-clip numbers, not process totals
     t0 = clock()
     segments = engine.transcribe(pcm, initial_prompt=prompt, language=language, audio_ctx=ctx, max_tokens=cap)
     text = ' '.join(s.text for s in segments).strip()
@@ -87,13 +147,14 @@ def transcribe_clip(engine, pcm, prompt: str, language: str, args, clock=time.pe
              'rtf': round(elapsed / seconds, 3) if seconds > 0 else None,
              'audio_ctx': ctx, 'max_tokens': cap, 'retried_full_ctx': retried}
     if args.timings:
-        note('BREEZE_TIMING ' + json.dumps(stats))
         timings = getattr(engine, 'print_timings', None)
         if callable(timings):
             try:
-                timings()                # whisper_print_timings -> stderr (encode/decode/fallbacks)
+                # whisper_print_timings -> C stderr; capture it so encode/decode ms reach the stats
+                stats.update(parse_whisper_timings(capture_native_stderr(timings)))
             except Exception as exc:     # pragma: no cover
                 note(f'print_timings failed: {type(exc).__name__}')
+        note('BREEZE_TIMING ' + json.dumps(stats))
     return {'text': text, 'stats': stats}
 
 

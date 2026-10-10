@@ -109,3 +109,26 @@ def test_identity_migration_idempotent(tmp_path):
     p = tmp_path / "zen-identity.sqlite3"
     assert db.migrate_identity(p) == 1
     assert db.migrate_identity(p) == 1
+
+
+def test_migrate_retries_fts_vtable_race(tmp_path, monkeypatch):
+    """Box flake under load: concurrent first start hit 'vtable constructor failed: tm_fts'."""
+    import sqlite3 as _sq
+    real = db.migrate_conn
+    calls = {"n": 0}
+
+    def flaky(conn):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _sq.OperationalError("vtable constructor failed: tm_fts")
+        return real(conn)
+    monkeypatch.setattr(db, "migrate_conn", flaky)
+    assert db.migrate(tmp_path / "z.sqlite3") == db.SCHEMA_VERSION
+    assert calls["n"] == 2
+
+    def locked(conn):
+        raise _sq.OperationalError("no such table: nope")
+    monkeypatch.setattr(db, "migrate_conn", locked)
+    import pytest as _pt
+    with _pt.raises(_sq.OperationalError):
+        db.migrate(tmp_path / "y.sqlite3")

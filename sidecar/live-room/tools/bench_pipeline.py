@@ -922,6 +922,8 @@ def _print_report(report: dict) -> None:
 
 
 def main() -> None:
+    from app.console import safe_console
+    safe_console()
     try:
         sys.stdout.reconfigure(line_buffering=True)
     except Exception:

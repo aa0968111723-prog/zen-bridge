@@ -3,6 +3,8 @@
 
   python tools/rtf_check.py metrics --base http://127.0.0.1:8780
   python tools/rtf_check.py run --n 4 --audio sample.wav
+  python tools/rtf_check.py t4 --plan tools/t4.example.json --audio <dir> --ref <dir> --approved
+  python tools/rtf_check.py det --dir <x-asr folder> --threads 1,2 --audio <dir>
 
 PASS means this run's session RTF p95 is below 0.9. Device acceptance stays
 尚未驗證 until someone runs this on the real host. The host token and the
@@ -829,7 +831,61 @@ def _print_matrix(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _cmd_t4(args, engines=None) -> int:
+    from tools import t4
+    try:
+        plan = t4.load_plan(args.plan)
+    except (t4.PlanError, ValueError, OSError) as exc:
+        print(f"plan 錯誤：{exc}", file=sys.stderr)
+        return t4.EXIT_PLAN
+    missing = t4.missing_files(plan, Path(args.models)) if engines is None else []
+    if missing:
+        print("缺少檔案（不會自動下載）：\n  " + "\n  ".join(missing), file=sys.stderr)
+        return t4.EXIT_MISSING
+    if args.dry_run:
+        print(f"plan OK：asr {len(plan.get('asr', []))}、draft {len(plan.get('draft', []))}、mt {len(plan.get('mt', []))} 列")
+        return 0
+    if not args.approved:
+        print("T4 是效能測試，目前暫停中；要有柏能同意才加 --approved。", file=sys.stderr)
+        return t4.EXIT_HOLD
+    if args.audio is None:
+        print("需要 --audio", file=sys.stderr)
+        return t4.EXIT_PLAN
+    out = args.out or Path("results") / time.strftime("t4-%Y%m%d-%H%M%S.jsonl")
+    eng = engines or t4.real_engines(Path(args.models), args.llama_server)
+    code, rows = t4.run_t4(plan, Path(args.audio), args.ref, Path(out), eng)
+    if rows:
+        table = t4.markdown(rows)
+        print(table)
+        if args.report is not None:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            with args.report.open("a", encoding="utf-8") as fh:
+                fh.write(table + "\n\n")
+    return code
+
+
+def _cmd_det(args, factory=None) -> int:
+    from tools import t4
+    clips = t4.load_clips(Path(args.audio), None, int(args.n))
+    threads = _parse_ints(args.threads, "threads")
+    if factory is None:
+        from app.draft_asr import XAsrDraft, opencc_s2twp
+        conv = opencc_s2twp()
+
+        def factory(th):
+            return XAsrDraft(args.dir, threads=th, precision=args.precision, convert=conv)
+    rows = t4.det_check(factory, clips, threads)
+    for r in rows:
+        print(f"threads={r['threads']}: {r['identical']}/{r['clips']} 三次相同 -> {'穩定' if r['deterministic'] else '不穩定'}")
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    return 0 if all(r["deterministic"] for r in rows) else 1
+
+
 def main(argv: list[str] | None = None) -> int:
+    from app.console import safe_console
+    safe_console()
     parser = argparse.ArgumentParser(description="量這台電腦的辨識即時率（RTF）。不會印出主持權杖或逐字稿。")
     sub = parser.add_subparsers(dest="cmd", required=True)
     metrics = sub.add_parser("metrics", help="讀正在跑的服務的 /api/metrics")
@@ -850,7 +906,28 @@ def main(argv: list[str] | None = None) -> int:
     matrix.add_argument("--segment-s", type=float, default=SEGMENT_S)
     matrix.add_argument("--minutes", type=float, default=10.0)
     matrix.add_argument("--out", type=Path, default=None)
+    t4p = sub.add_parser("t4", help="round4 T4 量測矩陣（需要 --approved；--dry-run 只檢查 plan 和檔案）")
+    t4p.add_argument("--plan", type=Path, required=True)
+    t4p.add_argument("--audio", type=Path, required=False)
+    t4p.add_argument("--ref", type=Path, default=None)
+    t4p.add_argument("--out", type=Path, default=None)
+    t4p.add_argument("--models", type=Path, default=ROOT / "models")
+    t4p.add_argument("--llama-server", type=Path, default=None)
+    t4p.add_argument("--report", type=Path, default=None, help="另外把 Markdown 表寫到這個檔案")
+    t4p.add_argument("--dry-run", action="store_true")
+    t4p.add_argument("--approved", action="store_true", help="柏能已同意在這台跑 T4")
+    det = sub.add_parser("det", help="round4 D1：X-ASR 同一段跑 3 次是否一致（det_check xasr 1,2）")
+    det.add_argument("--dir", type=Path, required=True)
+    det.add_argument("--threads", default="1,2")
+    det.add_argument("--audio", type=Path, required=True)
+    det.add_argument("--n", type=int, default=30)
+    det.add_argument("--precision", default="auto")
+    det.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
+    if args.cmd == "t4":
+        return _cmd_t4(args)
+    if args.cmd == "det":
+        return _cmd_det(args)
     if args.cmd == "metrics":
         base = str(args.base).rstrip("/")
         token = fetch_token(base)

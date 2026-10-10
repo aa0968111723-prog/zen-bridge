@@ -61,7 +61,24 @@ export function createCaptionView(limit = 80) {
     }
     if (deleted.has(item.id)) return;
     if (item.seq == null) return;
-    const prev = items.get(item.id);
+    if (item.type === "draft") {
+      // round4 #5: grey draft text. It never overwrites a real line and a final with the same id
+      // (same seq) replaces it in place.
+      const have = items.get(item.id);
+      if (have && !have.draft) return;
+      // Drafts carry no session_ord; take the session's from its finals so the draft sorts after them
+      // (otherwise ord 0 sorts it before every final and it never reaches the stage line).
+      let ord = Number(item.session_ord) || 0;
+      if (!ord) for (const row of items.values()) {
+        if (row.session_id === item.session_id && Number(row.session_ord) > ord) ord = Number(row.session_ord);
+      }
+      items.set(item.id, { id: item.id, seq: item.seq, session_id: item.session_id, room_id: item.room_id,
+        session_ord: ord, zh: String(item.zh || ""), en: "", status: "draft", draft: true, version: 0 });
+      while (items.size > limit) items.delete(items.keys().next().value);
+      return;
+    }
+    const prev0 = items.get(item.id);
+    const prev = prev0 && prev0.draft ? undefined : prev0;
     const merged = mergeCaptionUpdate(prev, item);
     if (!merged || merged === prev) return;
     items.set(item.id, merged);
@@ -192,7 +209,7 @@ function stateManual(kind, attempt) {
 }
 
 export function connectRoom({
-  room, url, onState, onEvent, onGap, onDelete, onClear, onBackfill, onReset, onHost, onExpire, onPause,
+  room, url, onState, onEvent, onGap, onDelete, onClear, onBackfill, onReset, onHost, onExpire, onPause, onDraft,
   openSocket, sleep, now, staleMs, random, schedule, cancelSchedule, isForeground, network, watchEvery,
   extraHelloMs,
 }) {
@@ -315,6 +332,10 @@ export function connectRoom({
     if (!data || typeof data !== "object") return;
     if (data.type === "paused" || data.type === "resumed") {
       if (onPause) onPause(data.type === "paused");
+      return;
+    }
+    if (data.type === "draft") {
+      if (onDraft && data.id) onDraft(data);
       return;
     }
     cursor = noteCursor(cursor, data.cursor);

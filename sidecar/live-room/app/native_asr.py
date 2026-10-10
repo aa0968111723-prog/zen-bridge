@@ -11,6 +11,7 @@ from collections import deque
 from pathlib import Path
 from app.asr import AsrResult, ResidentAsr
 from app.asr_tuning import NativeTuning, default_log_path, rotating_logger
+from app.gpu_env import shared_memory_from, worker_env
 
 RESTART_BACKOFF_S = (1.0, 5.0, 30.0)
 RESTART_WINDOW_S = 300.0
@@ -29,6 +30,11 @@ class NativeResidentAsr(ResidentAsr):
         sink = self.worker_log
         try:
             for line in stream:
+                shared = shared_memory_from(line)
+                if shared is not None:
+                    self.ggml_shared_memory = shared          # round4 #9 / D7
+                    if sink is not None:
+                        sink.info("BREEZE_GGML shared_memory=%d", shared)
                 if sink is not None:
                     sink.info(line.rstrip())
         finally:
@@ -52,6 +58,7 @@ class NativeResidentAsr(ResidentAsr):
         self.restarts = 0
         self._last_failure = None
         self._current_clip = ""
+        self.ggml_shared_memory: int | None = None
 
     def _read_messages(self, stream):
         try:
@@ -85,6 +92,7 @@ class NativeResidentAsr(ResidentAsr):
         try:
             self.proc = subprocess.Popen(command, cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', bufsize=1,
+                env=worker_env(),        # round4 #9: inherit os.environ + VK layer guard
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             self.reader = threading.Thread(target=self._read_messages, args=(self.proc.stdout,), daemon=True)
             self.reader.start()
@@ -124,7 +132,7 @@ class NativeResidentAsr(ResidentAsr):
 
     def restart_status(self) -> dict:
         return {"asr_degraded": self.degraded, "asr_restarts": self.restarts,
-                "asr_recent_failures": len(self.failures)}
+                "asr_recent_failures": len(self.failures), "ggml_shared_memory": self.ggml_shared_memory}
 
     def _try_restart(self) -> AsrResult | None:
         """None = worker healthy again. Otherwise the error for this (dropped) segment."""

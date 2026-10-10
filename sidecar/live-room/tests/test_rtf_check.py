@@ -7,7 +7,6 @@ import socket
 import struct
 import threading
 import time
-import types
 from pathlib import Path
 
 import pytest
@@ -79,20 +78,16 @@ def test_run_with_fake_asr_prints_pass_and_hides_transcript(monkeypatch, capsys,
     wav = tmp_path / "slice.wav"
     wav.write_bytes(wave_bytes(1.0))
     seen = {}
-    # measure_slices times recognition with rtf_check.time.monotonic. A fake clock
-    # makes each 0.05 s recognition exactly 0.05 s, whatever the runner is doing.
-    clock = _Clock()
 
     class Fake:
         def transcribe(self, path, prompt):
             del path, prompt
-            clock.sleep(0.05)
+            time.sleep(0.05)
             return AsrResult(ok=True, text="不要印出這句逐字稿XYZ")
 
         def close(self):
             seen["closed"] = True
 
-    monkeypatch.setattr(rtf_check, "time", types.SimpleNamespace(monotonic=clock.now, sleep=clock.sleep))
     monkeypatch.setattr(rtf_check, "build_asr", lambda: Fake())
     code = rtf_check.main(["run", "--n", "3", "--audio", str(wav)])
     captured = capsys.readouterr()
@@ -428,44 +423,32 @@ def test_run_warns_that_a_long_file_is_smoke_not_six_second_pace(monkeypatch, ca
 
 
 def test_two_workers_start_together_instead_of_waiting_out_each_slice():
-    """Fake producer clock, and each slice's 0.2 s recognition is held open by events.
-
-    Release k waits until k recognitions have started, so starts are stamped at
-    the release that fed them: 0.0 and 0.05. The first two recognitions stay busy
-    until the producer has queued slice 2 (it then enters its third sleep), so
-    slice 2 is queued while both workers are busy. A pool that ran one slice at
-    a time never starts the second one: the producer's wait fails the test.
-    """
     slices = [(Path(f"{index}.wav"), 0.2) for index in range(4)]
     starts: list[float] = []
-    clock = _Clock()
-    cv = threading.Condition()
-    sleeps = {"n": 0}
-    slice_two_queued = threading.Event()
+    gate = threading.Lock()
+    both = threading.Event()
+    state = {"active": 0, "max_active": 0}
 
-    def sleep(delay: float) -> None:
-        sleeps["n"] += 1
-        if sleeps["n"] <= 2:
-            with cv:
-                started = cv.wait_for(lambda: len(starts) >= sleeps["n"], timeout=5)
-            assert started, f"recognition {sleeps['n']} did not start while the others were busy"
-        else:
-            slice_two_queued.set()
-        clock.sleep(delay)
-
+    # Windows CI flake root cause: "second start < 0.15 s after the first" was a wall-clock proxy for
+    # concurrency (thread start + 15.6 ms ticks on a busy runner). Check the property itself: the second
+    # slice starts while the first is still inside transcribe. Serialised workers never reach 2 active.
     def transcribe(path, prompt):
         del path, prompt
-        with cv:
-            starts.append(clock.now())
-            index = len(starts)
-            cv.notify_all()
-        if index <= 2:
-            assert slice_two_queued.wait(5), "slice 2 was not queued while the first two were busy"
+        with gate:
+            starts.append(time.monotonic())
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            if state["active"] >= 2:
+                both.set()
+        both.wait(timeout=2.0)
+        time.sleep(0.2)
+        with gate:
+            state["active"] -= 1
         return AsrResult(ok=True, text="ok")
 
-    report = rtf_check.pace_transcriptions(transcribe, slices, workers=2, pace_s=0.05, sleep=sleep, now=clock.now)
+    report = rtf_check.pace_transcriptions(transcribe, slices, workers=2, pace_s=0.05)
     assert len(report["pairs"]) == 4
-    assert starts[1] - starts[0] < 0.15
+    assert state["max_active"] == 2
     assert report["max_backlog_s"] > 0
     assert report["cpu_source"] == "UNKNOWN"
 

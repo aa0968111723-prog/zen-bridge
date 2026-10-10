@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>禪譯主持</title>
+<link rel="icon" href="/static/brand/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/static/brand/logo-32.png">
+<link rel="apple-touch-icon" href="/static/brand/logo-256.png">
 <style>
 :root { color-scheme: light; }
 body { margin: 0; font-family: "Segoe UI", "PingFang TC", sans-serif; background: #f3eadb; color: #2a2118; }
@@ -41,11 +44,18 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 #first-run ol { margin: 8px 0 0; padding-left: 1.2em; }
 #first-run li { margin: 6px 0; }
 #log { white-space: pre-wrap; min-height: 140px; max-height: 280px; overflow: auto; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand h1 { margin: 0; }
+.brand img { border-radius: 8px; }
+.qr-pair { display: flex; flex-wrap: wrap; gap: 16px; }
+.qr-pair figure { margin: 0; }
+.qr-pair figcaption { font-weight: 650; }
+.qr-url { word-break: break-all; max-width: 220px; font-size: 13px; }
 </style>
 </head>
 <body>
 <main>
-<h1>禪譯主持</h1>
+<div class="brand"><img src="/static/brand/logo-128.png" alt="" width="40" height="40"><h1>禪譯主持</h1></div>
 <p class="lead">這台是主持端。同一個 Wi-Fi 的手機掃下面的 QR。沒有金鑰時只出中文。</p>
 <div class="card" id="first-run">
 <p><strong>第一次使用，只要三步</strong></p>
@@ -58,6 +68,7 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 </div>
 <div class="card">
 <label>房間 <input id="room" value="class" autocomplete="off"></label>
+<label>譯成 <select id="tgt-lang"><option value="en">英文</option><option value="ja">日文</option></select></label>
 <label>麥克風 <select id="mic"><option value="">預設麥克風</option></select></label>
 <div class="meter" aria-hidden="true"><span id="level"></span></div>
 <div>
@@ -66,15 +77,19 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 <button id="private-pause" disabled style="color:#b91c1c" aria-pressed="false">私密暫停</button>
 <button id="try" class="secondary" type="button">試音</button>
 </div>
+<p id="draft-row" hidden><label><input type="checkbox" id="draft-on" checked> 聽眾端顯示灰色草稿字幕（即時、未校正；正式字幕到了會原地取代，投影模式不顯示）</label> <span id="draft-state" class="muted">草稿字幕：關</span></p>
 <p id="phase">收音狀態：待命</p>
 <p id="rtf-speed" class="speed-empty" title="每 1 秒錄音需要的辨識秒數。一般是這一場最近 200 段的中位數，最慢是第 95 百分位。低於 0.9 才跟得上。新的一場沒有樣本時，不顯示上一場的數字。">辨識速度：開始聽之後才有數字</p>
 <p id="caption-en"></p>
 <p id="caption-zh"></p>
 <p id="status"></p>
 <p id="metrics"></p>
+<p id="extra-links" class="lead">其他畫面：<a id="link-overlay" target="_blank" rel="noopener">OBS 疊加字幕</a>　<a id="link-visual" target="_blank" rel="noopener">示意圖（V2）</a>　<a href="http://127.0.0.1:8791/admin/" target="_blank" rel="noopener">後台</a></p>
 <p class="share-title">聽眾掃這裡</p>
-<img id="qr" alt="聽眾 QR" width="220">
-<p id="url"></p>
+<div class="qr-pair">
+<figure id="qr-name-box" hidden><figcaption>用名稱連線</figcaption><img id="qr-name" alt="聽眾 QR（電腦名稱）" width="200"><p id="url-name" class="qr-url"></p></figure>
+<figure><figcaption>用 IP 連線（名稱連不上時）</figcaption><img id="qr" alt="聽眾 QR（IP）" width="200"><p id="url" class="qr-url"></p></figure>
+</div>
 <label>分享位址 <select id="nic"></select></label>
 </div>
 <div class="card">
@@ -83,6 +98,8 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 <p id="glossary-note" class="warn" role="status"></p>
 <button id="save-terms" class="secondary" type="button">儲存術語</button>
 <button id="export" class="secondary" type="button">匯出 SRT</button>
+<button id="handoff" class="secondary" type="button">用手機下載</button>
+<div id="handoff-box" hidden><img id="handoff-qr" alt="下載交接 QR" width="180"><p id="handoff-note"></p></div>
 <label>跳過序號 <input id="skip-seq" inputmode="numeric" value="1" style="width:5em"></label>
 <button id="skip" class="secondary" type="button">標記缺段</button>
 <button id="delete-seg" class="secondary" type="button">刪除此段</button>
@@ -95,6 +112,7 @@ textarea[readonly] { background: #f3eadb; color: #6b5644; }
 import { createCaptureController } from "/static/recorder_machine.js";
 import { connectRoom, createCaptionView, mergeCaptionUpdate } from "/static/room_client.js";
 import { applyCaption } from "/static/host_caption.js";
+import { startDraftStream } from "/static/draft_capture.js";
 import { glossaryApplyLoadFailure, glossaryApplyLoaded, glossaryBeginLoad, glossaryEdit, glossaryRefusal, glossaryRoomState, glossarySaveDecision, glossarySaveLine, glossarySaveSettlement, glossaryTextDirty, glossaryTransportLine } from "/static/host_glossary.js";
 const roomEl = document.querySelector("#room");
 const log = document.querySelector("#log");
@@ -387,6 +405,12 @@ async function setup() {
   const headers = token ? { authorization: "Bearer " + token } : {};
   const data = await fetch("/api/setup?room_id=" + encodeURIComponent(roomEl.value), { headers, cache: "no-store" }).then((r) => r.json());
   rememberRoom(data);
+  draftAvailable = !!data.draft_available;
+  const linkRoom = encodeURIComponent(roomEl.value || "class");
+  document.querySelector("#link-overlay").href = "/overlay/" + linkRoom;
+  document.querySelector("#link-visual").href = "/visual?room=" + linkRoom + (data.listen_key ? "&k=" + encodeURIComponent(data.listen_key) : "");
+  const draftRow = document.querySelector("#draft-row");
+  if (draftRow) draftRow.hidden = !draftAvailable;
   const qr = document.querySelector("#qr");
   if (!data.share_ready) {
     qr.removeAttribute("src");
@@ -404,6 +428,9 @@ async function setup() {
       qr.removeAttribute("src");
     }
   }
+  await paintQr(document.querySelector("#qr-name"), data.listen_url_name ? "/api/qr?variant=name&room_id=" + encodeURIComponent(roomEl.value) + "&t=" + Date.now() : "", headers);
+  document.querySelector("#qr-name-box").hidden = !data.listen_url_name;
+  document.querySelector("#url-name").textContent = data.listen_url_name || "";
   const nic = document.querySelector("#nic");
   nic.textContent = "";
   const hosts = data.share_hosts || [];
@@ -515,11 +542,26 @@ function paintRecognitionSpeed(data) {
   speed.textContent = view.text;
   speed.title = view.title;
 }
+// round4 #5: optional grey draft captions (X-ASR). Off unless the server has a draft model.
+let micStream = null;
+let draft = null;
+let draftAvailable = false;
+async function syncDraft(next) {
+  const want = next === "recording" || next === "waiting";
+  const box = document.querySelector("#draft-on");
+  if (!want || !draftAvailable || !box || !box.checked) {
+    if (draft) { const d = draft; draft = null; (await d).stop(); }
+    return;
+  }
+  if (draft || !micStream || !ctl.session) return;
+  draft = startDraftStream({ stream: micStream, roomId: ctl.session.roomId, sessionId: ctl.session.id, token,
+    onState: (s) => { const el = document.querySelector("#draft-state"); if (el) el.textContent = s === "on" ? "草稿字幕：開" : "草稿字幕：關"; } });
+}
 const ctl = createCaptureController({
   periodMs: 6000,
   roomId: () => roomEl.value || "class",
   newId: () => crypto.randomUUID().replace(/-/g, "").slice(0, 16),
-  openMic: () => navigator.mediaDevices.getUserMedia({ audio: deviceId() }),
+  openMic: async () => { micStream = await navigator.mediaDevices.getUserMedia({ audio: deviceId() }); return micStream; },
   abortUploads: () => { for (const request of audioRequests) request.abort(); },
   onUploadError: (meta, err) => {
     line("第 " + meta.seq + " 段上傳未確認完成：" + (err?.message || "網路錯誤") + "；請檢查連線與字幕。停止後可匯出已接收內容。");
@@ -591,6 +633,7 @@ const ctl = createCaptureController({
     return data;
   },
   onPhase(next) {
+    syncDraft(next);
     const extra = next === "error" && ctl.lastError ? "：" + ctl.lastError : "";
     phaseEl.textContent = "收音狀態：" + (phaseLabels[next] || next) + extra;
   },
@@ -622,10 +665,11 @@ go.onclick = async () => {
   roomEl.disabled = true;
   go.disabled = true;
   try {
-    const opened = await hostFetch("/api/rooms/open", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: room }) });
+    const opened = await hostFetch("/api/rooms/open", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: room, tgt_lang: document.querySelector("#tgt-lang").value || "en" }) });
     if (opened.ok) rememberRoom(await opened.json());
     listenCaptions(room, true);
     await ctl.start();
+    sessionTgtLang = document.querySelector("#tgt-lang").value || "en";
     const activeRoom = ctl.session ? ctl.session.roomId : room;
     await hostFetch("/api/session/active", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ room_id: activeRoom, active: true }) });
     line("開始聽了。每一段都是完整錄音。");
@@ -662,10 +706,23 @@ privatePauseBtn.onclick = async () => {
   } catch (error) { line(error.message || "操作未完成，請確認連線。"); }
   finally { lockRoom(); }
 };
+// PR #29: one target language per session. Changing it mid-session is refused here (the server's
+// SessionTargets refuses it too); the new choice applies to the next session.
+let sessionTgtLang = "";
+const SESSION_LANG_LOCKED = "這個場次的翻譯語言在開始時就固定了；要換語言，請先按「停止」，再用新的語言開始新場次。";
+document.querySelector("#tgt-lang").addEventListener("change", (ev) => {
+  if (ctl.session && sessionTgtLang && ev.target.value !== sessionTgtLang) {
+    ev.target.value = sessionTgtLang;
+    status.className = "warn";
+    status.textContent = SESSION_LANG_LOCKED;
+    line(SESSION_LANG_LOCKED);
+  }
+});
 stopBtn.onclick = async () => {
   stopBtn.disabled = true;
   const current = ctl.session;
   await ctl.stop();
+  sessionTgtLang = "";
   privatePauseConfirmed = false;
   if (current) {
     const endBody = { room_id: current.roomId, session_id: current.id, last_seq: ctl.lastSeq || 0 };
@@ -787,6 +844,38 @@ document.querySelector("#export").onclick = async () => {
   link.href = URL.createObjectURL(blob);
   link.download = roomEl.value + ".srt";
   link.click();
+};
+// round4 #6: QR images use fetch -> blob -> objectURL and revoke the previous one.
+async function paintQr(img, address, headers) {
+  if (img.dataset.objectUrl) { URL.revokeObjectURL(img.dataset.objectUrl); delete img.dataset.objectUrl; }
+  if (!address) { img.removeAttribute("src"); return false; }
+  const resp = await fetch(address, { headers, cache: "no-store" });
+  if (!resp.ok) { img.removeAttribute("src"); return false; }
+  const objectUrl = URL.createObjectURL(await resp.blob());
+  img.dataset.objectUrl = objectUrl;
+  img.src = objectUrl;
+  return true;
+}
+let handoffTimer = 0;
+document.querySelector("#handoff").onclick = async () => {
+  if (!token) return;
+  const headers = { authorization: "Bearer " + token, "content-type": "application/json" };
+  const resp = await fetch("/api/export-handoff", { method: "POST", headers, body: JSON.stringify({ room_id: roomEl.value || "class", kind: "srt" }) });
+  const data = resp.ok ? await resp.json() : null;
+  const box = document.querySelector("#handoff-box");
+  const note = document.querySelector("#handoff-note");
+  if (!data || !data.url) { box.hidden = false; note.textContent = "目前沒有可給手機的連結（請先選網卡）。"; return; }
+  await paintQr(document.querySelector("#handoff-qr"), "/api/export-handoff/qr?token_id=" + encodeURIComponent(data.token), { authorization: "Bearer " + token });
+  box.hidden = false;
+  const until = Date.now() + data.expires_in * 1000;
+  if (handoffTimer) clearInterval(handoffTimer);
+  const tick = () => {
+    const left = Math.max(0, Math.round((until - Date.now()) / 1000));
+    note.textContent = left ? String(Math.floor(left / 60)) + ":" + String(left % 60).padStart(2, "0") + " 內有效，只能用一次" : "已過期，請再按一次";
+    if (!left) { clearInterval(handoffTimer); paintQr(document.querySelector("#handoff-qr"), "", {}); }
+  };
+  tick();
+  handoffTimer = setInterval(tick, 1000);
 };
 document.querySelector("#nic").onchange = async (ev) => {
   const resp = await fetch("/api/share-host", { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify({ host: ev.target.value, room_id: roomEl.value }) });
