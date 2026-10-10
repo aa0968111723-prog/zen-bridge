@@ -92,10 +92,11 @@
 
 ### 3.7 第 2 輪新增元件（基準 `grok/integrate` = `9743ce8`，2026-10-11 補充）
 - **示意圖 V2（`app/visual.py`、`app/visual_routes.py`，aitest）**：會把定稿字幕送到 OpenAI 相容的 LLM，再把產生的示意圖廣播出去。預設是關閉的，要設定 `BREEZE_VISUAL_LLM_*` 才會開。
-  - I（資訊外洩）：`GET /api/visual/{room_id}` **沒有驗證**就回傳示意圖歷史（內容來自字幕），但 `/ws/visual` 需要 Origin 和聽眾金鑰。8780 綁在 LAN 上，預設房名又是 `class`，同網段的人不用金鑰就能讀到 **[實測，box probe]**。
-  - I／S（B7 出口）：`is_loopback_url()` 用 `host.startswith("127.")` 判斷，所以 `127.evil.example` 這種網域名稱也會通過；沒有擋 8645；用的是一般的 `urllib.request.urlopen`，會讀 proxy 環境變數或登錄檔、也會跟轉址，沒有沿用 `app.net.safe_opener()` **[實測：判斷函式；靜態：opener]**。設定錯誤時，字幕可能離開這台筆電，或被送到 8645。
+  - I（資訊外洩）：第 2 輪發現 `GET /api/visual/{room_id}` 沒有驗證。**第 3 輪（`grok/integrate` `b376050`）已修**：現在套用 `_visual_http_guard`（Host 白名單，加上當前房間的 `listen_key` 或主持 Bearer，用 `same_secret` → `hmac.compare_digest` 比對）。錯的、空的、別房的、重開前的舊金鑰、放在 header 的金鑰、把 listen key 當 Bearer、惡意 Host 一律回 403 **[實測，box probe]**。
+  - I／S（B7 出口）：第 2 輪發現 `127.` 前綴判斷、沒擋 8645、一般 urlopen。**第 3 輪已修**：`is_loopback_url` 會先拒絕 `RESERVED_PORTS`，接著拒絕帶帳號密碼的網址，再跑 `translate_config.validate_base_url`，最後用 `ipaddress` 判斷 loopback；每次呼叫前都重新檢查一次；請求改走 `app.net.safe_opener()`（不跟轉址、不用 proxy）。`127.evil.example`、`nip.io`、十進位／十六進位／八進位 IP、`localhost.`、`user:pass@`、各種寫法的 8645 都會被拒；307→8645、302→外部都不會跟；`*_PROXY` 不生效 **[實測，mock＋socket 防護，從沒連過 8645]**。`[::ffff:127.0.0.1]` 會被接受，它確實是 loopback，可以接受。
   - D（阻斷服務）：`POST /api/visual/{room}/trigger` 只檢查來源是不是 loopback，沒有 CSRF 或主持權杖。本機瀏覽器裡任何網頁都能用跨站 POST 反覆觸發 LLM（`force=1` 可以略過冷卻）**[靜態]**。
   - 既有控制：模型輸出只用 `textContent` 顯示；每位觀看者的佇列有上限；`validate_room_id`；`strip_think`／`is_presentable`。
+- **匯出交接 QR `/api/export-handoff`、`/h/{token}`（round4 #6，第 3 輪新增）**：建立 token 需要主持權杖；token 是 `secrets.token_urlsafe(16)`，只能用一次，10 分鐘後過期，數量有上限；`/h/{token}` 本身不需要驗證，拿到 token 就能下載，屬於 capability URL。缺口：在 LAN 上是明文 HTTP，同網段的人可能先截到並用掉 token（同 §5 第 1 點）**[靜態]**。
 - **草稿字幕 `/ws/draft`（round4 #5）**：第一個 frame 必須帶主持權杖（`same_secret`），會檢查 Origin，每個封包最多 32000 bytes，私密暫停時不會發布。缺口：先 `accept` 才驗證，不過有 5 秒逾時（P2）**[靜態]**。
 - **`/api/hw/status`（perf）**：用 `require_host` 保護，而且是唯讀的；`apply_profile` 目前沒有接線。如果之後接上，會用 ctypes 呼叫 OpenProcess/SetPriorityClass，而且程式寫死拒絕 HIGH/REALTIME、絕不改電源計畫、有 `revert()` **[靜態]**。
 - **後台 staging（backend）**：所有端點都透過既有的 `need(role)`（session、Origin、Sec-Fetch-Site、CSRF、寫入速率限制）；核准需要 admin 加上 If-Match；`staging_audit` 會記錄改前和改後。這一塊**部分**補上了 §5 第 6 點的稽核缺口（只涵蓋 TM 和詞彙的核准，登入和匯出仍然沒有稽核） **[靜態＋測試]**。
@@ -139,8 +140,8 @@
 | P2 | restore_drill 的表名要跳脫、manifest 檔名要限制在備份資料夾內、提供 `--cleanup` | backup | 用含 `"` 的表名、`../` 的 manifest 測試 |
 | P2 | cicd 的 checkout 加上 `persist-credentials: false` | cicd | 檢查 yml |
 | P2 | `zbench.http_json` 改用 `safe_opener` | 執行手 | 轉址測試 |
-| P1 | `GET /api/visual/{room_id}` 套用和 `/ws/visual` 相同的 Origin 與聽眾金鑰檢查（或拿掉 history） | aitest／整合者 | 沒帶 `k` 回 403；帶正確的 `k` 回 200 |
-| P1 | 示意圖 LLM 的 URL 改用 `ipaddress` 判斷 loopback（不接受網域名稱，只接受 `localhost`），拒絕 `RESERVED_PORTS`，請求改走 `app.net.safe_opener()` | aitest | 測試：`127.evil.example`、`127.0.0.1:8645`、302 轉址、`HTTP_PROXY` 都要被拒絕或不生效 |
+| ~~P1~~ 已修（b376050） | `GET /api/visual/{room_id}` 套用和 `/ws/visual` 相同的聽眾金鑰檢查 | aitest／整合者 | 第 3 輪實測：沒帶 `k` 回 403；帶正確的 `k` 回 200 |
+| ~~P1~~ 已修（b376050） | 示意圖 LLM 的 URL 改用 `ipaddress` 判斷 loopback（不接受網域名稱，只接受 `localhost`），拒絕 `RESERVED_PORTS`，請求改走 `app.net.safe_opener()` | aitest | 測試：`127.evil.example`、`127.0.0.1:8645`、302 轉址、`HTTP_PROXY` 都要被拒絕或不生效 |
 | P2 | `POST /api/visual/{room}/trigger` 改用主持權杖（`require_host`）當 guard | 整合者 | 沒帶權杖回 401 |
 | 規劃 | LAN 加密方案（自簽 TLS 或隔離熱點）評估 | arch | 文件 |
 
