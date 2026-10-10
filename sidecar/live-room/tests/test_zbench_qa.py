@@ -58,7 +58,9 @@ def test_sampler_counts_child_cpu(zb):
 
 def test_sampler_reuses_process_objects(zb):
     # A childless process of our own: os.getpid() may have leftover children from other tests.
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    # A Windows venv executable is a redirector that creates another Python
+    # process. Use the base interpreter to keep this fixture truly childless.
+    child = subprocess.Popen([getattr(sys, '_base_executable', sys.executable), "-c", "import time; time.sleep(30)"])
     try:
         s = zb.Sampler(child.pid, include_self=False)
         first = s.procs()
