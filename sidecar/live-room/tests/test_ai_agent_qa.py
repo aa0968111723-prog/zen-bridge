@@ -135,7 +135,10 @@ def test_admin_api_tm_review_roles(env):  # noqa: F811
     r = c.post(f"{API}/corrections", json={"segment_id": "s1-1", "target_type": "translation",
                                            "text": "Conditions are complete."}, headers=BEARER)
     assert r.status_code == 201, r.text
-    tm_id = r.json()["tm_id"]
+    assert r.json()["tm_id"] is None                      # round3 §5-1: staged, not written
+    sid = r.json()["tm_staging_id"]
+    etag = c.get(f"{API}/staging/{sid}", headers=BEARER).headers["etag"]
+    tm_id = c.post(f"{API}/staging/{sid}/approve", json={}, headers={**BEARER, "if-match": etag}).json()["target_id"]
     assert c.post(f"{API}/tm/{tm_id}/reject", headers=BEARER).json()["served"] is False
     assert c.post(f"{API}/tm/{tm_id}/approve", headers=BEARER).json()["served"] is True
     bad = c.post(f"{API}/corrections", json={"segment_id": "s1-1", "target_type": "translation",

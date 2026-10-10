@@ -1,0 +1,10 @@
+.st-filters { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; margin: .5rem 0 1rem; }
+.st-bulk { margin: .5rem 0; padding: .5rem; border: 1px solid #c9c9c9; border-radius: 4px; }
+.st-pager { margin: .75rem 0; display: flex; gap: .5rem; }
+del.st-old { color: #a1260d; text-decoration: line-through; }
+ins.st-new { color: #116329; font-style: italic; text-decoration: none; }
+.st-conflict { color: #a1260d; font-weight: bold; }
+.st-state-approved { color: #116329; } .st-state-rejected { color: #a1260d; }
+.st-actions button { margin-right: .25rem; }
+.hint { color: #555; }
+#detail pre { white-space: pre-wrap; word-break: break-word; }
