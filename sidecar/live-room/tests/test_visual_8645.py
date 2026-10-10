@@ -94,5 +94,10 @@ async def test_visual_trigger_needs_the_host_token():
             assert ok.status_code == 200 and ok.json()["accepted"] is False   # disabled without a visual LLM
             evil = await client.post("/api/visual/class/trigger", headers={**auth(token), "origin": "http://evil.example"})
             assert evil.status_code == 403
+            xsite = await client.post("/api/visual/class/trigger", headers={**auth(token), "sec-fetch-site": "cross-site"})
+            assert xsite.status_code == 403
+            # the token travels only in the Authorization header; ?token= or a cookie is not a host credential
+            assert (await client.post(f"/api/visual/class/trigger?token={token}")).status_code == 401
+            assert (await client.post("/api/visual/class/trigger", cookies={"token": token})).status_code == 401
     finally:
         await stop(app)

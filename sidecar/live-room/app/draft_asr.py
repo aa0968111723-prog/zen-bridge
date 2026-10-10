@@ -23,10 +23,13 @@ and draft+final CER on the user's own recordings must be measured (UNKNOWN today
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
+
+log = logging.getLogger("zen.draft")
 
 SAMPLE_RATE = 16000
 
@@ -39,8 +42,10 @@ class DraftAsrUnavailable(RuntimeError):
 class DraftPartial:
     text: str            # Traditional Chinese (after s2twp)
     is_endpoint: bool    # recognizer detected an utterance end
-    t_ms: int            # stream time of this partial
+    t_ms: int            # stream time of this partial (includes trailing silence at an endpoint)
     final: bool = False  # always False: drafts are never final; Breeze finalises
+    utt_index: int = 0   # arch R-2: utterance number in this stream (+1 after each endpoint)
+    t_start_ms: int = 0  # arch R-2: stream time where this utterance's first text appeared (packet start)
 
 
 class DraftAsr(Protocol):
@@ -97,6 +102,9 @@ class SherpaParaformerDraft:
         self.stream = self.rec.create_stream()
         self.samples = 0
         self.last = ""
+        self.utt = 0
+        self.utt_start_ms: int | None = None
+        self._packet_start_ms = 0
 
     def _partials(self) -> list[DraftPartial]:
         out = []
@@ -105,18 +113,25 @@ class SherpaParaformerDraft:
         text = self.rec.get_result(self.stream)
         text = text.text if hasattr(text, "text") else str(text)
         endpoint = bool(self.rec.is_endpoint(self.stream))
+        if text and self.utt_start_ms is None:
+            self.utt_start_ms = self._packet_start_ms        # first text of this utterance came in this packet
         if text and (text != self.last or endpoint):
-            out.append(DraftPartial(self.convert(text), endpoint, int(self.samples * 1000 / SAMPLE_RATE)))
+            out.append(DraftPartial(self.convert(text), endpoint, int(self.samples * 1000 / SAMPLE_RATE),
+                                    utt_index=self.utt, t_start_ms=int(self.utt_start_ms or 0)))
             self.last = text
         if endpoint:
             self.rec.reset(self.stream)
             self.last = ""
+            if text:
+                self.utt += 1
+            self.utt_start_ms = None
         return out
 
     def feed(self, pcm16: bytes) -> list[DraftPartial]:
         import array
         a = array.array("h")
         a.frombytes(pcm16[: len(pcm16) // 2 * 2])
+        self._packet_start_ms = int(self.samples * 1000 / SAMPLE_RATE)
         self.samples += len(a)
         self.stream.accept_waveform(SAMPLE_RATE, [x / 32768.0 for x in a])
         return self._partials()
@@ -129,6 +144,9 @@ class SherpaParaformerDraft:
         self.stream = self.rec.create_stream()
         self.samples = 0
         self.last = ""
+        self.utt = 0
+        self.utt_start_ms = None
+        self._packet_start_ms = 0
 
 
 XASR_FILES = {"int8": ("encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"),
@@ -146,6 +164,17 @@ def xasr_precision(model_dir: str | Path, prefer: str = "auto") -> str:
         if all((d / f).is_file() for f in XASR_FILES[p]) and (d / "tokens.txt").is_file():
             return p
     raise DraftAsrUnavailable(f"缺少 X-ASR 模型檔（{d}）；程式不會自動下載")
+
+
+def int8_safe_threads(precision: str | None, threads: int, env: dict | None = None) -> int:
+    """arch R-1: int8 X-ASR is forced to 1 thread (round4 D1: 2-4 threads gave garbled, non-deterministic
+    drafts on the box). ``BREEZE_DRAFT_INT8_MT_OK=1`` is the explicit "I measured det_check" override."""
+    env = os.environ if env is None else env
+    threads = max(1, int(threads))
+    if precision == "int8" and threads > 1 and (env.get("BREEZE_DRAFT_INT8_MT_OK") or "").strip() != "1":
+        log.warning("X-ASR int8 with %d threads is not deterministic (round4 D1); using 1 thread", threads)
+        return 1
+    return threads
 
 
 class XAsrDraft(SherpaParaformerDraft):
@@ -166,13 +195,14 @@ class XAsrDraft(SherpaParaformerDraft):
                 raise DraftAsrUnavailable("sherpa-onnx 未安裝") from exc
             d = Path(model_dir or "")
             self.precision = xasr_precision(d, precision)
+            threads = int8_safe_threads(self.precision, threads)
             enc, dec, join = (str(d / f) for f in XASR_FILES[self.precision])
             recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
                 tokens=str(d / "tokens.txt"), encoder=enc, decoder=dec, joiner=join,
                 num_threads=max(1, int(threads)), sample_rate=SAMPLE_RATE, feature_dim=80,
                 enable_endpoint_detection=True, **ENDPOINT_RULES)
         super().__init__(recognizer=recognizer, convert=convert, threads=threads)
-        self.threads = max(1, int(threads))
+        self.threads = int8_safe_threads(self.precision, threads)
 
 
 def draft_from_env(env: dict | None = None) -> DraftAsr:

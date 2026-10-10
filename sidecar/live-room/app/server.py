@@ -1326,6 +1326,14 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         return room is None or _listener_authorized(ws, room, ws.query_params.get("k", ""))
 
     app.state.visual_hub = visual_hub
+    def _visual_trigger_guard(request):
+        # CTO/CISO P2: the manual trigger is a host action. Header-only Bearer token (a cross-site page
+        # cannot attach it without a CORS preflight this app never grants) + allowed Origin, and a
+        # browser's Sec-Fetch-Site: cross-site is refused outright (CSRF).
+        require_host(request, token, settings)
+        if (request.headers.get("sec-fetch-site") or "").lower() == "cross-site":
+            raise HTTPException(status_code=403, detail="這個頁面不能操作主持端")
+
     def _visual_http_guard(request, room_id):
         if not host_is_allowed(request.headers.get("host", ""), settings, _audience_extra_hosts()):
             return False
@@ -1334,8 +1342,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
 
     app.include_router(build_visual_router(visual_hub, ws_guard=_visual_ws_guard,
                                            http_guard=_visual_http_guard,
-                                           # CTO P2: the manual trigger is a host action (token + origin)
-                                           host_guard=lambda request: require_host(request, token, settings)))   # aitest: /visual
+                                           host_guard=_visual_trigger_guard))   # aitest: /visual
     app.state.settings = settings
     app.state.token = token
     app.state.pipeline = pipeline

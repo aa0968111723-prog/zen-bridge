@@ -168,8 +168,9 @@ class FakePsutil:
 
 
 @pytest.fixture(autouse=True)
-def _clean_registry():
+def _clean_registry(monkeypatch):
     hw._ORIGINAL.clear()
+    monkeypatch.setattr(hw, "_proc_start", lambda pid: 1000.0 + pid)   # fake pids keep a stable identity
     yield
     hw._ORIGINAL.clear()
 
@@ -265,8 +266,25 @@ def test_5600h_default_split_is_4_plus_2():
 
 
 def test_draft_asr_keeps_breeze_at_four():
+    # arch H-1 (aligned): a 1-thread draft is light and not a heavy core -> MT keeps 2 threads.
     p = hw.recommend_threads(6, 12, draft_threads=1)
-    assert (p.asr, p.mt, p.draft) == (4, 1, 1) and p.asr + p.mt + p.draft <= 6
+    assert (p.asr, p.mt, p.draft, p.oversubscribed) == (4, 2, 1, False)
+    # a multi-thread draft is heavy again and still keeps Breeze at >= 4
+    p = hw.recommend_threads(6, 12, draft_threads=2)
+    assert (p.asr, p.mt, p.draft) == (2, 2, 2) and p.asr + p.mt + p.draft <= 6   # unchanged rule for >1
+
+
+def test_revert_never_touches_a_reused_pid(monkeypatch):
+    """arch H-7: identity is checked by creation time before any revert."""
+    hw._ORIGINAL[42] = {"role": "asr", "name": "whisper", "started": 5.0, "priority": 0x20}
+    hw._ORIGINAL[43] = {"role": "mt", "name": "llama", "started": None, "priority": 0x20}
+    monkeypatch.setattr(hw, "_proc_start", lambda pid: 6.0)          # a different process now has pid 42
+
+    class NoTouch:
+        def open(self, pid):
+            raise AssertionError("must not open a reused pid")
+    out = hw.revert(platform="win32", win=NoTouch())
+    assert [r.status for r in out] == ["skipped", "skipped"] and not hw._ORIGINAL
 
 
 def test_asr_first_is_oversubscribed_and_never_pins():

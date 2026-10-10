@@ -275,14 +275,19 @@ def recommend_threads(physical: int, logical: int | None = None, *, power: str =
                    "below ASR, so CPU affinity is not applied")
     else:
         mt = 2 if physical >= 6 else 1
-        asr = physical - mt - draft
-        if asr < 4 <= physical - draft - 1 and mt > 1:
-            mt, asr = 1, physical - 1 - draft
+        # arch H-1: a 1-thread X-ASR draft is light (box mean 0.086 core) and rides on the SMT siblings
+        # left for the OS, so it does not take a heavy core; more draft threads do.
+        heavy_draft = 0 if draft <= 1 else draft
+        asr = physical - mt - heavy_draft
+        if asr < 4 <= physical - heavy_draft - 1 and mt > 1:
+            mt, asr = 1, physical - 1 - heavy_draft
             why.append("draft ASR takes a core, MT drops to 1 thread to keep Breeze at >= 4")
+        if draft == 1:
+            why.append("1-thread draft ASR is not counted as a heavy core (arch H-1: ~0.09 core measured)")
         asr = max(1, asr)
         why.append(f"split: ASR {asr} + MT {mt} + draft {draft} on {physical} physical cores "
                    "(SMT siblings left for the OS, event loop and HTTP)")
-    total = asr + mt + draft
+    total = asr + mt + (draft if draft > 1 or policy != "split" else 0)
     over = total > physical
     if over:
         warn.append(f"{total} heavy threads on {physical} physical cores: measure subtitle latency (layer 3)")
@@ -536,6 +541,17 @@ class _Win:
 _ORIGINAL: dict[int, dict[str, Any]] = {}     # pid -> what we changed, for revert()
 
 
+def _proc_start(pid: int) -> float | None:
+    """Process creation time, so revert() never touches a process that reused the pid (arch H-7)."""
+    ps = _psutil()
+    if ps is None:
+        return None
+    try:
+        return float(ps.Process(int(pid)).create_time())
+    except Exception:
+        return None
+
+
 def _mask(cpus: Iterable[int]) -> int:
     m = 0
     for c in cpus:
@@ -551,7 +567,7 @@ def _apply_one(win: _Win, role: str, pid: int, name: str, profile: Profile, pins
         return [Result(role, "priority", err if err in ("denied", "not_found") else "error", pid, name,
                        "OpenProcess failed" + ("" if err in ("denied", "not_found") else f" ({err})"))]
     try:
-        orig = _ORIGINAL.setdefault(pid, {"role": role, "name": name})
+        orig = _ORIGINAL.setdefault(pid, {"role": role, "name": name, "started": _proc_start(pid)})
         prio_name = {"asr": profile.asr_priority, "mt": profile.mt_priority, "embed": profile.embed_priority}[role]
         want = PRIORITY_CLASSES[prio_name]
         cur = win.get_priority(h)
@@ -651,6 +667,13 @@ def revert(*, platform: str | None = None, win: _Win | None = None) -> list[Resu
     out = []
     for pid, orig in list(_ORIGINAL.items()):
         role, name = orig.get("role", "?"), orig.get("name")
+        started = orig.get("started")
+        if started is None or _proc_start(pid) != started:
+            # arch H-7: the runner may have exited and its pid been reused; never touch another process.
+            out.append(Result(role, "revert", "skipped", pid, name,
+                              "process identity not verified (exited or pid reused); left alone"))
+            _ORIGINAL.pop(pid, None)
+            continue
         h, err = win.open(pid)
         if h is None:
             out.append(Result(role, "revert", "not_found" if err == "not_found" else (err or "error"), pid, name))
