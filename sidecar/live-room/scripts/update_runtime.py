@@ -63,7 +63,7 @@ def probably_compatible(root: Path, value: dict) -> bool:
         if not native_matches(root, full=False):
             return False
         bootstrap = json.loads((root / 'bootstrap-manifest.json').read_text(encoding='utf-8-sig'))
-        python = root / '.python' / bootstrap['python']['version'] / 'tools/python.exe'
+        python = root / '.python' / bootstrap['python'].get('directory',bootstrap['python']['version']) / 'tools/python.exe'
         spec = json.loads((root / 'runtime-manifest.json').read_text(encoding='utf-8-sig'))['assets']['model']
         model = root / 'models' / spec['name']
         return (python.is_file() and model.is_file() and model.stat().st_size == spec['size']
@@ -133,7 +133,8 @@ def compatible(root: Path, descriptor: dict) -> bool:
     try:
         if not valid_descriptor(descriptor):
             return False
-        version = json.loads((root / 'bootstrap-manifest.json').read_text(encoding='utf-8-sig'))['python']['version']
+        asset = json.loads((root / 'bootstrap-manifest.json').read_text(encoding='utf-8-sig'))['python']
+        version = asset.get('directory',asset['version'])
         python = root / '.python' / version / 'tools/python.exe'
         if not python.is_file():
             return False
