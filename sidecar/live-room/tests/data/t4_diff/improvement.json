@@ -1,0 +1,36 @@
+[
+  {
+    "layer": "draft",
+    "id": "renamed-draft",
+    "model": "x-asr-480",
+    "quant": "int8",
+    "backend": "cpu",
+    "threads": 1,
+    "rtf_p50": 0.4,
+    "rtf_p95": 0.64,
+    "first_partial_p50": 0.15
+  },
+  {
+    "layer": "mt",
+    "id": "mt-q4-en",
+    "model": "Hy-MT2",
+    "quant": "q4",
+    "backend": "native",
+    "threads": 2,
+    "lang": "en",
+    "mt_wall_p50": 0.3,
+    "mt_wall_p95": 0.55,
+    "gate_fail": 0
+  },
+  {
+    "layer": "concurrent",
+    "id": "asr+draft+mt",
+    "asr": "asr-int8",
+    "draft": "draft-int8-t1",
+    "mt": "mt-q4",
+    "a3_p95_s": 0.8,
+    "a5_p95_s": 1.6,
+    "a6_p95_s": 0.4,
+    "b2_rtf_p95": 0.6
+  }
+]
