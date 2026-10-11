@@ -40,7 +40,9 @@ def extract(archive,output,manifest):
 
 def stage(destination,source=None,manifest=None):
     manifest=manifest or json.loads(MANIFEST.read_text())
-    if all(verified(destination/name,spec) for name,spec in manifest['files'].items()):
+    license_spec=manifest.get('license')
+    complete=all(verified(destination/name,spec) for name,spec in manifest['files'].items())
+    if complete and (license_spec is None or verified(destination/'LICENSE.txt',license_spec)):
         return destination
     if destination.exists() and any(destination.iterdir()):
         raise ValueError('Existing draft model differs; use a new destination')
@@ -64,6 +66,11 @@ def stage(destination,source=None,manifest=None):
                 raise ValueError('Draft archive checksum mismatch')
             extract(archive,temp,manifest)
         (temp/'origin.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+        if license_spec is not None:
+            license_file=ROOT/'app/vendor/licenses/X-ASR.txt'
+            if not verified(license_file,license_spec):
+                raise ValueError('Missing verified X-ASR license')
+            shutil.copy2(license_file,temp/'LICENSE.txt')
         if destination.exists():
             destination.rmdir()  # empty directory only
         os.replace(temp,destination)

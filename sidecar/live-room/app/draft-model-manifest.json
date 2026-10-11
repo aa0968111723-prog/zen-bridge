@@ -1,6 +1,7 @@
 {
   "name": "sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05",
   "source": "https://github.com/Gilgamesh-J/X-ASR",
+  "license": {"size":11357,"sha256":"c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4","url":"https://raw.githubusercontent.com/Gilgamesh-J/X-ASR/main/LICENSE"},
   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05.tar.bz2",
   "size": 133895136,
   "sha256": "fa5f63d618e5a01526e275a358bb7772e403f84808a4769fba52cffd8160bf74",

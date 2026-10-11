@@ -145,7 +145,7 @@ def test_cli_csv_and_bom_and_unchanged_inputs(inputs, tmp_path, excel, to_file):
 
 
 @pytest.mark.parametrize("destination", ["db", "glossary", "wal", "existing", "symlink", "hardlink"])
-def test_out_never_overwrites_inputs_or_other_files(inputs, tmp_path, destination, capsys):
+def test_out_never_overwrites_inputs_or_other_files(inputs, tmp_path, destination, capsys, monkeypatch):
     database, glossary = inputs
     output = tmp_path / "output.csv"
     if destination == "db":
@@ -155,7 +155,17 @@ def test_out_never_overwrites_inputs_or_other_files(inputs, tmp_path, destinatio
     elif destination == "wal":
         output = Path(str(database) + "-wal")
     elif destination == "symlink":
-        output.symlink_to(glossary)
+        try:
+            output.symlink_to(glossary)
+        except OSError as exc:
+            if getattr(exc,'winerror',None)!=1314:
+                raise
+            # Unprivileged Windows cannot create file symlinks. Exercise the
+            # resolved-input boundary without changing OS security settings.
+            original=Path.resolve
+            def resolved(path,*args,**kwargs):
+                return glossary if path==output else original(path,*args,**kwargs)
+            monkeypatch.setattr(Path,'resolve',resolved)
     elif destination == "hardlink":
         output.hardlink_to(glossary)
     else:
