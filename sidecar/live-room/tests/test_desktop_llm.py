@@ -1,4 +1,5 @@
 import io
+import json
 import unittest
 from unittest.mock import patch
 from app.desktop_llm import DesktopTranslator, loopback_url
@@ -29,6 +30,33 @@ class DesktopTranslatorTests(unittest.TestCase):
                 self.client.translate('Translate', 'hello', 'local')
             self.assertEqual(request.call_count, 1)
             self.assertEqual(request.call_args.args[0], self.client.local)
+
+    def test_local_context_keeps_current_utterance_intact_and_last(self):
+        current='請保持當前這一句完整。'
+        original=json.dumps({'text':current,'activity':{'notes':'參考資料'*4000},
+                             'confirmedExamples':[{'zh':'舊句','en':'Old line'}]*20},ensure_ascii=False)
+        with patch.object(self.client,'_request',return_value={'message':{'content':'Keep this sentence intact.'}}) as request:
+            self.client.translate('Translate only',original,'local')
+        payload=request.call_args.args[2]
+        content=payload['messages'][1]['content']
+        parsed=json.loads(content)
+        self.assertEqual(parsed['text'],current)
+        self.assertEqual(list(parsed)[-1],'text')
+        self.assertLessEqual(len(content.encode())+len('Translate only'.encode()),7000)
+        self.assertEqual(payload['options']['num_ctx'],8192)
+
+    def test_oversized_current_utterance_never_silently_truncates(self):
+        with patch.object(self.client,'_request') as request:
+            with self.assertRaises(RuntimeError):
+                self.client.translate('Translate',json.dumps({'text':'甲'*3000},ensure_ascii=False),'local')
+        request.assert_not_called()
+
+    def test_cloud_keeps_full_reference_context(self):
+        original=json.dumps({'text':'新句','activity':{'notes':'参考'*4000}},ensure_ascii=False)
+        response={'choices':[{'message':{'content':'A new sentence'},'finish_reason':'stop'}]}
+        with patch.object(self.client,'_request',return_value=response) as request:
+            self.client.translate('Translate',original,'cloud')
+        self.assertEqual(request.call_args.args[2]['messages'][1]['content'],original)
 
     def test_cloud_mode_never_calls_local(self):
         result = {'choices': [{'message': {'content': 'translated'}, 'finish_reason': 'stop'}]}
