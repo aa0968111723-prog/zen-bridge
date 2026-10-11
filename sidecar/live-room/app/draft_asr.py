@@ -214,6 +214,8 @@ def draft_from_env(env: dict | None = None) -> DraftAsr:
         return NullDraft()
     if mode not in ("sherpa", "xasr"):
         raise ValueError("BREEZE_DRAFT_ASR 只能是 off、xasr 或 sherpa")
+    from app.speech_extras import bootstrap
+    bootstrap()
     try:
         threads = max(1, int(env.get("BREEZE_DRAFT_THREADS") or 1))
     except ValueError:

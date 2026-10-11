@@ -324,9 +324,14 @@ pages.exports = async () => {
 };
 
 pages.config = async () => {
-  const [cfg, health] = await Promise.all([getJson("/config"), getJson("/models/health")]);
+  const [cfg, health, suite] = await Promise.all([getJson("/config"), getJson("/models/health"), getJson("/agent-suite")]);
   const s = section("服務健康");
   const g = el("div", null, {class: "grid"}); for (const [k, v] of Object.entries(health)) g.append(card(k, v, v === "up" ? "green" : v === "unknown" ? "unknown" : "red")); s.append(g);
+  const extras = section("AI 代理元件");
+  const names = {speech: "語音串流與翻譯流程", evaluation: "翻譯評分", diarization: "說話者辨識"};
+  extras.append(table(["元件", "套件", "模型"], Object.entries(suite.profiles).map(([name, state]) =>
+    [names[name] || name, state.installed ? "已安裝" : "尚未安裝", state.model_ready === undefined ? "沿用已選語音模型" : state.model_ready ? "已下載" : "待下載"]), "AI 代理元件狀態"));
+  extras.append(el("p", "套件安裝與模型下載分開顯示；快速翻譯檢查不能取代人工品質確認。"));
   const p = section("翻譯引擎設定檔與目標語言");
   p.append(el("p", cfg.read_only_note));
   if (can("admin")) {
