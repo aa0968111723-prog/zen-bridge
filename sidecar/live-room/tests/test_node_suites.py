@@ -27,6 +27,7 @@ SUITES = (
     "host_glossary.test.mjs",
     "admin_logic.test.mjs",
     "draft_live.test.mjs",
+    "draft_finalize.test.mjs",
     "room_target.test.mjs",
 )
 
