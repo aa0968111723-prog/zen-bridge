@@ -65,13 +65,17 @@ def test_ledger_keeps_human_transcript_over_asr(tmp_path):
 # ---------------------------------------------------------------- live room override
 class SlowTranslator:
     def __init__(self):
+        import threading
         self.calls = 0
+        self.started = threading.Event()
+        self.release = threading.Event()
 
     def translate(self, zh, **kw):
-        import time
         from app.translate import TranslateResult
         self.calls += 1
-        time.sleep(0.3)
+        self.started.set()
+        if not self.release.wait(5):
+            raise RuntimeError('Test did not release the in-flight translator')
         return TranslateResult(text="machine line", status="ok")
 
     def __getattr__(self, name):
@@ -88,20 +92,22 @@ async def test_live_override_publishes_human_en_and_beats_inflight_mt():
             token = await token_of(app, client)
             first = asyncio.create_task(push(client, token, "class", "s", 1, "因緣".encode(), wait_translation="0",
                                              async_header=True))
-            await asyncio.sleep(0.1)                 # MT attempt in flight
+            assert await asyncio.to_thread(tr.started.wait,5), 'MT attempt must be in flight before correction'
             r = await client.post("/api/segment/retranslate", headers=auth(token),
                                   json={"room_id": "class", "session_id": "s", "seq": 1, "en": "Human fix.",
                                         "zh": "因緣具足"})
             assert r.status_code == 200, r.text
             assert r.json()["en"] == "Human fix."
+            tr.release.set()
             await asyncio.wait_for(first, 3)
-            await asyncio.sleep(0.5)                 # let the stale MT attempt finish
+            await asyncio.wait_for(app.state.pipeline._translate_q.join(),5)
             rows = {i["seq"]: i for i in app.state.bus.caption_state("class")}
             assert rows[1]["en"] == "Human fix." and rows[1]["zh"] == "因緣具足"
             bad = await client.post("/api/segment/retranslate", headers=auth(token),
                                     json={"room_id": "class", "session_id": "s", "seq": 1, "en": "  "})
             assert bad.status_code == 400
     finally:
+        tr.release.set()
         await stop(app)
 
 
