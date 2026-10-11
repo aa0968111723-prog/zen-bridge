@@ -155,18 +155,30 @@ def test_gapped_reader_and_admin_lock(results, workdir):
     _assert_checkpoint_shrinks(r)
 
 
+TRUNCATE_REPLAYS = 3       # same scenario replayed; 3 x 8 = 24 pooled TRUNCATE samples for the p95
+
+
 def test_always_on_reader_with_periodic_truncate(results, workdir):
     pinned = _run(results, workdir, sim.Scenario("pinned", reader="pinned"))
     # A reader that is (almost) always open starves auto-checkpoint (see the opt-in starvation
     # variant); an admin wal_checkpoint(TRUNCATE) every 300 segments (~15 min) in a reader gap fixes it.
-    r = _run(results, workdir, sim.Scenario("always_on_truncate", reader="bounded", bounded_every=100,
-                                            reader_gap=0, truncate_every=300))
-    _assert_no_loss(r)
-    pt = r["periodic_truncate"]
-    assert pt["runs"] == 2400 // 300, pt
-    assert pt["p95_ms"] / 1000 < ADMIN_P95_BOUND_S, pt
-    assert r["wal_max"] < pinned["wal_max"] / 2, (r["wal_max"], pinned["wal_max"])
-    _assert_checkpoint_shrinks(r)
+    samples: list[float] = []
+    for k in range(TRUNCATE_REPLAYS):
+        name = "always_on_truncate" + ("" if k == 0 else f"_r{k + 1}")
+        r = _run(results, workdir, sim.Scenario(name, reader="bounded", bounded_every=100,
+                                                reader_gap=0, truncate_every=300))
+        _assert_no_loss(r)
+        pt = r["periodic_truncate"]
+        assert pt["runs"] == 2400 // 300, pt
+        assert r["wal_max"] < pinned["wal_max"] / 2, (r["wal_max"], pinned["wal_max"])
+        _assert_checkpoint_shrinks(r)
+        samples += r["trunc_samples_s"]
+    # One lecture yields only 8 TRUNCATEs, and the 95th percentile of 8 is their max, so a single
+    # runner stall (Windows CI: p50 176 ms, one 9.9 s sample) failed the bound. Pooling identical
+    # replays gives 24 samples, so p95 is a real percentile again; the bound itself is unchanged.
+    pooled = sim._lat(samples)
+    assert pooled["n"] == TRUNCATE_REPLAYS * (2400 // 300), pooled
+    assert pooled["p95_ms"] / 1000 < ADMIN_P95_BOUND_S, pooled
 
 
 @pytest.mark.skipif(not HEAVY, reason="checkpoint-starvation variant: set ZEN_LOAD_HEAVY=1")

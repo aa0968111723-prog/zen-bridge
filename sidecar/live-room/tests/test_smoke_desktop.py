@@ -171,13 +171,37 @@ def test_missing_translation_fails_the_translation_step(tmp_path, mode):
     assert "[FAIL] translation" in out and "RESULT: FAIL at step 'translation'" in out
 
 
+class _ReadyAnchoredSmoke(smoke.Smoke):
+    """The real Smoke, with the overall --timeout clock started once /api/health is ready.
+
+    Cold-starting the child interpreter (imports + uvicorn) takes 1-6 s on a loaded Windows runner,
+    so with the clock started before the spawn a 5 s budget ran out in start_backend on some runs
+    and in translation on others. Anchoring at "ready" puts the deadline deterministically in the
+    stage that blocks (fake MT ``slow`` hangs 60 s, far past both --timeout and --mt-timeout's 30 s).
+    """
+
+    ready_at: float | None = None
+
+    def start_backend(self) -> str:
+        limit = self.deadline - self.t_start
+        self.deadline = time.monotonic() + float(self.args.start_timeout)
+        detail = super().start_backend()
+        self.ready_at = time.monotonic()
+        self.deadline = self.ready_at + limit
+        return detail
+
+
 def test_overall_timeout_is_honored(tmp_path):
     limit = 5.0
-    rc, report, out, elapsed = run_tool(tmp_path, "--fake-mt", "slow", "--timeout", str(limit))
-    assert rc == 1, out
-    assert report["failed_step"] == "translation"
+    args = smoke.build_parser().parse_args(["--fake-mt", "slow", "--timeout", str(limit), "--quiet",
+                                            "--work-dir", str(tmp_path / "work")])
+    runner = _ReadyAnchoredSmoke(args)
+    report = runner.run().to_dict()
+    assert report["ok"] is False, report
+    assert report["failed_step"] == "translation", report
     assert "--timeout" in next(s for s in report["steps"] if s["name"] == "translation")["detail"]
-    # timeout + shutdown budget + process start/teardown slack (loaded box)
+    # timeout + shutdown budget + teardown slack (loaded box), from the moment the --timeout clock starts
+    elapsed = time.monotonic() - runner.ready_at
     assert elapsed < limit + smoke.SHUTDOWN_BUDGET_S + 10, elapsed
     assert statuses(report)["shutdown"] == "PASS"
 
