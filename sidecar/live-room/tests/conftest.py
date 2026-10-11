@@ -21,6 +21,8 @@ def _isolate_local_backend_env(monkeypatch):
     monkeypatch.setenv("BREEZE_ASR_LOG", "off")   # never write the developer's worker log
     monkeypatch.setenv("ZEN_DESKTOP_MAINT", "0")   # round3 C1: tests never touch the real data dir
     monkeypatch.setenv("ZEN_LOG", "off")          # CTO-07 file logs: only test_logfile turns them on
+    monkeypatch.setenv("ZEN_AGENT_SUITE_GRAPH", "0")
+    monkeypatch.setenv("ZEN_AGENT_SUITE_SPEECH", "0")
     for name in ("ZEN_DB_PATH", "ZEN_DATA_DIR", "BREEZE_TRANSLATE_BASE_URL", "BREEZE_TRANSLATE_ALLOW_REMOTE",
                  "BREEZE_TRANSLATE_MODEL", "BREEZE_TRANSLATE_EXTRA_BODY", "BREEZE_TRANSLATE_API_KEY",
                  "BREEZE_TRANSLATE_PROTOCOL", "BREEZE_TRANSLATE_NUM_THREAD", "BREEZE_TRANSLATE_NUM_CTX",

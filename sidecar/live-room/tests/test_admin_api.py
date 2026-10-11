@@ -62,6 +62,16 @@ def env(tmp_path):
         yield {"app": app, "client": client, "path": path, "live": live, "tmp": tmp_path}
 
 
+def test_agent_suite_status_requires_auth_and_exposes_no_local_paths(env,monkeypatch):
+    from app import agent_suite
+    monkeypatch.setattr(agent_suite,'suite_status',lambda:{'speech':{'installed':True}})
+    client=env['client']
+    assert client.get(f'{API}/agent-suite').status_code==401
+    response=client.get(f'{API}/agent-suite',headers=BEARER)
+    assert response.status_code==200
+    assert response.json()=={'profiles':{'speech':{'installed':True}}}
+
+
 def browser_login(client, app):
     code = app.state.codes.issue()
     r = client.post(f"{API}/auth/login", json={"code": code},
