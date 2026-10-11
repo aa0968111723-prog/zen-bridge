@@ -6,7 +6,7 @@ import {Button} from '@/components/ui/button';
 import {capture,type Capture} from '@/lib/capture';
 import {createCaptionStore,createRubyMemory,targetParts,canChangeTarget,demoEvents,demoFinalFor,DEMO_LABEL,JA_FONT,TARGET_LANGS,type BreezeEvent,type CaptionLine,type TargetLang,type TargetPart} from '@/lib/breeze-live';
 import AsrChip from './asr-chip';
-import ZenShiMark from './zen-shi-mark';
+import ClubMark from './club-mark';
 import {useBreezeSetup,postBreeze} from './use-breeze';
 
 function TargetText({line,parts}:{line:CaptionLine;parts:TargetPart[]}){
@@ -80,7 +80,7 @@ export default function LiveRoomPanel({onOpenAdmin,demoDefault=false}:{onOpenAdm
  return <div className="breeze-live">
   <section className="collection-paper breeze-hero">
    <div className="breeze-hero-head">
-    <div className="breeze-brand"><ZenShiMark size={48}/><div><span className="handwritten">禪釋 × 龜龜・同一個 App</span><h2>Breeze 現場字幕</h2><p>本機 Breeze 引擎辨識與翻譯；灰色草稿會在原位被定稿取代。</p></div></div>
+    <div className="breeze-brand"><ClubMark size={52}/><div><span className="handwritten">龜龜與小華・同一個 App</span><h2>Breeze 現場字幕</h2><p>本機 Breeze 引擎辨識與翻譯；灰色草稿會在原位被定稿取代。</p></div></div>
     <div className="breeze-status-row">
      <span className={'connection-state '+(connected?'ready':'')}><Radio size={13}/> {demo?'示範模式':connected?'Breeze 已連線':checked?'Breeze 未啟動':'檢查中…'}</span>
      {demo?<AsrChip gpu={{requested:'vulkan',active:'vulkan',ok:true,device:'AMD Radeon (Vega 7)',selftest_ms:412}} compact/>:<AsrChip gpu={setup?.asr_gpu} mode={setup?.asr_mode} compact/>}

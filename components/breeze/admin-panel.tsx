@@ -5,7 +5,7 @@ import {toast} from 'sonner';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
 import AsrChip from './asr-chip';
-import ZenShiMark from './zen-shi-mark';
+import ClubMark from './club-mark';
 import {ADMIN_DEMO} from '@/lib/breeze-admin-demo';
 import type {GpuStatus} from '@/lib/breeze-live';
 
@@ -88,7 +88,7 @@ export default function AdminPanel({demoDefault=false}:{demoDefault?:boolean}){
  const tables=firstRows(data);
  return <div className="breeze-admin">
   <section className="collection-paper admin-shell">
-   <div className="section-heading"><div className="breeze-brand"><ZenShiMark size={42}/><div><h2>Breeze 管理後台</h2><p>原本在 127.0.0.1:8791 的後台，全部收進龜龜的小冊裡。</p></div></div>
+   <div className="section-heading"><div className="breeze-brand"><ClubMark size={44}/><div><h2>Breeze 管理後台</h2><p>原本在 127.0.0.1:8791 的後台，全部收進龜龜的小冊裡。</p></div></div>
     <div className="button-group"><label className="breeze-demo-toggle"><input type="checkbox" checked={demo} onChange={e=>setDemo(e.target.checked)}/> <FlaskConical size={14}/>示範資料</label><Button variant="ghost" onClick={()=>void load()} disabled={loading}><RefreshCw size={15}/>重新整理</Button><Button variant="outline" onClick={()=>window.open(ADMIN_ORIGIN+current.native,'_blank','noopener')}><ExternalLink size={15}/>在原後台開啟</Button></div></div>
    <nav className="admin-subnav" aria-label="後台頁面">{ADMIN_PAGES.map(p=>{const Icon=p.icon;return <button key={p.id} className={page===p.id?'selected':''} aria-current={page===p.id?'page':undefined} onClick={()=>setPage(p.id)}><Icon size={15}/><span>{p.label}</span></button>;})}</nav>
    {demo&&<p className="breeze-demo-note" role="note">示範資料（假資料，未連線後台）：用來預覽每一頁的版面。</p>}
