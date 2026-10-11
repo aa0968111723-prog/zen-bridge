@@ -65,6 +65,7 @@ def read_energy_profile(path: str | Path) -> dict:
 
     sample_frames = max(1, sample_rate * FRAME_MS // 1000)
     energies = []
+    frame_durations_ms = []
     total_samples = frame_count
     for frame_start in range(0, total_samples, sample_frames):
         frame_end = min(total_samples, frame_start + sample_frames)
@@ -77,6 +78,7 @@ def read_energy_profile(path: str | Path) -> dict:
                 square_sum += sample * sample
                 sample_count += 1
         energies.append(math.sqrt(square_sum / sample_count) if sample_count else 0.0)
+        frame_durations_ms.append((frame_end - frame_start) * 1000.0 / sample_rate)
 
     ordered = sorted(energies)
     return {
@@ -85,6 +87,7 @@ def read_energy_profile(path: str | Path) -> dict:
         "channels": channels,
         "frames": len(energies),
         "frame_ms": sample_frames * 1000.0 / sample_rate,
+        "frame_durations_ms": frame_durations_ms,
         "duration_ms": frame_count * 1000.0 / sample_rate,
         "energies": energies,
         "noise_floor_p10": percentile(ordered, 0.10) if ordered else 0.0,
@@ -100,8 +103,14 @@ def candidate_thresholds(profile: dict) -> list[float]:
 
 
 def segment_stats(energies: list[float], threshold: float, frame_ms: float,
-                  min_speech_ms: int, min_silence_ms: int, pad_ms: int) -> tuple[int, float | None]:
+                  min_speech_ms: int, min_silence_ms: int, pad_ms: int,
+                  frame_durations_ms: list[float] | None = None) -> tuple[int, float | None]:
     """Simulate thresholded segments, short-silence joining, minimum length, and padding."""
+    durations = frame_durations_ms or [frame_ms] * len(energies)
+    boundaries = [0.0]
+    for duration in durations:
+        boundaries.append(boundaries[-1] + duration)
+
     runs = []
     start = None
     for index, energy in enumerate(energies):
@@ -115,27 +124,22 @@ def segment_stats(energies: list[float], threshold: float, frame_ms: float,
 
     joined = []
     for run_start, run_end in runs:
-        if joined and (run_start - joined[-1][1]) * frame_ms < min_silence_ms:
+        if joined and boundaries[run_start] - boundaries[joined[-1][1]] < min_silence_ms:
             joined[-1] = (joined[-1][0], run_end)
         else:
             joined.append((run_start, run_end))
 
-    padding_frames = math.ceil(pad_ms / frame_ms) if frame_ms else 0
-    padded = []
+    padded_lengths = []
     for run_start, run_end in joined:
-        if (run_end - run_start) * frame_ms < min_speech_ms:
+        if boundaries[run_end] - boundaries[run_start] < min_speech_ms:
             continue
-        segment = (max(0, run_start - padding_frames),
-                   min(len(energies), run_end + padding_frames))
-        if padded and segment[0] <= padded[-1][1]:
-            padded[-1] = (padded[-1][0], max(padded[-1][1], segment[1]))
-        else:
-            padded.append(segment)
+        segment_start = max(0.0, boundaries[run_start] - pad_ms)
+        segment_end = min(boundaries[-1], boundaries[run_end] + pad_ms)
+        padded_lengths.append(segment_end - segment_start)
 
-    if not padded:
+    if not padded_lengths:
         return 0, None
-    lengths = [(end - start) * frame_ms for start, end in padded]
-    return len(lengths), sum(lengths) / len(lengths)
+    return len(padded_lengths), sum(padded_lengths) / len(padded_lengths)
 
 
 def build_plan(paths: list[str | Path]) -> tuple[list[dict], list[dict]]:
@@ -150,7 +154,7 @@ def build_plan(paths: list[str | Path]) -> tuple[list[dict], list[dict]]:
             "input", "sample_rate", "channels", "frames", "duration_ms",
             "noise_floor_p10", "speech_p90",
         )})
-        thresholds = candidate_thresholds(profile) or [0.0]
+        thresholds = sorted({round(value, 3) for value in candidate_thresholds(profile)} or {0.0})
         energies = profile["energies"]
         for threshold in thresholds:
             fraction = (sum(energy > threshold for energy in energies) / len(energies)
@@ -161,6 +165,7 @@ def build_plan(paths: list[str | Path]) -> tuple[list[dict], list[dict]]:
                         count, mean_length = segment_stats(
                             energies, threshold, profile["frame_ms"],
                             min_speech, min_silence, padding,
+                            profile["frame_durations_ms"],
                         )
                         rows.append({
                             "input": profile["input"],
@@ -170,7 +175,7 @@ def build_plan(paths: list[str | Path]) -> tuple[list[dict], list[dict]]:
                             "duration_ms": round(profile["duration_ms"], 3),
                             "noise_floor_p10": round(profile["noise_floor_p10"], 3),
                             "speech_p90": round(profile["speech_p90"], 3),
-                            "energy_threshold": round(threshold, 3),
+                            "energy_threshold": threshold,
                             "fraction_above_threshold": round(fraction, 6),
                             "min_speech_ms": min_speech,
                             "min_silence_ms": min_silence,

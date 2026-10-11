@@ -116,3 +116,63 @@ def test_silence_profile_still_has_a_single_marked_fallback_row(tmp_path):
     assert next(row for row in rows if row["recommended"])["recommendation_note"].startswith(
         "closest_available"
     )
+
+
+def test_padding_does_not_merge_segments_separated_by_minimum_silence():
+    count, mean_length = planner.segment_stats(
+        [1, 1, 1, 0, 0, 0, 1, 1, 1],
+        threshold=0.5,
+        frame_ms=100,
+        min_speech_ms=200,
+        min_silence_ms=300,
+        pad_ms=200,
+    )
+
+    assert count == 2
+    assert mean_length == 500
+
+
+def test_plan_uses_exported_rounded_threshold_for_statistics(monkeypatch):
+    monkeypatch.setattr(
+        planner,
+        "read_energy_profile",
+        lambda path: {
+            "input": str(path),
+            "sample_rate": 16000,
+            "channels": 1,
+            "frames": 25,
+            "frame_ms": 20,
+            "frame_durations_ms": [20] * 25,
+            "duration_ms": 500,
+            "energies": [0.1002] * 25,
+            "noise_floor_p10": 0.1,
+            "speech_p90": 0.2,
+        },
+    )
+    monkeypatch.setattr(planner, "candidate_thresholds", lambda profile: [0.1004])
+
+    rows, _ = planner.build_plan(["rounded-threshold.wav"])
+
+    assert {row["energy_threshold"] for row in rows} == {0.1}
+    assert all(row["fraction_above_threshold"] == 1 for row in rows)
+    assert all(row["expected_segment_count"] == 1 for row in rows)
+
+
+def test_partial_final_frame_uses_its_actual_duration(tmp_path):
+    wav = write_wav(tmp_path / "partial.wav", [(0.045, 10000)])
+
+    profile = planner.read_energy_profile(wav)
+    count, mean_length = planner.segment_stats(
+        profile["energies"],
+        threshold=0,
+        frame_ms=profile["frame_ms"],
+        min_speech_ms=40,
+        min_silence_ms=0,
+        pad_ms=0,
+        frame_durations_ms=profile["frame_durations_ms"],
+    )
+
+    assert profile["duration_ms"] == 45
+    assert profile["frame_durations_ms"] == pytest.approx([20, 20, 5])
+    assert count == 1
+    assert mean_length == pytest.approx(45)
