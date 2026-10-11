@@ -26,12 +26,8 @@ ROW_MEASUREMENTS = ALL_METRICS | {"encode_ms_p50", "decode_ms_p50", "gen_tok_s_p
 THROUGHPUT_METRICS = {"gen_tok_s_p50"}
 
 
-def _is_measurement(name: str, value) -> bool:
-    return (
-        name.endswith(("_p50", "_p95", "_s", "_ms"))
-        and isinstance(value, (int, float))
-        and not isinstance(value, bool)
-    )
+def _is_measurement_name(name: str) -> bool:
+    return name.endswith(("_p50", "_p95", "_s", "_ms"))
 
 
 class InputError(ValueError):
@@ -87,8 +83,9 @@ def _parse_rows(path: Path) -> list[dict]:
         ):
             raise InputError(f"{path}: row {index} gate_fail must be a non-negative integer")
         for name, value in row.items():
-            if _is_measurement(name, value) and (
-                not math.isfinite(value) or value < 0
+            if _is_measurement_name(name) and value is not None and (
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value < 0
             ):
                 raise InputError(f"{path}: row {index} metric {name} must be finite and non-negative")
     return rows
@@ -99,7 +96,7 @@ def _configuration(row: dict) -> dict:
         name: value for name, value in row.items()
         if name not in METADATA
         and name not in ROW_MEASUREMENTS
-        and not _is_measurement(name, value)
+        and not _is_measurement_name(name)
     }
     return {"id": row["id"], **configuration}
 
@@ -118,7 +115,8 @@ def _pct_delta(base: float, new: float) -> float | None:
 
 def _metric_result(name: str, base, new, threshold_pct: float) -> dict:
     if base is None or new is None:
-        return {"base": base, "new": new, "delta": None, "delta_pct": None, "status": "UNAVAILABLE"}
+        status = "REGRESSION" if base is not None and new is None else "UNAVAILABLE"
+        return {"base": base, "new": new, "delta": None, "delta_pct": None, "status": status}
     delta = new - base
     pct = _pct_delta(base, new)
     if name == "gate_fail":
@@ -167,7 +165,7 @@ def compare(base_rows: list[dict], new_rows: list[dict], threshold_pct: float = 
             metric_names = sorted(ALL_METRICS - {"gate_fail"})
         metric_names.extend(
             name for row in (old, new) for name, value in row.items()
-            if _is_measurement(name, value) and name not in metric_names
+            if _is_measurement_name(name) and name not in ALL_METRICS and name not in metric_names
         )
         if "gate_fail" in old or "gate_fail" in new:
             metric_names.append("gate_fail")

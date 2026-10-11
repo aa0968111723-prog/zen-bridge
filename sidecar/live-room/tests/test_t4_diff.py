@@ -116,3 +116,41 @@ def test_real_t4_rows_match_distinct_ids_and_same_thread_counts():
     )
     assert draft["metrics"]["future_stage_ms"]["status"] == "REGRESSION"
     assert not comparison["added"] and not comparison["removed"]
+
+
+def test_missing_nullable_metric_is_a_regression_not_a_configuration_change(tmp_path, capsys):
+    baseline_row = {
+        "layer": "draft", "id": "draft-int8-t1", "threads": 1, "future_stage_ms": 1.0,
+    }
+    new_row = {**baseline_row, "future_stage_ms": None}
+    baseline = tmp_path / "baseline.json"
+    new = tmp_path / "new.json"
+    baseline.write_text(json.dumps([baseline_row]), encoding="utf-8")
+    new.write_text(json.dumps([new_row]), encoding="utf-8")
+
+    assert t4_diff.main([str(baseline), str(new)]) == 1
+    assert "future_stage_ms" in capsys.readouterr().out
+
+    result = t4_diff.compare([baseline_row], [new_row])
+    comparison = result["comparisons"][0]
+    assert not result["added"] and not result["removed"]
+    assert comparison["configuration"] == {"id": "draft-int8-t1", "threads": 1}
+    assert comparison["metrics"]["future_stage_ms"]["status"] == "REGRESSION"
+    assert comparison["metrics"]["future_stage_ms"]["base"] == 1.0
+    assert comparison["metrics"]["future_stage_ms"]["new"] is None
+    assert result["regressions"] == 1
+
+
+def test_concurrent_rtf_alias_is_counted_once():
+    baseline = [{
+        "layer": "concurrent", "id": "pair", "rtf_p95": 0.2, "b2_rtf_p95": 0.2,
+    }]
+    new = [{
+        "layer": "concurrent", "id": "pair", "rtf_p95": 0.4, "b2_rtf_p95": 0.4,
+    }]
+
+    result = t4_diff.compare(baseline, new)
+    metrics = result["comparisons"][0]["metrics"]
+    assert metrics["b2_rtf_p95"]["status"] == "REGRESSION"
+    assert "rtf_p95" not in metrics
+    assert result["regressions"] == 1
