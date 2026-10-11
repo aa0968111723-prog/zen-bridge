@@ -330,7 +330,8 @@ class Ledger:
             return
         self._since_ckpt, self._ckpt_at = 0, now
         try:
-            row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            from app.admin.db import try_checkpoint
+            row = try_checkpoint(conn)
             self.checkpoints = getattr(self, "checkpoints", 0) + 1
             if row and row[0]:
                 log.info("ledger checkpoint busy (reader open): log=%s moved=%s", row[1], row[2])
