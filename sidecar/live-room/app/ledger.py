@@ -328,13 +328,20 @@ class Ledger:
             self._ckpt_at = last = now
         if self._since_ckpt < self.CHECKPOINT_EVERY and now - last < self.CHECKPOINT_S:
             return
-        self._since_ckpt, self._ckpt_at = 0, now
         try:
             from app.admin.db import try_checkpoint
             row = try_checkpoint(conn)
             self.checkpoints = getattr(self, "checkpoints", 0) + 1
             if row and row[0]:
-                log.info("ledger checkpoint busy (reader open): log=%s moved=%s", row[1], row[2])
+                # A busy checkpoint has not completed the maintenance request.
+                # Keep it due so the next committed batch can use a reader gap;
+                # resetting the counter here let brief gaps pass unused.
+                if not getattr(self, '_checkpoint_busy', False):
+                    log.info("ledger checkpoint busy (reader open): log=%s moved=%s", row[1], row[2])
+                self._checkpoint_busy = True
+            else:
+                self._since_ckpt, self._ckpt_at = 0, now
+                self._checkpoint_busy = False
         except sqlite3.Error:
             log.warning("ledger checkpoint failed", exc_info=True)
 
