@@ -102,10 +102,10 @@ def _app(asr, translator):
                       decoder=copy_decoder, draft_factory=LoudDraft)
 
 
-async def _drain(sock, kinds, tries=40):
+async def _drain(sock, kinds, tries=40, identifier=None):
     for _ in range(tries):
         msg = await sock.recv(timeout=5)
-        if msg.get("type") in kinds:
+        if msg.get("type") in kinds and (identifier is None or msg.get("id")==identifier):
             return msg
     raise AssertionError(f"no {kinds}")
 
@@ -147,7 +147,9 @@ async def test_endpoint_final_end_to_end_replaces_draft_and_translates_finals_on
                     await host.inc.put({"type": "websocket.receive", "text": '{"type":"flush"}'})
                     assert (await _drain(host, {"final_seq"}))["seq"] == 2
                     assert (await _drain(host, {"flushed"}))["seq"] == 2, "flush ack comes after the last final_seq"
-                    final2 = await _drain(listener, {"caption"})
+                    # Translation for seq 1 may arrive after the draft for seq 2.
+                    # Match the required caption, rather than relying on thread timing.
+                    final2 = await _drain(listener, {"caption"}, identifier="class:s1:2")
                     assert final2["id"] == "class:s1:2"
                 # translations: finals only; let the async translate queue run
                 for _ in range(40):

@@ -21,6 +21,12 @@ def prepare(output, assets, sdk=None):
     subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_windows_runtime.py')], check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_silero_vad.py')], check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_vulkan_runtime.py')], check=True)
+    from scripts.fetch_draft_model import stage as stage_draft
+    draft_manifest=json.loads((ROOT/'app/draft-model-manifest.json').read_text())
+    draft_source=assets/'models/draft'/draft_manifest['name']
+    if not draft_source.is_dir():
+        draft_source=Path(os.getenv('LOCALAPPDATA',Path.home()/'AppData'/'Local'))/'ZenBridge/models/draft'/draft_manifest['name']
+    stage_draft(output/'models/draft'/draft_manifest['name'],draft_source if draft_source.is_dir() else None,draft_manifest)
     output.mkdir(parents=True, exist_ok=True)
     for path in source_files():
         relative = path.relative_to(ROOT)
@@ -92,6 +98,9 @@ def prepare(output, assets, sdk=None):
         'Breeze-ASR: https://huggingface.co/MediaTek-Research/Breeze-ASR-25\n'
         'Microsoft WebView2 SDK/runtime: Microsoft license; https://aka.ms/webview2\n', encoding='utf-8')
     with notices.open('a', encoding='utf-8') as writer:
+        writer.write('sherpa-onnx: Apache-2.0; https://github.com/k2-fsa/sherpa-onnx\n'
+                     'OpenCC Python: Apache-2.0; https://github.com/yichen0831/opencc-python\n'
+                     'X-ASR: https://github.com/Gilgamesh-J/X-ASR; model provenance: app/draft-model-manifest.json\n')
         writer.write('Silero VAD v6.2.3: MIT; https://github.com/snakers4/silero-vad\n'
                      'Microsoft Visual C++ runtime 14.50 x64: Microsoft redistributable license; '
                      'extracted from byte-pinned official vc_redist.x64.exe; see app/windows-runtime-manifest.json\n')

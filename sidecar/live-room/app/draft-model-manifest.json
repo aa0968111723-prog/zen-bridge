@@ -1,0 +1,13 @@
+{
+  "name": "sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05",
+  "source": "https://github.com/Gilgamesh-J/X-ASR",
+  "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05.tar.bz2",
+  "size": 133895136,
+  "sha256": "fa5f63d618e5a01526e275a358bb7772e403f84808a4769fba52cffd8160bf74",
+  "files": {
+    "encoder.int8.onnx": {"size":155278641,"sha256":"908596dcc137a73b95be908ca55e88caa1b3dbbe8027c171615f4b0609c5eb1e"},
+    "decoder.onnx": {"size":11309084,"sha256":"a1cbc9eac2d5e3fb6617a218c67ad6daaa7f4e0fd225f08b2c22ab0413c8c257"},
+    "joiner.int8.onnx": {"size":2581422,"sha256":"aedb7fa697b2ab43f20499826fff7c997eea7d67db77be97769aeeeb726e63b3"},
+    "tokens.txt": {"size":58806,"sha256":"b818a60878b9aae978cbb8ad594acbd403d76d1af2e31ef4197c84e2dbdba27c"}
+  }
+}

@@ -23,6 +23,8 @@ internal sealed class BreezeWindow : Form {
     readonly WebView2 browser = new WebView2 { Dock = DockStyle.Fill, Visible = false };
     readonly MenuStrip menu = new MenuStrip();
     readonly ToolStripMenuItem gpuMenu = new ToolStripMenuItem("GPU 加速（實驗，下次啟動生效）");
+    readonly ToolStripMenuItem fastMenu = new ToolStripMenuItem("快速字幕（實驗，下次啟動生效）");
+    readonly ToolStripMenuItem graphMenu = new ToolStripMenuItem("AI 翻譯檢查（下次啟動生效）");
     Process service, adminService;
     IntPtr job;
     bool closing, stopped, ready, jobAssigned;
@@ -54,11 +56,25 @@ internal sealed class BreezeWindow : Form {
         gpuMenu.Click += (s,e) => {
             Directory.CreateDirectory(Path.Combine(root,"data"));
             gpuMenu.Checked=!gpuMenu.Checked;
-            File.WriteAllText(Path.Combine(root,"data","performance.json"),
-                new JavaScriptSerializer().Serialize(new Dictionary<string,bool> { {"gpu",gpuMenu.Checked} }),Encoding.UTF8);
+            SavePreference("gpu",gpuMenu.Checked);
             MessageBox.Show("已保存。下次開啟 App 時套用；若 GPU 初始化失敗，會自動改用 CPU。","GPU 加速");
         };
         menu.Items.Add(gpuMenu);
+        fastMenu.Enabled = DraftModelDirectory() != null;
+        fastMenu.Checked = PreferenceEnabled("fast_captions");
+        fastMenu.Click += (s,e) => {
+            fastMenu.Checked=!fastMenu.Checked; SavePreference("fast_captions",fastMenu.Checked);
+            MessageBox.Show("已保存。下次啟動套用快速字幕；草稿只供即時參考，正式字幕仍由中文辨識確認。","快速字幕");
+        };
+        menu.Items.Add(fastMenu);
+        string speech=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZenBridge","agent-suite","speech");
+        graphMenu.Enabled=File.Exists(Path.Combine(speech,"Scripts","python.exe")) && File.Exists(Path.Combine(speech,"installation.json"));
+        graphMenu.Checked=PreferenceEnabled("agent_graph");
+        graphMenu.Click += (s,e) => {
+            graphMenu.Checked=!graphMenu.Checked; SavePreference("agent_graph",graphMenu.Checked);
+            MessageBox.Show("已保存。下次啟動啟用翻譯快速檢查；最多重試一次，有疑點的譯文仍需人工確認。","AI 翻譯檢查");
+        };
+        menu.Items.Add(graphMenu);
         menu.Items.Add("怎麼用", null, delegate { MessageBox.Show("1. 在主介面建立或選擇社課。\n2. 選擇麥克風與發言語言，再開始收音。\n3. 聽眾用手機掃描 QR 看保存的譯文。\n\n關閉此視窗會停止字幕。", "怎麼用"); });
         menu.Items.Add("關於", null, delegate { MessageBox.Show("禪譯 Zen Bridge " + File.ReadAllText(Path.Combine(root,"VERSION")).Trim() + "\n本機中文字幕 · 手機掃 QR 可看保存的譯文\n關閉此視窗會停止字幕服務。", "關於"); });
         Controls.Add(browser); Controls.Add(status); Controls.Add(menu);
@@ -121,6 +137,13 @@ internal sealed class BreezeWindow : Form {
             info.EnvironmentVariables["PYTHONUTF8"] = "1";
             info.EnvironmentVariables["BREEZE_OPEN_BROWSER"] = "0";
             info.EnvironmentVariables["BREEZE_ASR"] = "native";
+            if (fastMenu.Checked && fastMenu.Enabled) {
+                info.EnvironmentVariables["BREEZE_DRAFT_ASR"]="xasr";
+                info.EnvironmentVariables["BREEZE_DRAFT_MODEL_DIR"]=DraftModelDirectory();
+                info.EnvironmentVariables["BREEZE_DRAFT_THREADS"]="1";
+                info.EnvironmentVariables["BREEZE_ENDPOINT_FINAL"]="1";
+            }
+            if (graphMenu.Checked && graphMenu.Enabled) info.EnvironmentVariables["ZEN_AGENT_SUITE_GRAPH"]="1";
             if (GpuEnabled() && gpuMenu.Enabled) {
                 info.EnvironmentVariables["BREEZE_ASR_GPU"]="vulkan";
                 info.EnvironmentVariables["BREEZE_WHISPER_DIR"]=Path.Combine(root,"tools","whisper-vulkan");
@@ -221,13 +244,31 @@ internal sealed class BreezeWindow : Form {
             File.AppendAllText(path,line+Environment.NewLine,Encoding.UTF8);
         } } catch { }
     }
-    bool GpuEnabled() {
+    Dictionary<string,object> ReadPreferences() {
         try {
             string path=Path.Combine(root,"data","performance.json");
-            if (!File.Exists(path)) return false;
-            var settings=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(path,Encoding.UTF8));
-            return settings.ContainsKey("gpu") && settings["gpu"] is bool && (bool)settings["gpu"];
-        } catch { return false; }
+            if (File.Exists(path) && new FileInfo(path).Length<=4096)
+                return new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(path,Encoding.UTF8)) ?? new Dictionary<string,object>();
+        } catch { }
+        return new Dictionary<string,object>();
+    }
+    bool PreferenceEnabled(string key) {
+        var settings=ReadPreferences();
+        return settings.ContainsKey(key) && settings[key] is bool && (bool)settings[key];
+    }
+    bool GpuEnabled() { return PreferenceEnabled("gpu"); }
+    void SavePreference(string key,bool value) {
+        var settings=ReadPreferences(); settings[key]=value;
+        string folder=Path.Combine(root,"data"); Directory.CreateDirectory(folder);
+        string path=Path.Combine(folder,"performance.json"), temp=path+"."+instance+".tmp";
+        File.WriteAllText(temp,new JavaScriptSerializer().Serialize(settings),Encoding.UTF8);
+        if (File.Exists(path)) File.Replace(temp,path,null); else File.Move(temp,path);
+    }
+    string DraftModelDirectory() {
+        string folder=Path.Combine(root,"models","draft","sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05");
+        foreach (string name in new [] {"encoder.int8.onnx","decoder.onnx","joiner.int8.onnx","tokens.txt"})
+            if (!File.Exists(Path.Combine(folder,name))) return null;
+        return folder;
     }
     void StartAdmin() {
         if (!ready || closing) return;
