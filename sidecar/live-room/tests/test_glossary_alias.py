@@ -271,7 +271,9 @@ def test_normalize_fold_longest_match_and_idempotence():
     assert english == "a class"
 
 
-def test_prompt_sends_only_matched_terms_in_the_user_block():
+def test_prompt_sends_only_matched_terms_in_the_user_block(monkeypatch):
+    # This contract isolates the user glossary from optional bundled hints.
+    monkeypatch.setenv('ZEN_REFERENCE_PACK_ENABLED', '0')
     translator = Translator()
     glossary = [
         {"zh": "詞甲", "en": "alpha", "lock": True, "note": "主持人備註"},

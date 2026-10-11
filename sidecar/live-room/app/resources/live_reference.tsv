@@ -1,0 +1,401 @@
+zh	en	ja
+即時翻譯	real-time translation	リアルタイム翻訳
+即時字幕	live captions	リアルタイム字幕
+語音辨識	speech recognition	音声認識
+翻譯品質	translation quality	翻訳品質
+翻譯記憶	translation memory	翻訳メモリ
+目標語言	target language	翻訳先の言語
+來源語言	source language	翻訳元の言語
+專有名詞	proper noun	固有名詞
+常用詞彙	common vocabulary	よく使う語彙
+術語表	glossary	用語集
+上下文	context	文脈
+語意	meaning	意味
+語氣	tone	語調
+口語	spoken language	話し言葉
+書面語	written language	書き言葉
+逐字翻譯	word-for-word translation	逐語訳
+自然表達	natural phrasing	自然な表現
+正確發音	correct pronunciation	正しい発音
+振假名	furigana	振り仮名
+讀音	pronunciation	読み方
+字幕延遲	caption delay	字幕の遅延
+字幕草稿	draft captions	暫定字幕
+定稿字幕	final captions	確定字幕
+收音品質	audio capture quality	録音品質
+背景雜音	background noise	背景雑音
+麥克風	microphone	マイク
+揚聲器	speaker	スピーカー
+耳機	headphones	ヘッドホン
+音量	volume	音量
+音訊輸入	audio input	音声入力
+音訊輸出	audio output	音声出力
+錄音檔	audio recording	録音ファイル
+取樣率	sample rate	サンプリング周波数
+降噪	noise reduction	ノイズ低減
+回音	echo	エコー
+斷線	disconnection	接続切断
+重新連線	reconnection	再接続
+網路連線	network connection	ネットワーク接続
+本機模型	local model	ローカルモデル
+雲端模型	cloud model	クラウドモデル
+離線模式	offline mode	オフラインモード
+線上模式	online mode	オンラインモード
+資料庫	database	データベース
+備份	backup	バックアップ
+還原	restore	復元
+資料遺失	data loss	データ損失
+資料匯出	data export	データのエクスポート
+資料匯入	data import	データのインポート
+資料夾	folder	フォルダー
+檔案路徑	file path	ファイルパス
+使用者設定	user settings	ユーザー設定
+管理後台	administration dashboard	管理画面
+操作介面	user interface	操作画面
+執行緒	thread	スレッド
+記憶體	memory	メモリ
+處理器	processor	プロセッサー
+顯示卡	graphics card	グラフィックスカード
+儲存空間	storage space	ストレージ容量
+效能	performance	性能
+錯誤訊息	error message	エラーメッセージ
+更新版本	updated version	更新版
+一鍵安裝	one-click installation	ワンクリックインストール
+相容性	compatibility	互換性
+授權	authorization	認可
+隱私	privacy	プライバシー
+個人資料	personal data	個人情報
+安全性	security	安全性
+課程	course	講座
+課堂	class	授業
+講義	course handout	講義資料
+教材	teaching materials	教材
+教學目標	learning objectives	学習目標
+學習成果	learning outcomes	学習成果
+課程進度	course progress	授業の進度
+課前準備	pre-class preparation	授業前の準備
+課後複習	post-class review	授業後の復習
+重點整理	summary of key points	要点の整理
+重點回顧	review of key points	要点の振り返り
+補充說明	additional explanation	補足説明
+實際例子	practical example	具体例
+實作練習	hands-on practice	実践練習
+小組討論	group discussion	グループ討議
+課堂提問	classroom question	授業中の質問
+問答時間	question-and-answer session	質疑応答の時間
+學習筆記	study notes	学習ノート
+學習方法	study method	学習方法
+學習動機	motivation to learn	学習意欲
+研究方法	research method	研究方法
+研究結果	research findings	研究結果
+研究限制	study limitations	研究の限界
+參考資料	reference materials	参考資料
+參考文獻	references	参考文献
+文獻回顧	literature review	先行研究の検討
+實驗設計	experimental design	実験計画
+資料分析	data analysis	データ分析
+觀察紀錄	observation record	観察記録
+測量結果	measurement results	測定結果
+統計資料	statistical data	統計データ
+平均值	mean	平均値
+中位數	median	中央値
+標準差	standard deviation	標準偏差
+樣本數	sample size	サンプル数
+變項	variable	変数
+假設	hypothesis	仮説
+證據	evidence	証拠
+相關性	correlation	相関
+因果關係	causal relationship	因果関係
+可靠性	reliability	信頼性
+有效性	validity	妥当性
+可重現性	reproducibility	再現性
+測試案例	test case	テストケース
+驗收標準	acceptance criteria	受け入れ基準
+團隊合作	teamwork	チームワーク
+分工	division of responsibilities	役割分担
+協調	coordination	調整
+溝通	communication	コミュニケーション
+回饋	feedback	フィードバック
+建議	suggestion	提案
+共識	consensus	合意
+目標	goal	目標
+計畫	plan	計画
+執行	implementation	実行
+優先順序	priorities	優先順位
+截止日期	deadline	締め切り
+時程	schedule	日程
+進度	progress	進捗
+風險	risk	リスク
+資源	resources	資源
+需求	requirements	要件
+限制	constraints	制約
+責任	responsibility	責任
+決策	decision	意思決定
+問題解決	problem solving	問題解決
+改善	improvement	改善
+持續改進	continuous improvement	継続的改善
+會議紀錄	meeting minutes	議事録
+議程	agenda	議題
+討論事項	discussion item	検討事項
+行動項目	action item	実行項目
+下一步	next step	次の段階
+活動	activity	活動
+社團	club	サークル
+社課	club class	サークルの講座
+講者	speaker	講師
+主持人	host	司会者
+聽眾	audience	聴衆
+參與者	participant	参加者
+志工	volunteer	ボランティア
+工作人員	staff member	スタッフ
+報名	registration	申し込み
+簽到	check-in	受付
+出席	attendance	出席
+請假	request for leave	欠席の届け出
+休息時間	break time	休憩時間
+活動流程	event schedule	イベントの流れ
+注意事項	important reminders	注意事項
+場地	venue	会場
+座位	seat	座席
+入口	entrance	入口
+出口	exit	出口
+緊急出口	emergency exit	非常口
+洗手間	restroom	お手洗い
+飲用水	drinking water	飲料水
+交通	transportation	交通
+公車	bus	バス
+捷運	metro	地下鉄
+火車	train	電車
+車站	station	駅
+轉乘	transfer	乗り換え
+方向	direction	方向
+距離	distance	距離
+地點	location	場所
+時間	time	時間
+日期	date	日付
+今天	today	今日
+明天	tomorrow	明日
+昨天	yesterday	昨日
+上午	morning	午前
+下午	afternoon	午後
+晚上	evening	夜
+星期一	Monday	月曜日
+星期二	Tuesday	火曜日
+星期三	Wednesday	水曜日
+星期四	Thursday	木曜日
+星期五	Friday	金曜日
+星期六	Saturday	土曜日
+星期日	Sunday	日曜日
+週末	weekend	週末
+下週	next week	来週
+上週	last week	先週
+每週	every week	毎週
+每天	every day	毎日
+經驗	experience	経験
+理解	understanding	理解
+感受	feelings	感じ方
+情緒	emotion	感情
+壓力	stress	ストレス
+焦慮	anxiety	不安
+耐心	patience	忍耐
+信心	confidence	自信
+專注	concentration	集中
+注意力	attention	注意力
+觀察	observation	観察
+覺察	awareness	気づき
+反思	reflection	振り返り
+習慣	habit	習慣
+態度	attitude	姿勢
+價值觀	values	価値観
+尊重	respect	尊重
+同理心	empathy	共感
+包容	acceptance	受容
+傾聽	attentive listening	傾聴
+關懷	care	思いやり
+感謝	gratitude	感謝
+承諾	commitment	約束
+信任	trust	信頼
+合作	cooperation	協力
+平衡	balance	バランス
+身心	body and mind	心身
+呼吸	breathing	呼吸
+吸氣	inhalation	吸気
+吐氣	exhalation	呼気
+姿勢	posture	姿勢
+放鬆	relaxation	リラックス
+伸展	stretching	ストレッチ
+正念	mindfulness	マインドフルネス
+冥想	meditation	瞑想
+靜坐	sitting meditation	座って行う瞑想
+當下	the present moment	今この瞬間
+身體感受	bodily sensations	身体の感覚
+呼吸節奏	breathing rhythm	呼吸のリズム
+心情	mood	気分
+疲勞	fatigue	疲労
+睡眠	sleep	睡眠
+健康	health	健康
+飲食	diet	食生活
+運動	exercise	運動
+生活作息	daily routine	生活リズム
+環境	environment	環境
+氣候	climate	気候
+天氣	weather	天気
+溫度	temperature	温度
+資源回收	recycling	リサイクル
+永續發展	sustainable development	持続可能な開発
+節約能源	energy conservation	省エネルギー
+環境保護	environmental protection	環境保護
+公共空間	public space	公共空間
+社區	community	地域社会
+文化	culture	文化
+文化差異	cultural differences	文化の違い
+傳統	tradition	伝統
+語言學習	language learning	語学学習
+國際交流	international exchange	国際交流
+歡迎大家。	Welcome, everyone.	皆さん、ようこそ。
+謝謝大家參與。	Thank you all for taking part.	皆さん、ご参加ありがとうございます。
+我們現在開始。	Let's begin now.	それでは始めましょう。
+今天的主題是即時翻譯。	Today's topic is real-time translation.	今日のテーマはリアルタイム翻訳です。
+先說明今天的流程。	Let me first explain today's schedule.	まず今日の流れを説明します。
+請先確認麥克風。	Please check the microphone first.	まずマイクを確認してください。
+聽得到我的聲音嗎？	Can you hear me?	私の声は聞こえますか。
+聲音太小，請調高音量。	The sound is too quiet. Please turn up the volume.	音が小さいので、音量を上げてください。
+請把麥克風靠近一點。	Please move the microphone a little closer.	マイクをもう少し近づけてください。
+請說慢一點。	Please speak a little more slowly.	もう少しゆっくり話してください。
+可以再說一次嗎？	Could you say that again?	もう一度言っていただけますか。
+請稍等一下。	Please wait a moment.	少々お待ちください。
+我確認一下。	Let me check.	確認します。
+字幕有一點延遲。	The captions are slightly delayed.	字幕に少し遅れがあります。
+我們先處理連線問題。	Let's address the connection issue first.	まず接続の問題に対処しましょう。
+請重新整理頁面。	Please refresh the page.	ページを再読み込みしてください。
+請選擇目標語言。	Please select the target language.	翻訳先の言語を選択してください。
+這個詞要看上下文。	The meaning of this word depends on the context.	この言葉の意味は文脈によって変わります。
+不用逐字翻譯。	You don't need to translate word for word.	逐語訳にする必要はありません。
+先理解整句的意思。	First, understand the meaning of the whole sentence.	まず文全体の意味を理解しましょう。
+請保留原本的語氣。	Please preserve the original tone.	元の語調を保ってください。
+這裡需要補充說明。	An additional explanation is needed here.	ここは補足説明が必要です。
+我們來看一個例子。	Let's look at an example.	例を一つ見てみましょう。
+這是一個常見的情況。	This is a common situation.	これはよくある状況です。
+這兩個概念不一樣。	These two concepts are different.	この二つの概念は異なります。
+請注意兩者的差別。	Please note the difference between the two.	両者の違いに注意してください。
+重點在於理解。	The key is understanding.	大切なのは理解することです。
+我們一步一步來。	Let's take it step by step.	一つずつ進めましょう。
+先從最簡單的開始。	Start with the simplest part.	最も簡単なところから始めましょう。
+請用自己的話說明。	Please explain it in your own words.	自分の言葉で説明してください。
+可以舉個例子嗎？	Could you give an example?	例を挙げていただけますか。
+這樣說明清楚嗎？	Is that explanation clear?	この説明で分かりますか。
+有任何問題嗎？	Are there any questions?	何か質問はありますか。
+請舉手發問。	Please raise your hand to ask a question.	質問するときは手を挙げてください。
+我們稍後再討論。	We'll discuss that later.	それは後ほど話し合いましょう。
+先把問題記下來。	Write down the question for now.	ひとまず質問を書き留めてください。
+請看下一頁。	Please look at the next page.	次のページを見てください。
+請看畫面上的文字。	Please look at the text on the screen.	画面の文字を見てください。
+請參考講義。	Please refer to the handout.	配布資料を参照してください。
+這部分是今天的重點。	This is a key point for today.	ここが今日の要点です。
+我們先休息十分鐘。	Let's take a ten-minute break.	十分間休憩しましょう。
+休息後再繼續。	We'll continue after the break.	休憩後に続けましょう。
+接下來進行小組討論。	Next, we'll have a group discussion.	次はグループで話し合います。
+請分享你的想法。	Please share your thoughts.	自分の考えを聞かせてください。
+每個人都可以表達意見。	Everyone is welcome to express an opinion.	誰でも意見を述べて構いません。
+我們尊重不同的看法。	We respect different viewpoints.	私たちは異なる考え方を尊重します。
+請先聽對方說完。	Please let the other person finish speaking.	まず相手の話を最後まで聞いてください。
+我理解你的意思。	I understand what you mean.	おっしゃる意味は分かります。
+我想補充一點。	I'd like to add one point.	一点補足したいと思います。
+我的看法有些不同。	My view is a little different.	私の考えは少し違います。
+我們需要更多資料。	We need more information.	さらに情報が必要です。
+目前還不能下結論。	We can't draw a conclusion yet.	現時点ではまだ結論を出せません。
+這只是初步的結果。	These are only preliminary results.	これはまだ初期段階の結果です。
+請確認資料來源。	Please check the source of the information.	情報の出典を確認してください。
+這個數字需要核對。	This figure needs to be checked.	この数値は確認が必要です。
+請不要忽略例外。	Please don't overlook exceptions.	例外を見落とさないでください。
+相關性不等於因果關係。	Correlation does not imply causation.	相関があるからといって因果関係があるとは限りません。
+我們先確認需求。	Let's clarify the requirements first.	まず要件を確認しましょう。
+這個問題優先處理。	This issue takes priority.	この問題を優先して対応します。
+目前進度到哪裡？	How far have we progressed?	現在どこまで進んでいますか。
+我們還需要一些時間。	We still need some time.	もう少し時間が必要です。
+請先備份資料。	Please back up the data first.	まずデータをバックアップしてください。
+不要覆寫原本的檔案。	Don't overwrite the original file.	元のファイルを上書きしないでください。
+這個功能尚未完成。	This feature is not finished yet.	この機能はまだ完成していません。
+測試已經通過。	The tests have passed.	テストに合格しました。
+還需要實際驗證。	It still needs to be tested in practice.	まだ実際の環境で検証する必要があります。
+請記錄錯誤訊息。	Please record the error message.	エラーメッセージを記録してください。
+我們先保留原設定。	We'll keep the original settings for now.	ひとまず元の設定を維持します。
+這不影響現有資料。	This does not affect the existing data.	既存のデータには影響しません。
+請確認更新版本。	Please check the updated version.	更新版を確認してください。
+現在可以離線使用。	It can now be used offline.	これでオフラインでも使用できます。
+請保持自然呼吸。	Please breathe naturally.	自然に呼吸してください。
+把注意力放在呼吸上。	Focus your attention on your breathing.	呼吸に注意を向けてください。
+不用刻意控制呼吸。	You don't need to deliberately control your breathing.	無理に呼吸をコントロールする必要はありません。
+察覺身體的感受。	Notice the sensations in your body.	身体の感覚に気づいてください。
+讓肩膀放鬆。	Relax your shoulders.	肩の力を抜いてください。
+請保持舒適的姿勢。	Please maintain a comfortable posture.	楽な姿勢を保ってください。
+分心時，慢慢回到呼吸。	When your mind wanders, gently return to your breathing.	気が散ったら、ゆっくり呼吸に意識を戻しましょう。
+不要急著評斷。	Don't rush to judge.	すぐに判断しようとしないでください。
+先觀察自己的反應。	First, observe your own reaction.	まず自分の反応を観察してください。
+允許自己慢慢學習。	Give yourself time to learn.	ゆっくり学ぶ時間を自分に与えましょう。
+每個人的經驗不同。	Everyone's experience is different.	一人ひとりの経験は異なります。
+請量力而為。	Please do only what you can comfortably manage.	無理のない範囲で行ってください。
+不舒服時可以先停止。	If you feel uncomfortable, you can stop for now.	つらく感じたら、いったん止めて構いません。
+請隨時告訴工作人員。	Please let a staff member know at any time.	いつでもスタッフにお知らせください。
+今天就到這裡。	That's all for today.	今日はここまでです。
+我們下次再見。	See you next time.	また次回お会いしましょう。
+祝大家有美好的一天。	Have a wonderful day, everyone.	皆さん、よい一日をお過ごしください。
+我們先備份資料，再討論下一步。	Let's back up the data first, then discuss the next step.	まずデータをバックアップしてから、次の手順について話し合いましょう。
+請先確認麥克風，然後選擇目標語言。	Please check the microphone first, then select the target language.	まずマイクを確認してから、翻訳先の言語を選択してください。
+請不要漏掉任何步驟。	Please don't skip any steps.	どの手順も省略しないでください。
+我們先確認問題，再提出解決方法。	Let's identify the problem first, then propose a solution.	まず問題を確認してから、解決方法を提案しましょう。
+先完成測試，再進行更新。	Finish testing first, then apply the update.	まずテストを完了してから、更新してください。
+請確認每一項設定。	Please check each setting.	各設定を確認してください。
+請保留完整的句子。	Please preserve the complete sentence.	文全体を省略せずに残してください。
+這裡的意思不是那樣。	That's not what it means here.	ここではそのような意味ではありません。
+請依照上下文判斷。	Please interpret it in context.	文脈に沿って判断してください。
+這是一個專有名詞。	This is a proper noun.	これは固有名詞です。
+請使用一致的術語。	Please use consistent terminology.	用語を統一してください。
+我們以原文為準。	We'll follow the original text.	原文を基準にします。
+這個譯法比較自然。	This translation sounds more natural.	こちらの訳のほうが自然です。
+不要改變說話者的意思。	Don't change the speaker's meaning.	話し手の意図を変えないでください。
+請保留否定的意思。	Please preserve the negative meaning.	否定の意味を保ってください。
+這不是最後的決定。	This is not the final decision.	これは最終決定ではありません。
+我們還沒有確認。	We haven't confirmed it yet.	まだ確認していません。
+請不要自行補充內容。	Please don't add information on your own.	独自に内容を付け加えないでください。
+這裡有兩個步驟。	There are two steps here.	ここには二つの手順があります。
+我們稍後會提供資料。	We'll provide the information later.	資料は後ほどお渡しします。
+請確認是否儲存成功。	Please check whether it was saved successfully.	正常に保存されたか確認してください。
+資料已經儲存。	The data has been saved.	データは保存されました。
+請不要重複操作。	Please don't repeat the operation.	同じ操作を繰り返さないでください。
+系統正在處理中。	The system is processing it.	システムが処理中です。
+請等待處理完成。	Please wait for processing to finish.	処理が完了するまでお待ちください。
+目前沒有新的資料。	There is no new data at the moment.	現在、新しいデータはありません。
+我們需要重新確認。	We need to check again.	再度確認する必要があります。
+這項功能預設關閉。	This feature is disabled by default.	この機能は初期設定では無効です。
+你可以在設定中開啟。	You can enable it in the settings.	設定で有効にできます。
+這裡只使用本機模型。	Only a local model is used here.	ここではローカルモデルのみを使用します。
+不會自動切換到雲端。	It won't automatically switch to the cloud.	自動でクラウドに切り替わることはありません。
+請先取得對方同意。	Please obtain the other person's consent first.	まず相手の同意を得てください。
+請不要公開個人資料。	Please don't disclose personal data.	個人情報を公開しないでください。
+這些資料只供內部使用。	This information is for internal use only.	この資料は内部でのみ使用します。
+請確認你的權限。	Please check your permissions.	アクセス権限を確認してください。
+登入後才能使用。	You must sign in before using it.	利用するにはログインが必要です。
+請先停止錄音。	Please stop recording first.	まず録音を停止してください。
+錄音已經開始。	Recording has started.	録音を開始しました。
+錄音已經停止。	Recording has stopped.	録音を停止しました。
+字幕會自動更新。	The captions will update automatically.	字幕は自動的に更新されます。
+草稿字幕可能會修正。	Draft captions may be revised.	暫定字幕は修正される場合があります。
+請以定稿字幕為準。	Please refer to the final captions.	確定字幕を参照してください。
+這段音訊需要重新辨識。	This audio segment needs to be transcribed again.	この音声区間は再度認識する必要があります。
+目前沒有偵測到聲音。	No sound is being detected at the moment.	現在、音声が検出されていません。
+請確認音訊輸入裝置。	Please check the audio input device.	音声入力装置を確認してください。
+背景雜音有點大。	The background noise is a little loud.	背景の雑音が少し大きいです。
+請一次一個人說話。	Please speak one at a time.	一人ずつ話してください。
+請避免同時說話。	Please avoid speaking at the same time.	同時に話さないでください。
+請把問題說得更具體。	Please make your question more specific.	質問をもう少し具体的にしてください。
+我想確認一個細節。	I'd like to check one detail.	一つ確認したい点があります。
+你說的是哪一部分？	Which part are you referring to?	どの部分についておっしゃっていますか。
+請給我一點時間。	Please give me a little time.	少し時間をください。
+我們可以一起確認。	We can check it together.	一緒に確認できます。
+讓我們回到剛才的問題。	Let's return to the previous question.	先ほどの質問に戻りましょう。
+這個例子有助於理解。	This example helps make it clearer.	この例は理解に役立ちます。
+請比較這兩個結果。	Please compare these two results.	この二つの結果を比較してください。
+接下來由另一位同學分享。	Next, another student will share their thoughts.	次は別の学生に話してもらいます。
+最後整理一下重點。	Finally, let's summarize the key points.	最後に要点を整理しましょう。
+謝謝你的說明。	Thank you for the explanation.	ご説明ありがとうございます。
