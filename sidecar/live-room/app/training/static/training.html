@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>訓練資料（本機）— Zen Bridge 後台</title>
+<link rel="stylesheet" href="/admin/static/app.css">
+<link rel="stylesheet" href="/admin/training/training.css"></head>
+<body>
+<a class="skip" href="#main">跳到主要內容</a>
+<header><h1>Zen Bridge 後台（本機）</h1>
+  <span id="who" aria-live="polite"></span> <a href="/admin">回後台首頁</a></header>
+<div id="banner" role="alert" aria-live="assertive" hidden></div>
+<main id="main" tabindex="-1">
+  <h2>訓練資料（只存在這台電腦）</h2>
+  <p class="hint">錄音與逐字稿只存在 <code id="root">%LOCALAPPDATA%\ZenBridge\training</code>，不會上傳。只有在名冊裡「有同意」的講者才能錄音或被收錄；撤回同意會刪除他所有的錄音和含他的匯出。</p>
+  <nav class="tr-tabs" role="tablist" aria-label="分頁">
+    <button role="tab" data-tab="speakers" aria-selected="true">講者與同意</button>
+    <button role="tab" data-tab="studio">錄音室</button>
+    <button role="tab" data-tab="harvest">社課收錄</button>
+    <button role="tab" data-tab="review">審核佇列 <span id="q-count"></span></button>
+    <button role="tab" data-tab="recordings">錄音與逐字稿</button>
+    <button role="tab" data-tab="import">匯入既有錄音</button>
+    <button role="tab" data-tab="export">匯出資料集</button>
+  </nav>
+
+  <section id="tab-speakers" class="tr-pane">
+    <h3>講者名冊</h3>
+    <table id="spk-table" aria-label="講者"><thead><tr><th>暱稱</th><th>ID</th><th>同意</th><th>已錄</th><th>操作</th></tr></thead><tbody></tbody></table>
+    <form id="spk-add" class="tr-form"><label>暱稱（不要填學號、電話）<input name="label" maxlength="24" required></label>
+      <label>口音備註（可空）<input name="accent_note" maxlength="40" placeholder="例：台語腔"></label>
+      <button type="submit">新增講者</button></form>
+    <section id="consent-box" hidden>
+      <h3>記錄同意：<span id="consent-who"></span></h3>
+      <blockquote id="consent-text"></blockquote>
+      <form id="consent-form" class="tr-form">
+        <label><input type="checkbox" name="scope_asr" checked> 語音辨識（ASR）訓練</label>
+        <label><input type="checkbox" name="scope_mt" checked> 翻譯（MT）訓練</label>
+        <label><input type="checkbox" name="harvest_live"> 允許主持人在社課現場收錄</label>
+        <label>同意日期 <input type="date" name="consent_date" required></label>
+        <label>紀錄人（主持人暱稱）<input name="recorded_by" maxlength="40" required></label>
+        <label><input type="checkbox" name="confirm_text" required> 講者本人已閱讀並口頭／書面同意上面的內容</label>
+        <button type="submit">儲存同意</button> <button type="button" id="consent-cancel">取消</button>
+      </form>
+    </section>
+  </section>
+
+  <section id="tab-studio" class="tr-pane" hidden>
+    <h3>錄音室：朗讀提示句</h3>
+    <form id="studio-start" class="tr-form"><label>講者 <select name="speaker_id" id="studio-spk"></select></label>
+      <label>提示來源 <select name="source"><option value="">混合</option><option value="club">社團用語</option>
+        <option value="glossary">詞表</option><option value="dharma">開示常用句</option><option value="mixed">中英夾雜</option><option value="custom">自訂</option></select></label>
+      <button type="submit">開始這次錄音</button></form>
+    <div id="studio" hidden>
+      <p class="tr-progress" id="studio-progress" aria-live="polite"></p>
+      <p class="tr-src" id="prompt-src"></p>
+      <p class="tr-prompt" id="prompt" lang="zh-Hant"></p>
+      <div class="tr-meter" aria-hidden="true"><div id="meter-bar"></div></div>
+      <p id="meter-text" class="hint" aria-live="polite">按「錄音」後開始讀；讀完按「停止」（會多收 1.2 秒尾音）。</p>
+      <div class="tr-actions">
+        <button type="button" id="rec-btn">● 錄音</button>
+        <button type="button" id="stop-btn" disabled>■ 停止</button>
+        <button type="button" id="redo-btn" disabled>重錄這句</button>
+        <button type="button" id="next-btn">下一句</button>
+        <button type="button" id="finish-btn">結束並產生逐字稿</button>
+      </div>
+      <div id="take-result" aria-live="polite"></div>
+      <audio id="take-audio" controls hidden></audio>
+      <ol id="take-log" class="tr-log" aria-label="這次錄好的句子"></ol>
+      <form id="prompt-add" class="tr-form"><label>新增自訂提示句 <input name="text" maxlength="200"></label><button type="submit">加入</button></form>
+    </div>
+    <div id="studio-done" hidden></div>
+  </section>
+
+  <section id="tab-harvest" class="tr-pane" hidden>
+    <h3>社課現場收錄（主持人逐場開啟）</h3>
+    <p class="hint">只對「允許現場收錄」的講者有效。開啟後，這個房間的下一場（或指定場次）每段 Breeze 定稿字幕會連同音檔存成「未校對」，並同步寫入逐字稿。4 分鐘沒有辨識結果會提醒，5 分鐘自動停止並產生完整逐字稿。</p>
+    <form id="harvest-form" class="tr-form"><label>房間代碼 <input name="room_id" required maxlength="64"></label>
+      <label>場次 ID（可空 = 下一場）<input name="session_id" maxlength="64"></label>
+      <label>講者 <select name="speaker_id" id="harvest-spk"></select></label>
+      <label>最長（小時）<input name="hours" type="number" min="0.25" max="12" step="0.25" value="4"></label>
+      <button type="submit">本場開始收錄</button></form>
+    <table id="harvest-table" aria-label="收錄紀錄"><thead><tr><th>房間</th><th>場次</th><th>講者</th><th>狀態</th><th>操作</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="tab-review" class="tr-pane" hidden>
+    <h3>審核佇列</h3>
+    <form id="review-filter" class="tr-form"><label>狀態 <select name="status"><option value="open">待處理</option>
+      <option value="unverified">未校對</option><option value="needs_review">需人工處理</option><option value="approved">已核准</option><option value="rejected">已退回</option></select></label>
+      <label>來源 <select name="origin"><option value="">全部</option><option value="harvest">社課</option><option value="studio">錄音室</option><option value="import">匯入</option></select></label>
+      <button type="submit">重新整理</button></form>
+    <div id="review-list"></div>
+  </section>
+
+  <section id="tab-recordings" class="tr-pane" hidden>
+    <h3>錄音與完整逐字稿</h3>
+    <p class="hint">每次錄音都有音檔＋逐字稿（TXT／SRT／VTT／JSON，含時間與講者）。講者標籤（Speaker 0、Speaker 1…）可以改名或對應到名冊；對應「排除」會刪掉那位的音檔。</p>
+    <table id="rec-table" aria-label="錄音"><thead><tr><th>種類</th><th>標題</th><th>片段</th><th>長度</th><th>下載</th><th>講者標籤</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="tab-import" class="tr-pane" hidden>
+    <h3>匯入既有錄音＋逐字稿</h3>
+    <p class="hint">音檔（MP3／M4A／MP4／WAV…）＋逐字稿（TXT／SRT／VTT／JSON）。只在本機處理。檔內所有講者預設排除，要對應到「有同意」的講者後才會切出片段。也可以把同檔名的兩個檔放進 <code>training\import\inbox</code> 再執行 <code>python -m app.training import --scan</code>。</p>
+    <form id="import-form" class="tr-form"><label>音檔 <input type="file" name="audio" required></label>
+      <label>逐字稿 <input type="file" name="transcript" accept=".txt,.srt,.vtt,.json" required></label>
+      <label>標題 <input name="title" maxlength="80"></label><button type="submit">上傳並匯入</button></form>
+    <div id="import-result" aria-live="polite"></div>
+  </section>
+
+  <section id="tab-export" class="tr-pane" hidden>
+    <h3>匯出訓練資料集</h3>
+    <form id="export-form" class="tr-form">
+      <label>最短秒數 <input name="min_s" type="number" step="0.5" value="1"></label>
+      <label>最長秒數 <input name="max_s" type="number" step="1" value="30"></label>
+      <label>最低 SNR（dB）<input name="min_snr_db" type="number" step="1" value="10"></label>
+      <label>CER 上限 <input name="max_cer" type="number" step="0.05" value="0.5"></label>
+      <label><input type="checkbox" name="include_unverified"> 也包含未校對（不建議）</label>
+      <label><input type="checkbox" name="include_tm" checked> 加入翻譯記憶（品質 ≥ 4）</label>
+      <button type="submit">建立資料集</button></form>
+    <div id="export-result" aria-live="polite"></div>
+    <table id="export-table" aria-label="匯出紀錄"><thead><tr><th>編號</th><th>建立</th><th>內容</th><th>操作</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+<script type="module" src="/admin/training/training.js"></script>
+</body></html>

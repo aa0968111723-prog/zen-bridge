@@ -1,0 +1,27 @@
+# Breeze-ASR-25（Whisper-large-v2 微調）LoRA。資料：python -m app.training build 產生的 asr/ 資料夾。
+base_model: MediaTek-Research/Breeze-ASR-25
+language: zh
+task: transcribe
+lora:
+  r: 32
+  alpha: 64
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, out_proj]
+train:
+  epochs: 3
+  learning_rate: 0.0001
+  batch_size: 4
+  grad_accum: 4
+  warmup_ratio: 0.05
+  fp16: true
+  load_in_8bit: false
+  gradient_checkpointing: true
+  max_label_tokens: 200
+  eval_max_new_tokens: 200
+  seed: 42
+dry_run:
+  d_model: 32
+  layers: 1
+  heads: 2
+  steps: 2
+  max_clips: 4

@@ -1,0 +1,28 @@
+# 翻譯 LoRA（中文 → 英文／日文）。資料：export 的 mt/zh-en.*.jsonl、mt/zh-ja.*.jsonl（chat 格式）。
+base_model: Qwen/Qwen3-4B
+pairs: [zh-en, zh-ja]
+max_seq_len: 512
+use_unsloth: auto        # auto = 有裝 unsloth 就用（4-bit QLoRA，省 VRAM），否則 peft
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+train:
+  epochs: 2
+  learning_rate: 0.0002
+  batch_size: 4
+  grad_accum: 4
+  warmup_ratio: 0.03
+  bf16: true
+  load_in_4bit: true
+  seed: 42
+export:
+  gguf_quant: Q4_K_M
+  ollama_name: zen-mt-qwen3-4b-lora
+dry_run:
+  hidden: 32
+  layers: 1
+  heads: 2
+  steps: 2
+  max_pairs: 8

@@ -1,0 +1,11 @@
+# 訓練用（另開一個 venv，不要裝進 App 的 runtime）。NVIDIA GPU：先依 https://pytorch.org 裝對應 CUDA 版 torch。
+torch>=2.4
+transformers>=4.46
+peft>=0.13
+accelerate>=1.0
+datasets>=3.0
+soundfile>=0.12
+numpy>=1.26
+pyyaml>=6
+# MT（選用，較省 VRAM）：pip install unsloth trl
+# 轉檔：whisper.cpp 與 llama.cpp 的原始碼（見 README）

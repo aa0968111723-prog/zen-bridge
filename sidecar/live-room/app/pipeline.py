@@ -98,6 +98,20 @@ def ja_ruby(text: str, terms) -> list[dict]:
     return out
 
 
+
+async def _training_harvest(segment, wav) -> None:
+    """Fine-tune data (docs/finetune-data.md): keep this final segment + its WAV only when the host
+    opted this session in for a consented speaker. No training DB / no opt-in = a cached no-op."""
+    try:
+        from app.training import harvest
+        if not harvest.maybe_active():
+            return
+        await asyncio.to_thread(harvest.capture, room_id=segment.room_id, session_id=segment.session_id,
+                                seq=segment.seq, wav_path=wav, zh_raw=segment.zh_raw, zh=segment.zh,
+                                t0_ms=segment.t0_ms, t1_ms=segment.t1_ms, tgt_lang=segment.tgt_lang)
+    except Exception:
+        pass
+
 @dataclass
 class Segment:
     room_id: str
@@ -1714,6 +1728,7 @@ class Pipeline:
             self._release(segment)
             if self._stale(segment):
                 return segment
+            await _training_harvest(segment, wav)
         finally:
             self._active.discard(segment.key)
             self._release_holder(holder)
