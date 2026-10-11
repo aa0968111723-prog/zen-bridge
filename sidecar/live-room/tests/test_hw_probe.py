@@ -190,3 +190,28 @@ def test_json_serialisable_and_cli(hardware, capsys):
     assert output.err == ""
     assert hw_probe.main([]) == 0
     assert "'cpu_flags':" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("name", ["Économie d’énergie", "省電", None])
+def test_power_plan_guid_preserved_for_localized_or_missing_name(hardware, name):
+    guid = "A1841308-3541-4FAB-BC81-F71556F20B4A"
+    suffix = f" ({name})" if name is not None else ""
+    hardware.runner.side_effect = [
+        SimpleNamespace(stdout=f"Power Scheme GUID: {guid}{suffix}\n"),
+        SimpleNamespace(stdout="deviceName = AMD Radeon"),
+    ]
+
+    facts = hw_probe.probe()
+
+    assert facts["power_plan"] == (name or guid)
+    assert facts["power_plan_guid"] == guid.lower()
+
+
+def test_power_plan_guid_unavailable_when_probe_fails(hardware):
+    hardware.runner.side_effect = subprocess.TimeoutExpired("powercfg", 3)
+
+    facts = hw_probe.probe()
+
+    assert facts["power_plan"] is None
+    assert facts["power_plan_guid"] is None
+    assert any(note.startswith("power plan:") for note in facts["notes"])
