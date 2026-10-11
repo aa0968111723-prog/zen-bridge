@@ -23,8 +23,14 @@ def suite_status():
         if profile in ('diarization','evaluation'):
             model=Path(os.getenv('LOCALAPPDATA',Path.home()/'AppData'/'Local'))/'ZenBridge/models'/(
                 'diarization/community1' if profile=='diarization' else 'evaluation/cometkiwi')
-            required=model/('config.yaml' if profile=='diarization' else 'checkpoints/model.ckpt')
-            result[profile]['model_ready']=(model/'zen-model-origin.json').is_file() and required.is_file()
+            required=('config.yaml','embedding/pytorch_model.bin','segmentation/pytorch_model.bin',
+                      'plda/plda.npz','plda/xvec_transform.npz') if profile=='diarization' else ('checkpoints/model.ckpt','hparams.yaml')
+            try:
+                record=json.loads((model/'zen-model-origin.json').read_text(encoding='utf-8'))
+                ready=isinstance(record,dict) and record.get('status')=='verified' and all((model/name).is_file() for name in required)
+            except (OSError,ValueError):
+                ready=False
+            result[profile]['model_ready']=ready
     return result
 
 
