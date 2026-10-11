@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write a Traditional Chinese Markdown summary from a read-only caption database.
 
-Usage: python tools/session_report_md.py --db captions.sqlite3 [--session ID] [--out report.md]
+Usage: python tools/session_report_md.py --db captions.sqlite3 --out report.md [--session ID]
 """
 from __future__ import annotations
 
@@ -69,6 +69,23 @@ def _session_rows(conn: sqlite3.Connection, tables: set[str], columns: dict[str,
             params = (session,)
         query += " ORDER BY id"
         rows = [dict(row) for row in conn.execute(query, params)]
+        if "segments" in tables and "translations" in tables:
+            segment_columns = columns["segments"]
+            translation_columns = columns["translations"]
+            if {"id", "session_id"} <= segment_columns and "tgt_lang" in translation_columns:
+                current_filter = (
+                    " AND t.is_current=1" if "is_current" in translation_columns else ""
+                )
+                for row in rows:
+                    language = conn.execute(
+                        f"""SELECT t.tgt_lang
+                            FROM translations t JOIN segments s ON s.id=t.segment_id
+                            WHERE s.session_id=? AND t.tgt_lang IS NOT NULL{current_filter}
+                            GROUP BY t.tgt_lang ORDER BY COUNT(*) DESC, t.tgt_lang LIMIT 1""",
+                        (row["id"],),
+                    ).fetchone()
+                    if language is not None:
+                        row["tgt_lang"] = language[0]
         if rows or session is not None:
             return rows
 
@@ -112,14 +129,11 @@ def _captions_for_session(conn: sqlite3.Connection, tables: set[str],
             )
         }
         if "status" not in seg_columns:
-            notes.append("segments 缺少 status 欄位，草稿字幕數無法統計。")
+            notes.append("segments 缺少 status 欄位。")
         if not {"t0_ms", "t1_ms"} <= seg_columns:
             notes.append("segments 缺少音訊時間欄位，無法計算閱讀速度。")
 
-        draft_count = (
-            sum(str(row["status"] or "").lower() == "draft" for row in segments.values())
-            if "status" in seg_columns else None
-        )
+        draft_count = None
         if "translations" not in tables:
             notes.append("translations 資料表不存在，定稿字幕與延遲無法統計。")
             return draft_count, None, [], []
@@ -184,10 +198,7 @@ def _captions_for_session(conn: sqlite3.Connection, tables: set[str],
         notes.append("captions 缺少 en 欄位，定稿字幕與閱讀速度無法統計。")
     if not {"t0_ms", "t1_ms"} <= caption_columns:
         notes.append("captions 缺少音訊時間欄位，無法計算閱讀速度。")
-    draft_count = (
-        sum(str(row["status"] or "").lower() == "draft" for row in rows)
-        if "status" in caption_columns else None
-    )
+    draft_count = None
     finals = [
         {"text": row["en"] or "", "t0_ms": row["t0_ms"], "t1_ms": row["t1_ms"]}
         for row in rows
@@ -214,10 +225,36 @@ def _glossary_terms(conn: sqlite3.Connection, tables: set[str],
         notes.append("glossaries 資料表不存在，無法辨認本場次術語。")
         return []
     term_columns, glossary_columns = columns["glossary_terms"], columns["glossaries"]
-    required_terms = {"glossary_id", "zh", "en", "hit_count"}
+    required_terms = {"glossary_id", "zh"}
     required_glossaries = {"id", "scope", "room_id", "session_id"}
     if not required_terms <= term_columns or not required_glossaries <= glossary_columns:
-        notes.append("詞彙表缺少關聯或 hit_count 欄位，無法列出常用術語。")
+        notes.append("詞彙表缺少必要欄位，無法列出常用術語。")
+        return []
+    lang = metadata.get("tgt_lang")
+    targets = columns.get("glossary_term_targets", set())
+    if "glossary_term_targets" in tables:
+        if lang not in ("en", "ja") or not {"term_id", "tgt_lang", "text", "hit_count"} <= targets:
+            notes.append("glossary_term_targets 缺少目標語言或必要欄位，無法列出常用術語。")
+            return []
+        status_filter = "AND t.status='active'" if "status" in term_columns else ""
+        target_status = "AND x.status='active'" if "status" in targets else ""
+        rows = conn.execute(
+            f"""SELECT t.zh, x.text, x.hit_count
+                FROM glossary_terms t
+                JOIN glossary_term_targets x ON x.term_id=t.id AND x.tgt_lang=?
+                JOIN glossaries g ON g.id=t.glossary_id
+                WHERE (g.scope='global'
+                       OR (g.scope='room' AND g.room_id=?)
+                       OR (g.scope='session' AND g.session_id=?))
+                      {status_filter} {target_status}
+                ORDER BY x.hit_count DESC, t.zh, x.text
+                LIMIT 10""",
+            (lang, metadata.get("room_id"), metadata["id"]),
+        )
+        return [(str(row[0] or ""), str(row[1] or ""), int(row[2] or 0)) for row in rows]
+
+    if not {"en", "hit_count"} <= term_columns:
+        notes.append("舊版 glossary_terms 缺少 en 或 hit_count 欄位，無法列出常用術語。")
         return []
     status_filter = "AND t.status='active'" if "status" in term_columns else ""
     rows = conn.execute(
@@ -256,6 +293,7 @@ def _render_session(conn: sqlite3.Connection, tables: set[str], columns: dict[st
     draft_count, final_count, final_rows, latencies = _captions_for_session(
         conn, tables, columns, metadata, notes,
     )
+    notes.append("資料庫未保留草稿事件，草稿字幕數無法統計。")
     notes.append("資料庫未保留草稿與定稿文字配對，草稿→定稿改寫率無法計算。")
 
     outliers = []
@@ -314,7 +352,8 @@ def _render_session(conn: sqlite3.Connection, tables: set[str], columns: dict[st
     if "sessions" in tables and {"segments", "translations"} <= tables:
         lines.extend(["", "### 最常用詞彙（最多 10 項）"])
         if terms:
-            lines.extend(["| 中文 | 英文 | 使用次數 |", "| --- | --- | ---: |"])
+            target_name = "英文" if lang == "en" else "日文"
+            lines.extend([f"| 中文 | {target_name} | 使用次數 |", "| --- | --- | ---: |"])
             lines.extend(f"| {_markdown(zh)} | {_markdown(en)} | {count} |" for zh, en, count in terms)
         else:
             lines.append("- 無")
@@ -344,11 +383,11 @@ def analyze(db: str | Path, session: str | None = None) -> str:
             )
         }
         known_tables = {"sessions", "segments", "translations", "captions",
-                        "glossaries", "glossary_terms"}
+                        "glossaries", "glossary_terms", "glossary_term_targets"}
         columns = {table: _columns(conn, table) for table in tables & known_tables}
         sessions = _session_rows(conn, tables, columns, session)
         if not sessions:
-            sessions = [{"id": None, "started_at": None, "ended_at": None,
+            sessions = [{"id": session, "started_at": None, "ended_at": None,
                          "tgt_lang": None, "room_id": None}]
         return "# 會議字幕摘要\n\n" + "\n\n".join(
             _render_session(conn, tables, columns, row) for row in sessions
@@ -359,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--session")
-    parser.add_argument("--out", type=Path, metavar="OUT")
+    parser.add_argument("--out", type=Path, metavar="OUT", required=True)
     args = parser.parse_args(argv)
     try:
         report = analyze(args.db, args.session)

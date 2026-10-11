@@ -32,7 +32,7 @@ def _ledger_db(path: Path) -> Path:
                VALUES (?, 'private-room-id', ?, ?, ?)""",
             [
                 ("english-session", 1700000000, 1700000060, "en"),
-                ("japanese-session", 1700000100, None, "ja"),
+                ("japanese-session", 1700000100, None, "en"),
             ],
         )
         conn.executemany(
@@ -96,7 +96,7 @@ def test_ledger_report_summarizes_only_selected_session_without_other_identifier
     assert "## 場次：english-session" in result
     assert "2023-11-14 22:13:20 UTC" in result
     assert "- 目標語言：en" in result
-    assert "- 草稿字幕數：0" in result
+    assert "- 草稿字幕數：無資料" in result
     assert "- 定稿字幕數：2" in result
     assert "草稿→定稿改寫率：無法計算" in result
     assert "p50 200.0 ms／p95 290.0 ms" in result
@@ -108,6 +108,7 @@ def test_ledger_report_summarizes_only_selected_session_without_other_identifier
                           "segment-a", "segment-b", "segment-j"):
         assert private_value not in result
     assert "japanese-session" not in result
+    assert "草稿字幕數無法統計" in result
     assert "未保留草稿與定稿文字配對" in result
 
 
@@ -117,13 +118,15 @@ def test_ledger_report_uses_japanese_threshold_and_all_sessions_by_default(tmp_p
     assert "## 場次：english-session" in result
     assert "## 場次：japanese-session" in result
     assert "- 目標語言：ja" in result
+    assert "- 定稿字幕數：1" in result
+    assert "p50 200.0 ms" in result
     assert "9.0 字元／秒：" + "猫" * 9 in result
 
 
 def test_caption_store_report_notes_missing_ledger_metrics(tmp_path):
     result = report.analyze(_caption_db(tmp_path / "captions.sqlite3"), "caption-session")
     assert "- 目標語言：en" in result
-    assert "- 草稿字幕數：0" in result
+    assert "- 草稿字幕數：無資料" in result
     assert "- 定稿字幕數：1" in result
     assert "開始時間：無資料" in result
     assert "非 ledger 資料庫" in result
@@ -180,3 +183,43 @@ def test_partial_schema_reports_missing_fields_without_crashing(tmp_path):
     assert "- 草稿字幕數：無資料" in result
     assert "缺少 tgt_lang 欄位" in result
     assert "找不到支援的" in result
+
+
+def test_japanese_report_uses_target_specific_glossary_terms(tmp_path):
+    path = _ledger_db(tmp_path / "captions.sqlite3")
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executescript(
+            """CREATE TABLE glossary_term_targets (
+                   id INTEGER PRIMARY KEY, term_id INTEGER, tgt_lang TEXT, text TEXT,
+                   status TEXT, hit_count INTEGER
+               );
+               INSERT INTO glossaries(id, name, scope) VALUES (2, 'global', 'global');
+               INSERT INTO glossary_terms(glossary_id, zh, en, hit_count)
+                   VALUES (2, '僅英文', 'English only', 99);
+               INSERT INTO glossary_terms(glossary_id, zh, en, hit_count)
+                   VALUES (2, '日文詞', 'English fallback', 1);
+               INSERT INTO glossary_term_targets(term_id, tgt_lang, text, status, hit_count)
+                   SELECT id, 'en', 'English only', 'active', 99
+                   FROM glossary_terms WHERE zh='僅英文';
+               INSERT INTO glossary_term_targets(term_id, tgt_lang, text, status, hit_count)
+                   SELECT id, 'ja', '日本語', 'active', 7
+                   FROM glossary_terms WHERE zh='日文詞';"""
+        )
+        conn.commit()
+    result = report.analyze(path, "japanese-session")
+    assert "| 中文 | 日文 | 使用次數 |" in result
+    assert "| 日文詞 | 日本語 | 7 |" in result
+    assert "僅英文" not in result
+    assert "English only" not in result
+
+
+def test_missing_requested_session_id_is_preserved(tmp_path):
+    result = report.analyze(_ledger_db(tmp_path / "captions.sqlite3"), "missing-session-id")
+    assert "## 場次：missing-session-id" in result
+    assert "## 場次：未指定" not in result
+
+
+def test_cli_requires_output_path(tmp_path):
+    with pytest.raises(SystemExit) as exc_info:
+        report.main(["--db", str(tmp_path / "missing.sqlite3")])
+    assert exc_info.value.code == 2
