@@ -1,7 +1,8 @@
 /* 禪譯 × Breeze: live room + admin inside the turtle UI. Same paper/leaf/sky palette as globals.css. */
 .zen-shi-mark{object-fit:contain;border-radius:50%;background:#fffdf5;box-shadow:0 0 0 1px #e2dcc6}
-.nav-brand .zen-shi-mark{width:30px;height:30px;margin-left:-4px;align-self:flex-end}
-.header-zen-mark{position:absolute;right:18px;bottom:12px;z-index:3;display:flex;align-items:center;gap:6px;background:#fff9ebe6;border:1px solid #e1d6bd;border-radius:999px;padding:3px 10px 3px 4px;font-family:"Noto Serif TC","Songti TC",serif;font-size:.8125rem;color:#6c5a3b}
+.brand-pair{position:relative;display:inline-flex;flex:none}
+.brand-lotus{position:absolute;right:-9px;bottom:-4px;width:22px;height:22px;box-shadow:0 0 0 2px #fff8e8}
+.header-zen-mark{position:absolute;right:18px;top:12px;z-index:4;display:flex;align-items:center;gap:6px;background:#fff9ebe6;border:1px solid #e1d6bd;border-radius:999px;padding:3px 10px 3px 4px;font-family:"Noto Serif TC","Songti TC",serif;font-size:.8125rem;color:#6c5a3b}
 .nav-service .asr-chip{margin-top:6px}
 .asr-chip{display:inline-flex;align-items:center;gap:6px;font-size:.8125rem;border-radius:999px;padding:3px 10px;border:1px solid #d6d9c8;background:#f3f1e6;color:#68715c;white-space:nowrap}
 .asr-chip small{color:inherit;opacity:.8;font-size:.75rem}
@@ -88,3 +89,6 @@
 .admin-search{display:flex;gap:8px;margin-bottom:14px;max-width:640px}
 .admin-search select{width:96px}
 @media (max-width: 980px){.breeze-grid{grid-template-columns:1fr}.breeze-controls{grid-template-columns:1fr}.breeze-lines li{grid-template-columns:36px 1fr}.breeze-lines li p:last-child{grid-column:2}}
+.admin-overview{align-items:start}
+.asr-card .asr-chip{white-space:normal;flex-wrap:wrap;border-radius:10px;line-height:1.5}
+.asr-card .asr-chip small{flex-basis:100%}

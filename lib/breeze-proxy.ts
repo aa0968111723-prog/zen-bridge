@@ -3,7 +3,10 @@
 // its own Origin, and the admin cookie is scoped to /admin. A server-side request without an
 // Origin header is the path the live room explicitly allows for local tools.
 
-const env = (key: string) => (typeof process !== 'undefined' ? process.env?.[key] : undefined) || '';
+import { getBindings } from './env';
+
+// Worker bindings (request-scoped, Cloudflare/workerd dev) first, then the Node process env (desktop `pnpm start`).
+const env = (key: string) => String((getBindings() as Record<string, unknown>)[key] || (typeof process !== 'undefined' ? process.env?.[key] : '') || '');
 
 export function liveBase() { return (env('BREEZE_LIVE_URL') || 'http://127.0.0.1:8780').replace(/\/+$/, ''); }
 export function adminBase() { return (env('BREEZE_ADMIN_URL') || 'http://127.0.0.1:8791').replace(/\/+$/, ''); }
@@ -39,8 +42,8 @@ export function adminRouteAllowed(method: string, path: string) {
 let cachedToken = '';
 export async function hostToken(force = false): Promise<string> {
   if (cachedToken && !force) return cachedToken;
-  const r = await fetch(liveBase() + '/api/host-token', { cache: 'no-store', signal: AbortSignal.timeout(3000), redirect: 'error' });
-  if (!r.ok) throw new Error('host token ' + r.status);
+  const r = await fetch(liveBase() + '/api/host-token', { cache: 'no-store', signal: AbortSignal.timeout(3000), redirect: 'manual' });
+  if (!r.ok) throw new Error('host token ' + r.status); // 3xx (manual redirect) is not ok either
   const body = await r.json() as { token?: string };
   cachedToken = String(body.token || '');
   return cachedToken;
@@ -53,13 +56,14 @@ export function offline(message = '本機 Breeze 引擎未啟動（127.0.0.1:878
 /** Forward to the live room with the host token; one retry after a 401 (token rotated). */
 export async function liveFetch(path: string, init: RequestInit & { search?: string } = {}): Promise<Response> {
   const url = liveBase() + '/api/' + path + (init.search || '');
-  const go = async (token: string) => fetch(url, { ...init, cache: 'no-store', redirect: 'error', headers: { ...(init.headers as Record<string, string> || {}), Authorization: 'Bearer ' + token } });
+  const go = async (token: string) => fetch(url, { ...init, cache: 'no-store', redirect: 'manual', headers: { ...(init.headers as Record<string, string> || {}), Authorization: 'Bearer ' + token } });
   let r = await go(await hostToken());
   if (r.status === 401) r = await go(await hostToken(true));
   return r;
 }
 
 export function passThrough(r: Response) {
+  if (r.status >= 300 && r.status < 400) return Response.json({ error: '上游重新導向，已拒絕。' }, { status: 502 });
   const headers = new Headers({ 'Cache-Control': 'no-store' });
   const type = r.headers.get('content-type'); if (type) headers.set('Content-Type', type);
   const disposition = r.headers.get('content-disposition'); if (disposition) headers.set('Content-Disposition', disposition);

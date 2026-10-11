@@ -44,10 +44,10 @@ function scalars(data:unknown):[string,unknown][]{
 }
 const LABELS:Record<string,string>={tm_pending:'待確認翻譯記憶',staging_pending:'暫存區待審',items:'清單',events:'事件',jobs:'工作',segments:'段落'};
 
-function Table({rows,actions}:{rows:Record<string,unknown>[];actions?:(row:Record<string,unknown>)=>React.ReactNode}){
+function Table({rows,actions,name=''}:{rows:Record<string,unknown>[];actions?:(row:Record<string,unknown>,table:string)=>React.ReactNode;name?:string}){
  if(!rows.length)return <p className="fine-note">目前沒有資料。</p>;
  const cols=[...new Set(rows.slice(0,20).flatMap(r=>Object.keys(r)))].filter(c=>!['etag','timeline'].includes(c)).slice(0,7);
- return <div className="admin-table-wrap"><table className="admin-table"><thead><tr>{cols.map(c=><th key={c}>{c}</th>)}{actions&&<th>操作</th>}</tr></thead><tbody>{rows.slice(0,100).map((r,i)=><tr key={String(r.id??i)}>{cols.map(c=><td key={c} lang={c.includes('ja')||r.tgt_lang==='ja'&&c.startsWith('tgt')?'ja':undefined}>{fmt(r[c])}</td>)}{actions&&<td className="admin-actions">{actions(r)}</td>}</tr>)}</tbody></table></div>;
+ return <div className="admin-table-wrap"><table className="admin-table"><thead><tr>{cols.map(c=><th key={c}>{c}</th>)}{actions&&<th>操作</th>}</tr></thead><tbody>{rows.slice(0,100).map((r,i)=><tr key={String(r.id??i)}>{cols.map(c=><td key={c} lang={c.includes('ja')||r.tgt_lang==='ja'&&c.startsWith('tgt')?'ja':undefined}>{fmt(r[c])}</td>)}{actions&&<td className="admin-actions">{actions(r,name)}</td>}</tr>)}</tbody></table></div>;
 }
 
 export default function AdminPanel({demoDefault=false}:{demoDefault?:boolean}){
@@ -68,15 +68,18 @@ export default function AdminPanel({demoDefault=false}:{demoDefault?:boolean}){
   finally{setLoading(false);}
  },[current,demo,get,q,searchLang]);
  useEffect(()=>{queueMicrotask(()=>void load());},[load]);
- async function act(path:string,label:string){
+ async function act(path:string,label:string,etag?:unknown){
   if(demo){toast.info('示範模式：「'+label+'」不會送出。');return;}
-  try{const r=await fetch('/api/breeze-admin/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const b=await r.json().catch(()=>({})) as {error?:string;detail?:string};if(!r.ok)throw new Error(b.error||b.detail||'失敗 '+r.status);toast.success(label+'完成');void load();}
+  try{const r=await fetch('/api/breeze-admin/'+path,{method:'POST',headers:{'Content-Type':'application/json',...(typeof etag==='string'&&etag?{'If-Match':etag}:{})},body:'{}'});const b=await r.json().catch(()=>({})) as {error?:string;detail?:string};if(!r.ok)throw new Error(b.error||b.detail||'失敗 '+r.status);toast.success(label+'完成');void load();}
   catch(e){toast.error(e instanceof Error?e.message:'操作失敗');}
  }
  const ov=(data??{}) as {rtf?:number;rtf_color?:string;asr_gpu?:GpuStatus;components?:Record<string,unknown>;live?:Record<string,unknown>;stale?:boolean};
- const actionsFor=(row:Record<string,unknown>)=>{
-  if(page==='review'||page==='tm'||page==='staging'){const id=row.id;if(id==null)return null;const isStaging=typeof id==='string'||page==='staging';
-   return <><button onClick={()=>void act((isStaging?'staging/':'tm/')+id+'/approve','核准')} aria-label="核准"><Check size={14}/></button><button onClick={()=>void act((isStaging?'staging/':'tm/')+id+'/reject','退回')} aria-label="退回"><X size={14}/></button></>;}
+ const actionsFor=(row:Record<string,unknown>,table:string)=>{
+  if(page==='review'||page==='tm'||page==='staging'){const id=row.id;if(id==null)return null;
+   // review/queue mixes two id spaces: tm_pending -> /tm/{id}, staging_pending -> /staging/{id} (+ If-Match ETag).
+   const isStaging=page==='staging'||table==='staging_pending';
+   if(isStaging&&row.state&&row.state!=='pending')return null;
+   return <><button onClick={()=>void act((isStaging?'staging/':'tm/')+id+'/approve','核准',isStaging?row.etag:undefined)} aria-label="核准"><Check size={14}/></button><button onClick={()=>void act((isStaging?'staging/':'tm/')+id+'/reject','退回',isStaging?row.etag:undefined)} aria-label="退回"><X size={14}/></button></>;}
   if(page==='glossary'&&row.status==='proposed')return <><button onClick={()=>void act('glossary/proposals/'+row.id+'/approve','核准詞條')}><Check size={14}/></button><button onClick={()=>void act('glossary/proposals/'+row.id+'/reject','退回詞條')}><X size={14}/></button></>;
   if(page==='sessions'&&row.status==='live')return <button onClick={()=>void act('sessions/'+row.id+'/close','關閉場次')}>關閉</button>;
   if(page==='exports'&&row.name&&!demo)return <a href={ADMIN_ORIGIN+'/admin/api/v1/exports/file/'+encodeURIComponent(String(row.name))} target="_blank" rel="noreferrer">下載</a>;
@@ -94,14 +97,14 @@ export default function AdminPanel({demoDefault=false}:{demoDefault?:boolean}){
    {error?<div className="breeze-offline" role="status">{needsToken?<KeyRound size={16}/>:null}<div><strong>{error}</strong>{needsToken&&<p>在主持電腦設定環境變數 <code>BREEZE_ADMIN_TOKEN</code>（後台 CLI 權杖，或在「使用者」頁為自己產生的 API 權杖）後重新啟動禪譯；或勾選「示範資料」預覽。</p>}</div></div>:loading&&!data?<p className="fine-note">讀取中…</p>:null}
    {page==='overview'&&data!=null&&<div className="admin-overview">
     <article className="admin-card asr-card"><h3>ASR 加速</h3><AsrChip gpu={ov.asr_gpu}/><p>即時 RTF <strong className={'rtf rtf-'+(ov.rtf_color||'grey')}>{ov.rtf!=null?ov.rtf.toFixed(2):'—'}</strong>{ov.stale?'（資料過時）':''}</p></article>
-    <article className="admin-card"><h3>元件狀態</h3><ul className="admin-kv">{Object.entries(ov.components||{}).map(([k,v])=><li key={k}><span>{k}</span><b className={String(v).match(/up|ok|idle|ready/)?'ok':'warn'}>{fmt(v)}</b></li>)}</ul></article>
+    <article className="admin-card"><h3>元件狀態</h3><ul className="admin-kv">{Object.entries(ov.components||{}).map(([k,v])=>{const st=v&&typeof v==='object'&&'status' in v?String((v as {status:unknown}).status):String(v);return <li key={k}><span>{k}</span><b className={/up|ok|idle|ready/.test(st)?'ok':st==='unknown'?'':'warn'}>{st}</b></li>;})}</ul></article>
     <article className="admin-card"><h3>即時</h3><ul className="admin-kv">{Object.entries(ov.live||{}).filter(([,v])=>typeof v!=='object').slice(0,8).map(([k,v])=><li key={k}><span>{k}</span><b>{fmt(v)}</b></li>)}</ul></article>
     {extra.inventory?<article className="admin-card"><h3>資料庫存量</h3><ul className="admin-kv">{scalars(extra.inventory).map(([k,v])=><li key={k}><span>{k.replace('counts.','')}</span><b>{fmt(v)}</b></li>)}</ul></article>:null}
     {extra.timings?<article className="admin-card"><h3>ASR 延遲</h3><ul className="admin-kv">{scalars(extra.timings).map(([k,v])=><li key={k}><span>{k}</span><b>{fmt(v)}</b></li>)}</ul></article>:null}
    </div>}
    {page==='perf'&&data!=null&&<div className="admin-overview">{[['效能指標',data],['ASR 延遲',extra.timings]].filter(([,d])=>d).map(([t,d])=><article className="admin-card" key={String(t)}><h3>{String(t)}</h3><ul className="admin-kv">{scalars(d).map(([k,v])=><li key={k}><span>{k}</span><b>{fmt(v)}</b></li>)}</ul></article>)}<article className="admin-card"><h3>完整效能頁</h3><p>圖表與趨勢在原效能頁。</p><Button variant="outline" onClick={()=>window.open(ADMIN_ORIGIN+'/admin/perf','_blank','noopener')}><ExternalLink size={15}/>開啟 /admin/perf</Button></article></div>}
    {page!=='overview'&&page!=='perf'&&data!=null&&<>
-    {tables.length?tables.map(t=><div key={t.name} className="admin-section">{t.name&&<h3>{LABELS[t.name]||t.name} <span className="count">{t.rows.length}</span></h3>}<Table rows={t.rows} actions={actionsFor}/></div>):<ul className="admin-kv wide">{scalars(data).map(([k,v])=><li key={k}><span>{k}</span><b>{fmt(v)}</b></li>)}</ul>}
+    {tables.length?tables.map(t=><div key={t.name} className="admin-section">{t.name&&<h3>{LABELS[t.name]||t.name} <span className="count">{t.rows.length}</span></h3>}<Table rows={t.rows} actions={actionsFor} name={t.name}/></div>):<ul className="admin-kv wide">{scalars(data).map(([k,v])=><li key={k}><span>{k}</span><b>{fmt(v)}</b></li>)}</ul>}
     {page==='glossary'&&extra.proposals?<div className="admin-section"><h3>待審詞條</h3><Table rows={firstRows(extra.proposals)[0]?.rows||[]} actions={r=><><button onClick={()=>void act('glossary/proposals/'+r.id+'/approve','核准詞條')}><Check size={14}/></button><button onClick={()=>void act('glossary/proposals/'+r.id+'/reject','退回詞條')}><X size={14}/></button></>}/></div>:null}
    </>}
    <p className="fine-note">後台資料經禪譯伺服器以權杖轉送；寫入只開放審核、核准、關閉場次等後台本身就有的操作。刪除、使用者權杖與設定修改請在原後台進行。</p>

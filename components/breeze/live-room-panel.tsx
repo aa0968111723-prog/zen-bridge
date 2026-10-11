@@ -10,7 +10,7 @@ import ZenShiMark from './zen-shi-mark';
 import {useBreezeSetup,postBreeze} from './use-breeze';
 
 function TargetText({line,parts}:{line:CaptionLine;parts:TargetPart[]}){
- if(!parts.length)return <span className="breeze-pending">{line.draft?'（翻譯中…）':'翻譯尚未完成'}</span>;
+ if(!parts.length)return <span className="breeze-pending">{line.draft?'（草稿，等待定稿）':line.status==='zh_ready'||line.status==='asr_done'?'譯文處理中…':'翻譯尚未完成'}</span>;
  return <>{parts.map((p,i)=>p.kind==='wbr'?<wbr key={i}/>:p.kind==='ruby'?<ruby key={i}>{p.text}<rt>{p.reading}</rt></ruby>:<Fragment key={i}>{p.text}</Fragment>)}</>;
 }
 

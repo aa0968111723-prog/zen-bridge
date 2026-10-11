@@ -33,7 +33,8 @@ export function canChangeTarget(sessionActive: boolean, current: TargetLang, nex
   return { ok: true };
 }
 
-function isFinalKind(kind: unknown) { return kind == null || kind === '' || kind === 'caption' || kind === 'final'; }
+// 'update' = real ASR row whose translation is still pending (pipeline.py); it replaces a draft too.
+function isFinalKind(kind: unknown) { return kind == null || kind === '' || kind === 'caption' || kind === 'final' || kind === 'update'; }
 
 /** Caption store: grey drafts are replaced in place by the final with the same id; finals are never
  *  overwritten by a draft; deletes and clears are honoured. */

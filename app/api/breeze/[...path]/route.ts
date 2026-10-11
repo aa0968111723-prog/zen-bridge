@@ -21,7 +21,7 @@ async function handle(request: Request, context: { params: Promise<{ path?: stri
     }
     const r = await liveFetch(joined, { method: request.method, body, headers, search: url.search, signal: AbortSignal.timeout(joined === 'push' ? 300000 : 15000) });
     return passThrough(r);
-  } catch { return offline(); }
+  } catch (e) { console.error('[breeze-proxy]', e instanceof Error ? e.message : e); return offline(); }
 }
 export const GET = handle;
 export const POST = handle;

@@ -1,9 +1,9 @@
-import WebSocket from 'ws';
 import { liveBase, liveFetch, offline } from '@/lib/breeze-proxy';
 
 export const dynamic = 'force-dynamic';
 
 // Breeze /ws/listen -> SSE for the turtle UI. Server-side socket (no Origin), host-side listen key.
+// Uses the runtime's native WebSocket (Node 22 / workerd), not the `ws` package, so it runs in both.
 export async function GET(request: Request) {
   const room = new URL(request.url).searchParams.get('room') || 'class';
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(room)) return Response.json({ error: 'room 格式不正確。' }, { status: 400 });
@@ -20,9 +20,9 @@ export async function GET(request: Request) {
       const send = (text: string) => { try { controller.enqueue(encoder.encode('data: ' + text + '\n\n')); } catch {} };
       const end = () => { if (ping) clearInterval(ping); try { controller.close(); } catch {} };
       socket = new WebSocket(target);
-      socket.on('message', data => { const text = data.toString(); if (text.length <= 200_000) send(text); });
-      socket.on('close', (code) => { send(JSON.stringify({ type: 'bridge_closed', code })); end(); });
-      socket.on('error', () => { send(JSON.stringify({ type: 'bridge_error' })); });
+      socket.addEventListener('message', ev => { const text = typeof ev.data === 'string' ? ev.data : ''; if (text && text.length <= 200_000) send(text); });
+      socket.addEventListener('close', ev => { send(JSON.stringify({ type: 'bridge_closed', code: ev.code })); end(); });
+      socket.addEventListener('error', () => { send(JSON.stringify({ type: 'bridge_error' })); });
       ping = setInterval(() => { try { controller.enqueue(encoder.encode(': keep-alive\n\n')); } catch {} }, 15000);
     },
     cancel() { if (ping) clearInterval(ping); socket?.close(); },

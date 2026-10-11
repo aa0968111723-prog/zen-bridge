@@ -9,12 +9,14 @@ async function handle(request: Request, context: { params: Promise<{ path?: stri
   const token = adminToken();
   if (!token) return Response.json({ error: '尚未設定後台權杖 BREEZE_ADMIN_TOKEN；可先用「開啟原後台」登入。', needsToken: true }, { status: 401, headers: { 'Cache-Control': 'no-store' } });
   const url = new URL(request.url);
+  // Staging approve/reject need the row ETag (optimistic concurrency); pass it through, bounded.
+  const ifMatch = (request.headers.get('if-match') || '').slice(0, 100);
   try {
     const body = request.method === 'POST' ? await request.text() : undefined;
     if (body && body.length > 200_000) return Response.json({ error: '內容太大。' }, { status: 413 });
     const r = await fetch(adminBase() + '/admin/api/v1/' + joined + url.search, {
-      method: request.method, body, cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15000),
-      headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      method: request.method, body, cache: 'no-store', redirect: 'manual', signal: AbortSignal.timeout(15000),
+      headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}), ...(ifMatch ? { 'If-Match': ifMatch } : {}) },
     });
     return passThrough(r);
   } catch {
