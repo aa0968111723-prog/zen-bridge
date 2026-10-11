@@ -115,10 +115,6 @@ def test_fake_japanese_caption_escapes_text_and_emits_only_ruby_elements() -> No
     assert rendered["tags"].count("rt") == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ja_linebreak counts the full {base|reading} annotation instead of only its base text",
-)
 def test_ja_linebreak_does_not_count_ruby_reading_toward_line_width() -> None:
     base = "禅" * 15
     annotated = f"{{{base}|{'ぜん' * 10}}}"
@@ -136,3 +132,13 @@ def test_ja_linebreak_never_splits_a_ruby_group_across_lines() -> None:
 
     assert "".join(lines) == text
     assert sum(ruby in line for line in lines) == 1
+
+
+def test_ja_ruby_halfwidth_base_and_multiple_groups_use_visible_width() -> None:
+    text = "{AB|えーびー}{禅|ぜん}" + "日" * 14
+    assert break_ja(text, max_chars=16, max_lines=10) == [text]
+
+
+def test_oversized_ruby_base_stays_intact_and_preserves_following_text() -> None:
+    ruby = "{" + "禅" * 17 + "|ぜん}"
+    assert break_ja(ruby + "日", max_chars=16, max_lines=10) == [ruby, "日"]
