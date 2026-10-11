@@ -1992,8 +1992,11 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
     @app.get("/api/metrics")
     async def metrics(request: Request) -> dict:
         require_host(request, token, settings)
+        from app.runtime_activity import snapshot as desktop_activity
         return {
             **pipeline.stats(),
+            **desktop_activity(),
+            **drafts.stats(),
             "listeners": _seated_listeners(book.rooms.values()),
             "rooms": book._active_count(),
             "rss_bytes": rss_bytes(),

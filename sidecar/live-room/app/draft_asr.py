@@ -68,6 +68,8 @@ class NullDraft:
 
 
 def opencc_s2twp() -> Callable[[str], str]:
+    from app.speech_extras import bootstrap
+    bootstrap()
     try:
         import opencc  # type: ignore
     except ImportError as exc:

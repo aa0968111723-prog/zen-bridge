@@ -26,7 +26,7 @@ log = logging.getLogger("zen.embed")
 
 DEFAULT_MODEL = "qwen3-embedding:0.6b"
 DEFAULT_BASE = "http://127.0.0.1:11434"
-BUSY_KEYS = ("pending", "inflight", "translate_queued", "translate_busy", "listeners")
+BUSY_KEYS = ("pending", "inflight", "translate_queued", "translate_busy", "listeners", "desktop_inflight", "desktop_translate_busy", "draft_sessions")
 
 
 def _refused(exc: BaseException) -> bool:
@@ -110,6 +110,9 @@ class IdleGate:
         idle = metrics.get("asr_idle_s")
         if idle is not None and float(idle) < self.idle_s:
             return True                     # an upload / ASR result happened inside the window
+        desktop_idle = metrics.get('desktop_idle_s')
+        if desktop_idle is not None and float(desktop_idle) < self.idle_s:
+            return True
         return float(metrics.get("backlog_s") or 0) > 0
 
     def _sample(self):

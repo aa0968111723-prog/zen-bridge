@@ -491,6 +491,11 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
         return resp
 
     # -------------------------------------------------------------- health / metrics
+    @app.get(f"{API}/agent-suite")
+    def agent_suite_readiness(user=Depends(need("viewer"))):
+        from app.agent_suite import suite_status
+        return {"profiles": suite_status()}
+
     @app.get(f"{API}/health")
     def health(deep: int = 0, user=Depends(need("viewer"))):
         out = {"ok": True, "db": "ok", "schema_version": None, "sqlite": sqlite3.sqlite_version,
