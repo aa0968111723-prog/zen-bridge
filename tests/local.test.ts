@@ -9,6 +9,7 @@ import { rows, one, write, batch, putAudio, getAudio, deleteAudio, DatabaseUnava
 import { localDataDir, localDbPath, localAudioDir, localDatabase, sqliteMigrations, closeLocalDatabases, queryLocal } from '../lib/platform/local';
 import { workspace, mutate } from '../lib/server';
 import { localPort, localHost, DEFAULT_LOCAL_PORT } from '../scripts/local-config.mjs';
+import { copyTables, d1DumpReader, TABLES } from '../scripts/migrate-to-local.mjs';
 
 // Data dir resolution (Windows path matches the installer's %LOCALAPPDATA%\ZenBridge).
 assert.equal(localDataDir({ LOCALAPPDATA: 'C:\\Users\\MacMiRyzen5\\AppData\\Local' }, 'win32'), join('C:\\Users\\MacMiRyzen5\\AppData\\Local', 'ZenBridge'));
@@ -94,8 +95,21 @@ try {
   const reopened = localDatabase(join(dir, 'bad.sqlite3'), okFolder);
   assert.deepEqual((reopened.prepare('SELECT name FROM __zen_migrations').all() as { name: string }[]).map(r => r.name), ['0000_ok.sql']);
   assert.equal(reopened.prepare("SELECT name FROM sqlite_master WHERE name='c'").all().length, 0);
+
+  // Cloud → local migration: a D1 export (SQL dump) lands in a fresh local file; re-running is idempotent.
+  const dump = sqliteMigrations().flatMap(m => m.statements).join(';\n') + `;
+    INSERT INTO people(id,name,role,notes,created_at) VALUES('p1','雲端講者','主持人','','2026-10-01T00:00:00Z');
+    INSERT INTO sessions(id,title,topic,notes,created_at) VALUES('s1','雲端社課','','','2026-10-01T00:00:00Z');
+    INSERT INTO segments(id,session_id,person_id,label,role,zh,en,"offset",source,created_at) VALUES('g1','s1','p1','雲端講者','主持人','你好','Hello',1.5,'manual','2026-10-01T00:00:01Z');`;
+  const target = join(dir, 'migrated', 'zen-ui.sqlite3');
+  const first = await copyTables(d1DumpReader(dump), target);
+  assert.deepEqual(Object.keys(first), TABLES);
+  assert.deepEqual([first.people.inserted, first.sessions.inserted, first.segments.inserted], [1, 1, 1]);
+  const again = await copyTables(d1DumpReader(dump), target);
+  assert.equal(again.segments.inserted, 0);
+  assert.equal(queryLocal<{ en: string; offset: number }>(target, 'SELECT en,"offset" FROM segments', [])[0].offset, 1.5);
 } finally {
   closeLocalDatabases();
   await rm(dir, { recursive: true, force: true });
 }
-console.log('PASS: local SQLite/file storage — data dir, migrations, domain flows, batch rollback, audio, port/host guard.');
+console.log('PASS: local SQLite/file storage — data dir, migrations, domain flows, batch rollback, audio, port/host guard, cloud→local migration.');
