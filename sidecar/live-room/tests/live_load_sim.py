@@ -280,7 +280,7 @@ def run(sc: Scenario, workdir: Path) -> Result:
                     if sc.truncate_every and (i + 1) % sc.truncate_every == 0:
                         trunc_wal_before.append(wal_size(db))
                         t0 = time.perf_counter()
-                        row = admin.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                        row = zdb.try_checkpoint(admin)
                         trunc_lat.append(time.perf_counter() - t0)
                         trunc_busy += int(row[0] != 0)
                 if reader is None and reopen_at is not None and i >= reopen_at:
