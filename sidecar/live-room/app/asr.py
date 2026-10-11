@@ -105,6 +105,29 @@ def require_loopback_url(base_url: str) -> str:
     return base_url.strip()
 
 
+ADAPTIVE_CTX_MARGIN = 64      # 1.28 s of extra encoder frames (whisper: 50 frames per second)
+ADAPTIVE_CTX_MIN = 256        # never shorter than ~5 s of context
+
+
+def wav_seconds(wav: Path) -> float | None:
+    import wave
+    try:
+        with wave.open(str(wav), "rb") as w:
+            return w.getnframes() / float(w.getframerate() or 1)
+    except Exception:
+        return None
+
+
+def adaptive_audio_ctx(seconds: float | None, configured: int = 0) -> int | None:
+    """Encoder frames for a clip of ``seconds`` (+ margin), capped by the configured ctx (0 = 1500)."""
+    if seconds is None or seconds <= 0:
+        return None
+    cap = configured if 0 < configured <= 1500 else 1500
+    want = int(seconds * 50 + 0.999) + ADAPTIVE_CTX_MARGIN
+    ctx = max(ADAPTIVE_CTX_MIN, want)
+    return None if ctx >= cap else ctx
+
+
 class ResidentAsr:
     """Local whisper-server adapter. A ready flag without a transport or process is not inference."""
 
@@ -152,6 +175,11 @@ class ResidentAsr:
         # round4 #9: whisper-server -nc unless BREEZE_RESIDENT_NO_CONTEXT=0
         self.no_context = (os.getenv("BREEZE_RESIDENT_NO_CONTEXT") or "1").strip() != "0"
         self.extra_args: list[str] = []          # e.g. ["-nf"] from app.asr_gpu (GPU worker)
+        # grok/fast-draft-asr: short endpoint-cut lines need far less encoder context than the
+        # 30 s window. BREEZE_ASR_ADAPTIVE_CTX=1 sends a per-request audio_ctx sized to the clip
+        # (+ margin, never above the configured ctx). Off by default; accuracy measured in
+        # tools/draft_latency.py before turning it on.
+        self.adaptive_ctx = (os.getenv("BREEZE_ASR_ADAPTIVE_CTX") or "").strip() == "1"
 
     def _drain_stderr(self, stream) -> None:
         carry = b""
@@ -296,11 +324,20 @@ class ResidentAsr:
             return AsrResult(ok=True, text="", blank=True, loaded_once=self.loads == 1)
         return AsrResult(ok=True, text=cleaned, loaded_once=self.loads == 1)
 
+    def request_audio_ctx(self, wav: Path) -> int | None:
+        """Per-request encoder context for ``adaptive_ctx`` (None = server default)."""
+        if not self.adaptive_ctx:
+            return None
+        return adaptive_audio_ctx(wav_seconds(wav), self.audio_context)
+
     def _http_inference(self, wav: Path, prompt: str) -> str:
         import secrets
         boundary = "breeze" + secrets.token_hex(16)
         audio = wav.read_bytes()
+        ctx = self.request_audio_ctx(wav)
         parts = [
+            *([f"--{boundary}\r\nContent-Disposition: form-data; name=\"audio_ctx\"\r\n\r\n{ctx}\r\n".encode()]
+              if ctx else []),
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n".encode(),
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"language\"\r\n\r\nzh\r\n".encode(),
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\n{prompt}\r\n".encode(),

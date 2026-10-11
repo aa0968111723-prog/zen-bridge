@@ -24,7 +24,8 @@ from app.aio import cancellation_pending, wait_bounded
 from app.asr import CliAsr, ResidentAsr
 from app.native_asr import NativeResidentAsr
 from app.audio import AudioError, convert_to_wav, ffmpeg_bin, wav_duration_seconds
-from app.draft_hub import DraftHub
+from app.draft_hub import DraftHub, FinalUtterance
+from app.endpointer import Endpointer, config_from_env as endpoint_config_from_env
 from app.share import machine_share_name
 from app.hw_routes import make_router as make_hw_router
 from app.overlay_routes import router as overlay_router
@@ -1438,6 +1439,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "listeners": _seated_listeners(book.rooms.values()),
             "storage": store.enabled,
             "draft_available": drafts_available,
+            "endpoint_final": drafts_available and endpoint_final_on,
             "tgt_lang": (book.get(room_id) or {}).get("tgt_lang") or pipeline.targets.default,
             "listen_url_name": share_by_name(room_id, include_key=host_view),
             "storage_recovered": bool(getattr(store, "recovered", False)),
@@ -2209,6 +2211,72 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         await ws.close(code=code)
 
     drafts_available = drafts.available()
+    # grok/fast-draft-asr: the server cuts utterances from the draft stream and Breeze finalises each
+    # one (~2-4 s) instead of the host's fixed 6 s slices. Off unless BREEZE_ENDPOINT_FINAL=1.
+    endpoint_final_on = (os.environ.get("BREEZE_ENDPOINT_FINAL") or "").strip() == "1"
+    endpoint_cfg = endpoint_config_from_env()
+
+    def _wav_passthrough(src: Path, work: Path) -> Path:
+        # Our own 16 kHz mono PCM16 WAV: skip the ffmpeg round trip (saves a process spawn per line).
+        if decoder:
+            return decoder(src, work)
+        wav = work / "audio.wav"
+        wav.write_bytes(src.read_bytes())
+        return wav
+
+    async def _submit_utterance(utt: FinalUtterance, notify=None, registered: asyncio.Event | None = None) -> None:
+        """Hand one endpoint-cut utterance to the normal pipeline under its draft's seq.
+
+        Same admission, pause, ordering and translation path as /api/push (translation runs on
+        this final only; drafts are never translated). A full queue is retried for a few seconds,
+        then the line is reported as dropped instead of blocking the draft stream.
+        """
+        log = logging.getLogger("breeze.draft")
+        key = (utt.room_id, utt.session_id, utt.seq)
+        held = False
+        for _ in range(40):
+            if pipeline.joinable_without_slot(key):
+                break
+            if pipeline.try_admit_count():
+                held = True
+                break
+            await asyncio.sleep(0.25)
+        else:
+            log.warning("endpoint final dropped (queue full) room=%s seq=%s", utt.room_id, utt.seq)
+            if notify:
+                await notify({"type": "final_dropped", "seq": utt.seq})
+            if registered is not None:
+                registered.set()
+            return
+        try:
+            ensure_room(utt.room_id)
+            await ensure_hydrated(utt.room_id)
+            t0 = max(0, min(int(utt.t0_ms), _MAX_SEGMENT_MS - 1))
+            t1 = max(t0 + 1, min(int(utt.t1_ms), _MAX_SEGMENT_MS))
+            segment = Segment(
+                room_id=utt.room_id, session_id=utt.session_id, seq=utt.seq, t0_ms=t0, t1_ms=t1,
+                tgt_lang=pipeline.session_lang(utt.room_id, utt.session_id, utt.seq,
+                                               (book.get(utt.room_id) or {}).get("tgt_lang")),
+            )
+            owned, held = held, False
+            job = asyncio.ensure_future(pipeline.submit(segment, utt.wav, _wav_passthrough, slot_held=owned,
+                                                        owner=owned, wait_translation=False))
+            await asyncio.sleep(0)          # the pipeline registers the seq before the host hears of it
+            if notify:
+                await notify({"type": "final_seq", "seq": utt.seq, "t0_ms": t0, "t1_ms": t1, "reason": utt.reason})
+            if registered is not None:
+                registered.set()
+            await job
+        except (PipelineError, AudioError) as exc:
+            log.info("endpoint final not processed room=%s seq=%s: %s", utt.room_id, utt.seq,
+                     getattr(exc, "detail", exc))
+        except Exception:
+            log.exception("endpoint final failed room=%s seq=%s", utt.room_id, utt.seq)
+        finally:
+            if held:
+                pipeline.release_slot()
+            if registered is not None:
+                registered.set()
 
     @app.websocket("/ws/draft")
     async def draft_stream(ws: WebSocket, room_id: str = "class", session_id: str = "") -> None:
@@ -2233,12 +2301,35 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         if not same_secret(supplied, token):
             await ws.close(code=1008, reason="auth")
             return
-        sess = drafts.open(room_id, session_id) if drafts_available else None
+        finalize = endpoint_final_on and bool((hello or {}).get("finalize"))
+        try:
+            t0_offset = max(0, min(int((hello or {}).get("t0_ms") or 0), _MAX_SEGMENT_MS - 1))
+        except (TypeError, ValueError):
+            t0_offset = 0
+        sess = (drafts.open(room_id, session_id, endpointer=Endpointer(endpoint_cfg) if finalize else None,
+                            t0_offset_ms=t0_offset) if drafts_available else None)
         if sess is None:
             await ws.send_json({"type": "draft_off"})
             await ws.close(code=1000, reason="draft_off")
             return
-        await ws.send_json({"type": "draft_on", "seq": sess.seq})
+        await ws.send_json({"type": "draft_on", "seq": sess.seq, **({"finalize": True} if finalize else {})})
+        finals: list[asyncio.Task] = []
+
+        async def _notify(note: dict) -> None:
+            try:
+                await ws.send_json(note)
+            except Exception:
+                pass
+
+        def _queue_finals(rows) -> list[asyncio.Event]:
+            marks = []
+            for utt in rows:
+                mark = asyncio.Event()
+                marks.append(mark)
+                finals.append(asyncio.get_running_loop().create_task(_submit_utterance(utt, _notify, mark)))
+            finals[:] = [t for t in finals if not t.done()]
+            return marks
+
         try:
             while True:
                 msg = await ws.receive()
@@ -2246,9 +2337,19 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                     break
                 data = msg.get("bytes")
                 if not data:
+                    if finalize and (msg.get("text") or "").replace(" ", "") == '{"type":"flush"}':
+                        marks = _queue_finals(await asyncio.to_thread(drafts.flush, sess))
+                        if marks:
+                            try:
+                                await wait_bounded(asyncio.gather(*(m.wait() for m in marks)), 2.0)
+                            except TimeoutError:
+                                pass
+                        await _notify({"type": "flushed", "seq": sess.seq - 1})
                     continue
                 try:
-                    drafts.emit(await asyncio.to_thread(drafts.feed, sess, data))
+                    event, rows = await asyncio.to_thread(drafts.feed_full, sess, data)
+                    drafts.emit(event)
+                    _queue_finals(rows)
                 except ValueError:
                     await ws.close(code=1009, reason="too_large")
                     break
@@ -2259,6 +2360,11 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         except WebSocketDisconnect:
             pass
         finally:
+            if finalize:
+                try:
+                    _queue_finals(drafts.flush(sess))     # the last open sentence still gets a final
+                except Exception:
+                    logging.getLogger("breeze.draft").exception("draft flush failed room=%s", room_id)
             drafts.close(sess)
 
     @app.websocket("/ws/listen")

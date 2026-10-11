@@ -406,6 +406,7 @@ async function setup() {
   const data = await fetch("/api/setup?room_id=" + encodeURIComponent(roomEl.value), { headers, cache: "no-store" }).then((r) => r.json());
   rememberRoom(data);
   draftAvailable = !!data.draft_available;
+  endpointAvailable = draftAvailable && !!data.endpoint_final;
   const linkRoom = encodeURIComponent(roomEl.value || "class");
   document.querySelector("#link-overlay").href = "/overlay/" + linkRoom;
   document.querySelector("#link-visual").href = "/visual?room=" + linkRoom + (data.listen_key ? "&k=" + encodeURIComponent(data.listen_key) : "");
@@ -546,16 +547,29 @@ function paintRecognitionSpeed(data) {
 let micStream = null;
 let draft = null;
 let draftAvailable = false;
+// grok/fast-draft-asr: server-side sentence cuts (BREEZE_ENDPOINT_FINAL=1). While the draft stream
+// says finalize, 6 s slices are not uploaded; seqFloor keeps host seqs above the server's.
+let endpointAvailable = false;
+let endpointFinal = false;
+let seqFloor = 0;
+let draftClosing = Promise.resolve();
 async function syncDraft(next) {
   const want = next === "recording" || next === "waiting";
   const box = document.querySelector("#draft-on");
   if (!want || !draftAvailable || !box || !box.checked) {
-    if (draft) { const d = draft; draft = null; (await d).stop(); }
+    if (draft) { const d = draft; draft = null; draftClosing = d.then((h) => h.stop()).catch(() => {}); await draftClosing; }
     return;
   }
   if (draft || !micStream || !ctl.session) return;
   draft = startDraftStream({ stream: micStream, roomId: ctl.session.roomId, sessionId: ctl.session.id, token,
-    onState: (s) => { const el = document.querySelector("#draft-state"); if (el) el.textContent = s === "on" ? "草稿字幕：開" : "草稿字幕：關"; } });
+    finalize: endpointAvailable, t0Ms: Date.now() - (ctl.session.startedAt || Date.now()),
+    onFinalize: (on) => { endpointFinal = on; },
+    onFinalSeq: (note) => { seqFloor = Math.max(seqFloor, note.seq); },
+    onState: (s) => {
+      if (s !== "on") endpointFinal = false;
+      const el = document.querySelector("#draft-state");
+      if (el) el.textContent = s === "on" ? (endpointFinal ? "草稿字幕：開（快速定稿）" : "草稿字幕：開") : "草稿字幕：關";
+    } });
 }
 const ctl = createCaptureController({
   periodMs: 6000,
@@ -573,6 +587,10 @@ const ctl = createCaptureController({
     return new MediaRecorder(stream, { mimeType: mime });
   },
   upload: async (meta, blob) => {
+    // fast path: the server already finalises each sentence from the draft stream
+    if (endpointFinal) return { ok: true, status: "skipped" };
+    if (meta.seq <= seqFloor) meta.seq = seqFloor + 1;   // after a fallback, never reuse a server seq
+    seqFloor = meta.seq;
     const address = "/api/push?room_id=" + encodeURIComponent(meta.roomId) + "&session_id=" + encodeURIComponent(meta.sessionId) + "&seq=" + meta.seq;
     function formFor(retryFlag) {
       const body = new FormData();
@@ -658,6 +676,8 @@ function lockRoom() {
 }
 go.onclick = async () => {
   hideGuide();
+  seqFloor = 0;               // a new session numbers its lines from 1 again
+  endpointFinal = false;
   if (!ready || !ctl.canEditRoom() || holdRoom) return;
   const room = (roomEl.value || "class").trim() || "class";
   roomEl.value = room;
@@ -722,10 +742,11 @@ stopBtn.onclick = async () => {
   stopBtn.disabled = true;
   const current = ctl.session;
   await ctl.stop();
+  await draftClosing;          // the last open sentence is finalised before the session ends
   sessionTgtLang = "";
   privatePauseConfirmed = false;
   if (current) {
-    const endBody = { room_id: current.roomId, session_id: current.id, last_seq: ctl.lastSeq || 0 };
+    const endBody = { room_id: current.roomId, session_id: current.id, last_seq: Math.max(ctl.lastSeq || 0, seqFloor) };
     await hostFetch("/api/session/end", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(endBody) });
   }
   lockRoom();
