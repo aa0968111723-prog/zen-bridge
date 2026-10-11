@@ -25,7 +25,9 @@ def test_ja_gate(text, zh, ok):
     assert (validate_caption(text, "ja", zh=zh) is not None) is ok
 
 
-def test_templates_match_model_card_verbatim():
+def test_templates_match_model_card_verbatim(monkeypatch):
+    # Preserve the original model-card contract when optional hints are off.
+    monkeypatch.setenv('ZEN_REFERENCE_PACK_ENABLED', '0')
     mt = HyMtLlamaServer()
     assert mt.build_messages("今天講空性", "ja") == [{"role": "user", "content": CARD_DEFAULT}]
     gl = [{"zh": "空性", "ja": "空性（くうしょう）"}, {"zh": "公案", "ja": "公案（こうあん）"}]
@@ -49,7 +51,8 @@ class Resp:
         return self.body
 
 
-def test_translate_sends_context():
+def test_translate_sends_context(monkeypatch):
+    monkeypatch.setenv('ZEN_REFERENCE_PACK_ENABLED', '0')
     seen = {}
 
     def opener(req, timeout=0):
