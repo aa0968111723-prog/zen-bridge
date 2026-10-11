@@ -15,20 +15,20 @@ export type EndpointOptions={silenceMs?:number;minSeconds?:number;softMaxSeconds
 export const ENDPOINT_DEFAULTS={silenceMs:350,minSeconds:.8,softMaxSeconds:3,softSilenceMs:150,maxSeconds:4.5,loneSilenceMs:1000,loneMinSeconds:.25,preRollSeconds:.3};
 export type EndpointAction={emit:number;drop:number;reason:''|'pause'|'soft'|'hard'};
 export function createEndpointer(rate:number,opts:EndpointOptions={}){
- const c={...ENDPOINT_DEFAULTS,...opts},rms:number[]=[],size:number[]=[];let noise=.006,start=-1,last=-1;
+ const c={...ENDPOINT_DEFAULTS,...opts},rms:number[]=[],size:number[]=[];let noise=.006,start=-1,last=-1,cont=false;
  const span=(a:number,b:number)=>{let n=0;for(let i=a;i<b;i++)n+=size[i];return n/rate;};
  const shift=(k:number)=>{rms.splice(0,k);size.splice(0,k);start=start>=k?start-k:-1;last=last>=k?last-k:-1;if(start<0)last=-1;};
- const act=(emit:number,drop:number,reason:EndpointAction['reason']):EndpointAction=>{shift(emit||drop);if(emit){start=-1;last=-1;for(let i=0;i<rms.length;i++)if(rms[i]>=Math.max(.006,noise*3)){if(start<0)start=i;last=i;}}return {emit,drop,reason};};
- return {reset(){rms.length=0;size.length=0;start=-1;last=-1;},push(block:Float32Array):EndpointAction{
+ const act=(emit:number,drop:number,reason:EndpointAction['reason']):EndpointAction=>{shift(emit||drop);if(emit){start=-1;last=-1;cont=reason==='soft'||reason==='hard';for(let i=0;i<rms.length;i++)if(rms[i]>=Math.max(.006,noise*3)){if(start<0)start=i;last=i;}}return {emit,drop,reason};};
+ return {reset(){rms.length=0;size.length=0;start=-1;last=-1;cont=false;},push(block:Float32Array):EndpointAction{
   let e=0;for(const x of block)e+=x*x;const r=Math.sqrt(e/Math.max(1,block.length)),th=Math.max(.006,noise*3),speech=r>=th;
   if(r<noise)noise=.7*noise+.3*r;else if(!speech)noise=.995*noise+.005*r;noise=Math.max(noise,1e-4);
   rms.push(r);size.push(block.length);const i=rms.length-1;
   if(speech){if(start<0)start=i;last=i;}
   if(start<0){let keep=0,k=rms.length;while(k>0&&keep<c.preRollSeconds){k--;keep+=size[k]/rate;}return k>0?act(0,k,''):{emit:0,drop:0,reason:''};}
   const voiced=span(start,last+1),silent=span(last+1,i+1),total=span(0,i+1);
-  if(voiced>=c.minSeconds&&silent*1000>=c.silenceMs)return act(i+1,0,'pause');
+  if(voiced>=(cont?c.loneMinSeconds:c.minSeconds)&&silent*1000>=c.silenceMs)return act(i+1,0,'pause');
   if(span(start,i+1)>=c.softMaxSeconds&&silent*1000>=c.softSilenceMs)return act(i+1,0,'soft');
-  if(silent*1000>=c.loneSilenceMs)return voiced>=c.loneMinSeconds?act(i+1,0,'pause'):(()=>{start=-1;last=-1;return {emit:0,drop:0,reason:''} as EndpointAction;})();
+  if(silent*1000>=c.loneSilenceMs)return voiced>=c.loneMinSeconds?act(i+1,0,'pause'):(()=>{start=-1;last=-1;cont=false;return {emit:0,drop:0,reason:''} as EndpointAction;})();
   if(total>=c.maxSeconds){let best=i,acc=0;for(let k=i;k>start&&acc<.8;k--){acc+=size[k]/rate;if(rms[k]<rms[best])best=k;}return act(Math.max(1,best+1),0,'hard');}
   return {emit:0,drop:0,reason:''};
  }};

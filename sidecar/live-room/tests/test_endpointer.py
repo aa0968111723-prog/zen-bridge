@@ -105,3 +105,11 @@ def test_wav_is_16k_mono_pcm16():
     with wave.open(io.BytesIO(data)) as w:
         assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (16000, 1, 2)
         assert w.getnframes() == 8000
+
+
+def test_short_tail_after_soft_cut_is_closed_at_the_next_pause():
+    """Bench line 6: soft cut inside a sentence, 0.5 s tail, 0.9 s gap -> the tail must not wait
+    for (and merge with) the next sentence."""
+    ep = Endpointer()
+    cuts = feed(ep, tone(3.2) + silence(0.2) + tone(0.5) + silence(0.5))
+    assert [c.reason for c in cuts] == ["soft", "pause"]

@@ -33,4 +33,7 @@ const run=(cap,plan)=>{for(const [amp,blocks] of plan)for(let i=0;i<blocks;i++)n
 // 3. legacy: no vad -> fixed windows unchanged; endpoint:false opts out
 {const out=[];const cap=await sandbox.exports.capture((a)=>out.push(a),()=>{},{windowSeconds:1});run(cap,[[.2,10]]);assert.equal(out.length,1);cap.stop();}
 {const out=[];const cap=await sandbox.exports.capture((a)=>out.push(a),()=>{},{windowSeconds:6,vad:true,endpoint:false});run(cap,[[.2,15],[0,10]]);assert.equal(out.length,0,'opt-out keeps the 6 s window');cap.stop();}
+// 4. short tail after a soft cut closes at the next pause (does not merge into the next sentence)
+{const out=[];const cap=await sandbox.exports.capture((a)=>out.push(a),()=>{},{windowSeconds:6,stepSeconds:6,vad:true});
+ run(cap,[[.2,32],[0,2],[.2,5],[0,4]]);assert.equal(out.length,2,'soft cut then the 0.5 s tail');cap.stop();}
 console.log('PASS: capture endpointing (pause cut, hard cut on quiet block, timeline, legacy windows)');

@@ -122,6 +122,7 @@ class Endpointer:
         self._noise = self.cfg.abs_floor
         self._start: int | None = None     # frame index (in _rms) where speech began
         self._last_speech: int | None = None
+        self._continued = False            # the next utterance continues a soft/hard-cut sentence
         self.cuts = 0
 
     # --------------------------------------------------------------- helpers
@@ -183,12 +184,15 @@ class Endpointer:
         n = idx + 1 - self._start                       # frames since speech began
         voiced = self._last_speech + 1 - self._start    # speech span (without trailing silence)
         silent = idx - self._last_speech                # trailing silent frames
-        if voiced >= self._frames(self.cfg.min_utt) and silent >= self._frames(self.cfg.end_silence):
+        # the tail of a sentence that was soft/hard cut is legit even when short ("...的呼吸。")
+        need = self.cfg.lone_min if self._continued else self.cfg.min_utt
+        if voiced >= self._frames(need) and silent >= self._frames(self.cfg.end_silence):
             return self._cut(self._last_speech + 1, "pause")
         if silent >= self._frames(self.cfg.lone_silence):
             if voiced >= self._frames(self.cfg.lone_min):
                 return self._cut(self._last_speech + 1, "pause")   # a short reply ("好。") still gets a final
             self._start = self._last_speech = None                  # a click or cough: forget it
+            self._continued = False
             return None
         if n >= self._frames(self.cfg.soft_max) and silent >= self._frames(self.cfg.soft_silence):
             return self._cut(self._last_speech + 1, "soft")
@@ -214,6 +218,7 @@ class Endpointer:
         self._drop_frames(keep_from)
         self._start = None
         self._last_speech = None
+        self._continued = reason in ("soft", "hard")
         # the carried remainder may already contain speech: re-scan it so a hard cut continues
         for i, r in enumerate(self._rms):
             if self._is_speech(r):
