@@ -179,6 +179,7 @@ def run(sc: Scenario, workdir: Path) -> Result:
     trunc_lat: list[float] = []
     trunc_busy = 0
     trunc_wal_before: list[int] = []
+    redeliveries = 0
 
     def sample_wal():
         res.wal_max = max(res.wal_max, wal_size(db))
@@ -235,12 +236,25 @@ def run(sc: Scenario, workdir: Path) -> Result:
         p = zdb.connect(db)
         try:
             t0 = time.perf_counter()
-            p.execute("BEGIN IMMEDIATE")
+            probe_retries = 0
+            # The heavy holder intentionally exceeds busy_timeout. The observer
+            # must survive that expected BUSY to measure the eventual release;
+            # otherwise the simulation aborts before checking ledger recovery.
+            deadline = t0 + sc.lock_hold_s + 10
+            while True:
+                try:
+                    p.execute("BEGIN IMMEDIATE")
+                    break
+                except sqlite3.OperationalError as exc:
+                    if not any(word in str(exc).lower() for word in ('locked', 'busy')) or time.perf_counter() >= deadline:
+                        raise
+                    probe_retries += 1
+                    time.sleep(0.05)
             t1 = time.perf_counter()
             p.execute("ROLLBACK")
         finally:
             p.close()
-        res.lock_probe = {"probe_start": t0, "probe_got_lock": t1, **lock_times}
+        res.lock_probe = {"probe_start": t0, "probe_got_lock": t1, "probe_busy_retries": probe_retries, **lock_times}
 
     started = time.perf_counter()
     try:
@@ -281,6 +295,13 @@ def run(sc: Scenario, workdir: Path) -> Result:
                         trunc_wal_before.append(wal_size(db))
                         t0 = time.perf_counter()
                         row = zdb.try_checkpoint(admin)
+                        # The ledger may own the checkpoint lock at this exact
+                        # gap. Give that short-lived owner a bounded chance to
+                        # finish before reopening the next read snapshot. Count
+                        # the entire retry time in the original latency gate.
+                        while row[0] and time.perf_counter() - t0 < 0.2:
+                            time.sleep(0.005)
+                            row = zdb.try_checkpoint(admin)
                         trunc_lat.append(time.perf_counter() - t0)
                         trunc_busy += int(row[0] != 0)
                 if reader is None and reopen_at is not None and i >= reopen_at:
@@ -291,6 +312,13 @@ def run(sc: Scenario, workdir: Path) -> Result:
                 lock_thread.start()
                 assert lock_acquired.wait(30), "admin lock holder never acquired the lock"
                 if "acquired" in lock_times:
+                    if sc.lock_hold_s > 5:
+                        # Guarantee real ledger work during the long lock. The
+                        # regular queue may already have drained before the lock
+                        # holder wins. Re-delivery also verifies idempotence:
+                        # this final caption must remain one DB row, not two.
+                        led.submit(dict(final))
+                        redeliveries += 1
                     probe_lock_wait()
             res.max_queue = max(res.max_queue, led._q.qsize())
             if led._q.qsize() > 1000:            # slow CI: back off instead of overflowing the 2000 queue
@@ -351,9 +379,11 @@ def run(sc: Scenario, workdir: Path) -> Result:
         c.close()
     res.db_bytes = os.path.getsize(db)
     n = sc.segments
-    res.expected = {"segments": n, "transcripts": n, "translations": n, "events_live": n,
+    # Audit events record deliveries; canonical caption tables must still have
+    # only n rows even when the heavy case re-delivers one final event.
+    res.expected = {"segments": n, "transcripts": n, "translations": n, "events_live": n + redeliveries,
                     "metrics": metric_rows, "tm_units": tm_units, "segments_translated": n,
-                    "ledger_written": 2 * n}
+                    "ledger_written": 2 * n + redeliveries}
     res.ledger = {**led.stats(), "batches": len(led.batch_sizes),
                   "mean_batch": round(statistics.fmean(led.batch_sizes), 2) if led.batch_sizes else 0}
     res.ledger_lat = _lat(led.lat)

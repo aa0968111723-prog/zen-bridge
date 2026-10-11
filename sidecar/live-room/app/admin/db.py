@@ -167,7 +167,10 @@ def connect(path: str | Path, *, readonly: bool = False, timeout_ms: int = 5000)
         conn.execute("PRAGMA query_only = ON")
     else:
         conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA wal_autocheckpoint = 1000")
+        # Backfill in smaller increments (~1 MiB with 4 KiB pages). A long-lived
+        # reader may still pin the WAL, but once it advances the next checkpoint
+        # should not accumulate a multi-megabyte sync on the live writer.
+        conn.execute("PRAGMA wal_autocheckpoint = 256")
         conn.execute("PRAGMA journal_size_limit = 67108864")
     return conn
 
