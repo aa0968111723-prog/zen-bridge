@@ -42,7 +42,13 @@ def stage(destination,source=None,manifest=None):
     manifest=manifest or json.loads(MANIFEST.read_text())
     license_spec=manifest.get('license')
     complete=all(verified(destination/name,spec) for name,spec in manifest['files'].items())
-    if complete and (license_spec is None or verified(destination/'LICENSE.txt',license_spec)):
+    if complete:
+        if license_spec is not None and not verified(destination/'LICENSE.txt',license_spec):
+            license_file=ROOT/'app/vendor/licenses/X-ASR.txt'
+            if (destination/'LICENSE.txt').exists() or not verified(license_file,license_spec):
+                raise ValueError('Existing license differs or verified license is missing')
+            with (destination/'LICENSE.txt').open('xb') as output,license_file.open('rb') as incoming:
+                shutil.copyfileobj(incoming,output)
         return destination
     if destination.exists() and any(destination.iterdir()):
         raise ValueError('Existing draft model differs; use a new destination')

@@ -1,1 +1,2 @@
 sidecar/live-room/app/admin/static/vendor/* -text
+sidecar/live-room/app/vendor/licenses/X-ASR.txt text eol=lf

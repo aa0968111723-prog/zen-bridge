@@ -144,10 +144,15 @@ internal sealed class BreezeWindow : Form {
                 info.EnvironmentVariables["BREEZE_ENDPOINT_FINAL"]="1";
             }
             if (graphMenu.Checked && graphMenu.Enabled) info.EnvironmentVariables["ZEN_AGENT_SUITE_GRAPH"]="1";
+            else if (ReadPreferences().ContainsKey("agent_graph")) info.EnvironmentVariables["ZEN_AGENT_SUITE_GRAPH"]="0";
+            if (!fastMenu.Checked && ReadPreferences().ContainsKey("fast_captions")) {
+                info.EnvironmentVariables["BREEZE_DRAFT_ASR"]="off";
+                info.EnvironmentVariables["BREEZE_ENDPOINT_FINAL"]="0";
+            }
             if (GpuEnabled() && gpuMenu.Enabled) {
                 info.EnvironmentVariables["BREEZE_ASR_GPU"]="vulkan";
                 info.EnvironmentVariables["BREEZE_WHISPER_DIR"]=Path.Combine(root,"tools","whisper-vulkan");
-            } else if (File.Exists(Path.Combine(root,"data","performance.json"))) {
+            } else if (ReadPreferences().ContainsKey("gpu")) {
                 info.EnvironmentVariables["BREEZE_ASR_GPU"]="cpu";
             }
             info.EnvironmentVariables["BREEZE_DESKTOP_INSTANCE"] = instance;
@@ -265,10 +270,15 @@ internal sealed class BreezeWindow : Form {
         if (File.Exists(path)) File.Replace(temp,path,null); else File.Move(temp,path);
     }
     string DraftModelDirectory() {
-        string folder=Path.Combine(root,"models","draft","sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05");
-        foreach (string name in new [] {"encoder.int8.onnx","decoder.onnx","joiner.int8.onnx","tokens.txt"})
-            if (!File.Exists(Path.Combine(folder,name))) return null;
-        return folder;
+        const string model="sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05";
+        foreach (string folder in new [] {Path.Combine(root,"models","draft",model),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZenBridge","models","draft",model)}) {
+            bool complete=true;
+            foreach (string name in new [] {"encoder.int8.onnx","decoder.onnx","joiner.int8.onnx","tokens.txt"})
+                if (!File.Exists(Path.Combine(folder,name))) complete=false;
+            if (complete) return folder;
+        }
+        return null;
     }
     void StartAdmin() {
         if (!ready || closing) return;
