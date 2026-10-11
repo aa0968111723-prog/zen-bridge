@@ -41,7 +41,7 @@ _NUMBER_UNITS = tuple(
         reverse=True,
     )
 )
-_RUBY = re.compile(r"\{[^{}|]+\|[^{}|]+\}")
+_RUBY = re.compile(r"\{([^{}|]+)\|[^{}|]+\}")
 _COMMON_ENDINGS = ("ませんでした", "でしょう", "ました", "ません", "です", "ます")
 
 
@@ -54,6 +54,8 @@ class JaLinebreakResult:
 
 
 def _width(text: str) -> float:
+    # Readings sit above the base characters; annotation syntax takes no columns.
+    text = _RUBY.sub(lambda match: match.group(1), text)
     return sum(
         1.0 if unicodedata.east_asian_width(char) in {"F", "W"} else 0.5
         for char in text
