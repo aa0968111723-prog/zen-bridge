@@ -113,3 +113,12 @@ def test_short_tail_after_soft_cut_is_closed_at_the_next_pause():
     ep = Endpointer()
     cuts = feed(ep, tone(3.2) + silence(0.2) + tone(0.5) + silence(0.5))
     assert [c.reason for c in cuts] == ["soft", "pause"]
+
+
+def test_adaptive_audio_ctx_bounds():
+    from app.asr import adaptive_audio_ctx
+    assert adaptive_audio_ctx(3.0, 640) == 256            # 150 + 64 -> floor 256
+    assert adaptive_audio_ctx(4.4, 640) == 284
+    assert adaptive_audio_ctx(12.0, 640) is None          # would reach the configured ctx: use default
+    assert adaptive_audio_ctx(None, 640) is None and adaptive_audio_ctx(0, 640) is None
+    assert adaptive_audio_ctx(3.0, 0) == 256              # 0 = full 1500 window

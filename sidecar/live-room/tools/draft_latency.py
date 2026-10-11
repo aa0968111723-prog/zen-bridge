@@ -51,6 +51,26 @@ def pct(xs: list[float], p: float) -> float | None:
     return round(xs[lo] + (xs[hi] - xs[lo]) * (k - lo), 3)
 
 
+_PUNCT = set("，。！？、；：「」『』（）,.!?;:\"'()[] \n\t-—…")
+
+
+def _norm(text: str) -> str:
+    return "".join(ch for ch in text if ch not in _PUNCT).lower()
+
+
+def cer(ref: str, hyp: str) -> float | None:
+    r, h = _norm(ref), _norm(hyp)
+    if not r:
+        return None
+    prev = list(range(len(h) + 1))
+    for i, a in enumerate(r, 1):
+        cur = [i] + [0] * len(h)
+        for j, b in enumerate(h, 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a != b))
+        prev = cur
+    return round(prev[-1] / len(r), 4)
+
+
 def summary(xs: list[float]) -> dict:
     return {"n": len([x for x in xs if x is not None]), "p50": pct(xs, 50), "p95": pct(xs, 95),
             "max": pct(xs, 100)}
@@ -78,6 +98,7 @@ def build_breeze(args):
     if cfg is None or cfg.errors or cfg.server_bin() is None:
         raise SystemExit(f"Breeze GPU 設定不完整：{getattr(cfg, 'errors', None)}")
     asr = VulkanServerAsr(cfg, Path(args.model), port=args.port)
+    asr.adaptive_ctx = bool(args.adaptive_ctx)
     started = asr.start()
     if not started.ok:
         raise SystemExit(f"whisper-server 啟動失敗：{started.error}")
@@ -197,6 +218,7 @@ def main(argv=None) -> int:
     ap.add_argument("--gpu", default="vulkan")
     ap.add_argument("--port", type=int, default=8199)
     ap.add_argument("--baseline", action="store_true", help="also time fixed 6 s slices")
+    ap.add_argument("--adaptive-ctx", action="store_true", help="per-request audio_ctx sized to each line")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
 
@@ -222,14 +244,20 @@ def main(argv=None) -> int:
                                "final_s": summary([r["final_s"] for r in rows]),
                                "final_from_onset_s": summary([r["final_from_onset_s"] for r in rows]),
                                "breeze_asr_s": summary([f["asr_s"] for f in two["finals"]]),
-                               "cuts": len(two["finals"])},
+                               "cuts": len(two["finals"]),
+                               "cer": cer("".join(t.get("text", "") for t in truth),
+                                          "".join(f["text"] for f in two["finals"]))},
+                  "adaptive_ctx": bool(args.adaptive_ctx),
                   "per_line": rows, "finals": two["finals"], "drafts": two["drafts"][-200:]}
         if args.baseline and args.asr == "breeze":
             base = run_baseline(pcm, asr)
             brows = score(truth, [], base)
             report["baseline_6s"] = {"final_s": summary([r["final_s"] for r in brows]),
                                      "final_from_onset_s": summary([r["final_from_onset_s"] for r in brows]),
-                                     "breeze_asr_s": summary([b["asr_s"] for b in base]), "slices": base}
+                                     "breeze_asr_s": summary([b["asr_s"] for b in base]),
+                                     "cer": cer("".join(t.get("text", "") for t in truth),
+                                                "".join(b["text"] for b in base)),
+                                     "slices": base}
     finally:
         close = getattr(asr, "close", None)
         if close:
@@ -237,10 +265,12 @@ def main(argv=None) -> int:
     args.out.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     tp = report["two_pass"]
     print(f"draft  p50={tp['draft_s']['p50']}s p95={tp['draft_s']['p95']}s (onset -> first grey draft)")
-    print(f"final  p50={tp['final_s']['p50']}s p95={tp['final_s']['p95']}s (speech end -> Breeze final)")
+    print(f"final  p50={tp['final_s']['p50']}s p95={tp['final_s']['p95']}s (speech end -> Breeze final) "
+          f"breeze p50={tp['breeze_asr_s']['p50']}s cer={tp['cer']}")
     if "baseline_6s" in report:
         b = report["baseline_6s"]["final_s"]
-        print(f"6s     p50={b['p50']}s p95={b['p95']}s (speech end -> final, fixed 6 s slices)")
+        print(f"6s     p50={b['p50']}s p95={b['p95']}s (speech end -> final, fixed 6 s slices) "
+              f"cer={report['baseline_6s']['cer']}")
     return 0
 
 

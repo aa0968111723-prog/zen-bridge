@@ -43,3 +43,9 @@ def test_real_pace_loop_with_fakes_is_fast_enough():
     pcm = silence(0.3) + tone(1.0) + silence(0.6)
     out = dl.run_two_pass(pcm, Loud, dl.FakeAsr(), EndpointConfig(), pace=20.0)
     assert out["drafts"] and len(out["finals"]) == 1
+
+
+def test_cer_ignores_punctuation():
+    assert dl.cer("今天，我們。", "今天我們") == 0.0
+    assert dl.cer("今天我們", "今天你們") == 0.25
+    assert dl.cer("", "x") is None
