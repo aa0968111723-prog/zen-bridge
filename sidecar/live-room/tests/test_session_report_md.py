@@ -223,3 +223,18 @@ def test_cli_requires_output_path(tmp_path):
     with pytest.raises(SystemExit) as exc_info:
         report.main(["--db", str(tmp_path / "missing.sqlite3")])
     assert exc_info.value.code == 2
+
+
+def test_cli_chinese_report_survives_legacy_pipe_encoding(tmp_path):
+    import os
+
+    path = _ledger_db(tmp_path / "captions.sqlite3")
+    output = tmp_path / "report.md"
+    env = dict(os.environ, PYTHONUTF8="0", PYTHONIOENCODING="ascii")
+    result = subprocess.run(
+        [sys.executable, str(TOOL), "--db", str(path), "--out", str(output)],
+        capture_output=True, env=env,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8")
+    assert result.stdout.decode("utf-8").splitlines() == output.read_text(encoding="utf-8").splitlines()
+    assert "會議字幕摘要" in result.stdout.decode("utf-8")
