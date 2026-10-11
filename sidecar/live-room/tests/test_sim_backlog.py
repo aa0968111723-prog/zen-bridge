@@ -466,18 +466,19 @@ async def _post_heavy(client, token, seq: int, audio: bytes, pad: str):
 HEAVY_POST_BOUND_S = 0.06
 HEAVY_LOOP_GAP_BOUND_S = 0.020
 HEAVY_ATTEMPTS = 3
+HEAVY_MIN_PASSING = 2      # tolerate one runner stall out of three, never two
 
 
-async def _measure_heavy_post(client, token, first_seq: int, audio: bytes, pad: str) -> tuple[float, float, list]:
-    """Time the heavy post and the 1 ms loop probe; bounded best-of-``HEAVY_ATTEMPTS``.
+async def _measure_heavy_post(client, token, first_seq: int, audio: bytes, pad: str) -> list[tuple[float, float]]:
+    """Time the heavy post and the 1 ms loop probe ``HEAVY_ATTEMPTS`` times.
 
-    Every attempt must return 200 with the full Chinese text. The timing bounds
-    are judged per attempt: one attempt must meet *both* the post bound and the
+    Every attempt must return 200 with the full Chinese text. Returns
+    (elapsed, max_gap) per attempt; callers require at least
+    ``HEAVY_MIN_PASSING`` attempts that meet *both* the post bound and the
     loop-gap bound at the same time. A slow parser or a loop-blocking parse is
     slow on every attempt and still fails; a single scheduler / disk stall on a
     shared CI runner (one sample of 0.13 s or 0.87 s on GitHub Windows) only
-    costs one attempt. Returns (elapsed, max_gap, all attempts) for the
-    attempt that met both bounds, or the fastest one if none did.
+    costs one attempt.
     """
     import asyncio
     import time
@@ -511,10 +512,15 @@ async def _measure_heavy_post(client, token, first_seq: int, audio: bytes, pad: 
         assert resp.json().get("zh") == audio.decode()
         assert gaps, "the 1 ms timer did not run"
         attempts.append((elapsed, max(gaps)))
-        if elapsed < HEAVY_POST_BOUND_S and max(gaps) <= HEAVY_LOOP_GAP_BOUND_S:
-            return elapsed, max(gaps), attempts
-    elapsed, gap = min(attempts)
-    return elapsed, gap, attempts
+    return attempts
+
+
+def _assert_heavy_bounds(attempts: list[tuple[float, float]]) -> None:
+    assert len(attempts) == HEAVY_ATTEMPTS, attempts
+    passing = [a for a in attempts if a[0] < HEAVY_POST_BOUND_S and a[1] <= HEAVY_LOOP_GAP_BOUND_S]
+    assert len(passing) >= HEAVY_MIN_PASSING, (
+        f"{len(passing)}/{HEAVY_ATTEMPTS} attempts met post < {HEAVY_POST_BOUND_S}s and "
+        f"loop gap <= {HEAVY_LOOP_GAP_BOUND_S}s; (elapsed, max_gap) = {attempts}")
 
 
 @pytest.mark.anyio
@@ -528,7 +534,7 @@ async def test_heavy_multipart_upload_does_not_stall_the_loop():
     the loop did not run; that gap stays at or under 20 ms, tighter than the
     post bound so a stall inside a fast post is still visible. Automatic GC is
     off for the measured post so a collection is not booked as parse time.
-    Both bounds must hold in the same attempt of a bounded best-of-3 (see
+    At least 2 of 3 attempts must meet both bounds at once (see
     ``_measure_heavy_post``), so one runner stall is not read as a parse stall.
     """
     import tracemalloc
@@ -543,9 +549,8 @@ async def test_heavy_multipart_upload_does_not_stall_the_loop():
         assert warm.status_code == 200, warm.text
         audio = _heavy_audio()
         pad = _sixty_kb_field()
-        elapsed, gap, attempts = await _measure_heavy_post(client, token, 2, audio, pad)
-    assert elapsed < HEAVY_POST_BOUND_S, attempts
-    assert gap <= HEAVY_LOOP_GAP_BOUND_S, attempts
+        attempts = await _measure_heavy_post(client, token, 2, audio, pad)
+    _assert_heavy_bounds(attempts)
     assert not tracemalloc.is_tracing()
 
 
@@ -559,7 +564,7 @@ async def test_traced_upload_stays_inside_one_slice():
     the same 1 ms loop probe. Bytes that look like a multipart boundary stay
     inside the audio part, and a slice-sized file comes back as Chinese.
     Automatic GC is off around the heavy post so a collection is not the gap.
-    Both bounds must hold in the same attempt of a bounded best-of-3 (see
+    At least 2 of 3 attempts must meet both bounds at once (see
     ``_measure_heavy_post``), so one runner stall is not read as a parse stall.
     """
     import tracemalloc
@@ -581,9 +586,8 @@ async def test_traced_upload_stays_inside_one_slice():
             assert resp.json().get("zh") == bulky.decode()
             audio = _heavy_audio()
             pad = _sixty_kb_field()
-            elapsed, gap, attempts = await _measure_heavy_post(client, token, 3, audio, pad)
-            assert elapsed < HEAVY_POST_BOUND_S, attempts
-            assert gap <= HEAVY_LOOP_GAP_BOUND_S, attempts
+            attempts = await _measure_heavy_post(client, token, 3, audio, pad)
+            _assert_heavy_bounds(attempts)
             assert tracemalloc.is_tracing()
     finally:
         tracemalloc.stop()

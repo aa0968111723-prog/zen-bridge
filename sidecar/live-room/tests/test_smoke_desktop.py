@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -189,6 +190,26 @@ class _ReadyAnchoredSmoke(smoke.Smoke):
         self.ready_at = time.monotonic()
         self.deadline = self.ready_at + limit
         return detail
+
+
+def test_overall_timeout_is_honored_by_the_cli(tmp_path):
+    """Real CLI subprocess: --timeout runs from tool start, so on a slow runner it may expire while
+    the child is still cold-starting. Either way it must fail with the --timeout reason, in time."""
+    limit = 5.0
+    rc, report, out, elapsed = run_tool(tmp_path, "--fake-mt", "slow", "--timeout", str(limit))
+    assert rc == 1, out
+    assert report["failed_step"] in {"start_backend", "translation"}, report
+    detail = next(s for s in report["steps"] if s["name"] == report["failed_step"])["detail"]
+    if report["failed_step"] == "start_backend" and "--timeout" not in detail:
+        # start_backend clamps its /api/health wait to min(time left on --timeout, --start-timeout=30)
+        # and reports that budget, not the flag name: a budget <= limit proves --timeout cut it short.
+        m = re.search(r"([\d.]+) 秒內 /api/health 沒有就緒", detail)
+        assert m and float(m.group(1)) <= limit, detail
+    else:
+        assert "--timeout" in detail, report
+    # timeout + shutdown budget + process start/teardown slack (loaded box)
+    assert elapsed < limit + smoke.SHUTDOWN_BUDGET_S + 10, elapsed
+    assert statuses(report)["shutdown"] == "PASS"
 
 
 def test_overall_timeout_is_honored(tmp_path):

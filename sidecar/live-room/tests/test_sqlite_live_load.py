@@ -170,6 +170,9 @@ def test_always_on_reader_with_periodic_truncate(results, workdir):
         _assert_no_loss(r)
         pt = r["periodic_truncate"]
         assert pt["runs"] == 2400 // 300, pt
+        # Per replay: the typical TRUNCATE stays under the bound, so one replay that is slow overall
+        # cannot be diluted by the other two in the pooled p95 below.
+        assert pt["p50_ms"] / 1000 < ADMIN_P95_BOUND_S, (name, pt)
         assert r["wal_max"] < pinned["wal_max"] / 2, (r["wal_max"], pinned["wal_max"])
         _assert_checkpoint_shrinks(r)
         samples += r["trunc_samples_s"]
