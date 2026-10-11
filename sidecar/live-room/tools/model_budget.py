@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Check an offline worker configuration against a hw_probe JSON report."""
+"""Check an offline worker configuration against a hw_probe JSON report.
+
+Workers may specify role: final_asr, draft_asr or mt. Without role, legacy
+display-name inference is used for the concurrent CPU-thread warning.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ import sys
 
 
 APP_OS_HEADROOM_GB = 1.0
+POWER_SAVER_GUID = "a1841308-3541-4fab-bc81-f71556f20b4a"
 
 
 class BudgetInputError(ValueError):
@@ -20,9 +25,13 @@ class BudgetInputError(ValueError):
 def _number(value, label):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise BudgetInputError(f"{label} must be a number")
+    try:
+        value = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise BudgetInputError(f"{label} must be finite and non-negative") from exc
     if not math.isfinite(value) or value < 0:
         raise BudgetInputError(f"{label} must be finite and non-negative")
-    return float(value)
+    return value
 
 
 def _positive_integer(value, label):
@@ -59,6 +68,9 @@ def _read_inputs(hardware, config):
     power_plan = hardware.get("power_plan")
     if power_plan is not None and not isinstance(power_plan, str):
         raise BudgetInputError("hardware.power_plan must be a string or null")
+    power_plan_guid = hardware.get("power_plan_guid")
+    if power_plan_guid is not None and not isinstance(power_plan_guid, str):
+        raise BudgetInputError("hardware.power_plan_guid must be a string or null")
 
     workers = config.get("workers")
     if not isinstance(workers, list) or not workers:
@@ -79,9 +91,15 @@ def _read_inputs(hardware, config):
         backend = worker.get("backend")
         if backend not in ("cpu", "vulkan"):
             raise BudgetInputError(f"{label}.backend must be 'cpu' or 'vulkan'")
+        role = worker.get("role")
+        if "role" in worker and role not in ("final_asr", "draft_asr", "mt"):
+            raise BudgetInputError(
+                f"{label}.role must be 'final_asr', 'draft_asr' or 'mt'"
+            )
         checked_workers.append(
             {
                 "name": name.strip(),
+                "role": role,
                 "backend": backend,
                 "threads": _positive_integer(worker.get("threads"), f"{label}.threads"),
                 "model_ram_gb": _number(
@@ -93,14 +111,18 @@ def _read_inputs(hardware, config):
             }
         )
 
-    return available_ram, logical_cores, devices, on_ac_power, power_plan, checked_workers
+    return (
+        available_ram, logical_cores, devices, on_ac_power, power_plan,
+        power_plan_guid, checked_workers,
+    )
 
 
 def check_budget(hardware, config):
     """Return a report describing whether the proposed workers fit."""
-    available_ram, logical_cores, devices, on_ac_power, power_plan, workers = (
-        _read_inputs(hardware, config)
-    )
+    (
+        available_ram, logical_cores, devices, on_ac_power, power_plan,
+        power_plan_guid, workers,
+    ) = _read_inputs(hardware, config)
 
     required_ram = APP_OS_HEADROOM_GB + sum(
         worker["model_ram_gb"] + worker["extra_ram_gb"] for worker in workers
@@ -124,48 +146,57 @@ def check_budget(hardware, config):
         (worker, re.sub(r"[^a-z0-9]", "", worker["name"].casefold()))
         for worker in workers
     ]
-    final_asr = next(
-        (
-            worker
-            for worker, name in named_workers
-            if name.startswith("finalasr")
-            or ("final" in name and "asr" in name)
-            or ("breeze" in name and "asr" in name)
-        ),
-        None,
+    final_asr = any(
+        worker["backend"] == "cpu"
+        and worker["threads"] >= 4
+        and (
+            worker["role"] == "final_asr"
+            or (
+                worker["role"] is None
+                and (
+                    name.startswith("finalasr")
+                    or ("final" in name and "asr" in name)
+                    or ("breeze" in name and "asr" in name)
+                )
+            )
+        )
+        for worker, name in named_workers
     )
-    mt = next(
-        (
-            worker
-            for worker, name in named_workers
-            if name in ("mt", "translation", "machinetranslation")
-            or name.startswith(("mt", "hymt"))
-            or "translation" in name
-        ),
-        None,
+    mt = any(
+        worker["backend"] == "cpu"
+        and worker["threads"] >= 4
+        and (
+            worker["role"] == "mt"
+            or (
+                worker["role"] is None
+                and (
+                    name in ("mt", "translation", "machinetranslation")
+                    or name.startswith(("mt", "hymt"))
+                    or "translation" in name
+                )
+            )
+        )
+        for worker, name in named_workers
     )
-    if (
-        final_asr is not None
-        and mt is not None
-        and final_asr["backend"] == "cpu"
-        and mt["backend"] == "cpu"
-        and final_asr["threads"] >= 4
-        and mt["threads"] >= 4
-    ):
+    if final_asr and mt:
         warnings.append(
             "Final ASR and MT both use at least 4 CPU threads; concurrent latency may suffer"
         )
     if on_ac_power is False:
         warnings.append("Hardware probe reports the system is running on battery")
-    if isinstance(power_plan, str) and any(
-        phrase in power_plan.casefold()
-        for phrase in (
-            "power saver",
-            "省電",
-            "省电",
-            "a1841308-3541-4fab-bc81-f71556f20b4a",
+    if power_plan_guid is not None:
+        power_saver = power_plan_guid.strip().casefold() == POWER_SAVER_GUID
+    else:
+        power_saver = isinstance(power_plan, str) and any(
+            phrase in power_plan.casefold()
+            for phrase in (
+                "power saver",
+                "省電",
+                "省电",
+                POWER_SAVER_GUID,
+            )
         )
-    ):
+    if power_saver:
         warnings.append("Hardware probe reports a power saver plan")
 
     return {
