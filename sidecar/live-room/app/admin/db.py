@@ -138,6 +138,16 @@ def check_sqlite_version(version: str | None = None) -> None:
 
 
 # ---------------------------------------------------------------- connections
+def try_checkpoint(conn: sqlite3.Connection):
+    """Maintenance must not consume the live writer's lock-wait allowance."""
+    timeout = int(conn.execute('PRAGMA busy_timeout').fetchone()[0])
+    try:
+        conn.execute('PRAGMA busy_timeout=0')
+        return conn.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+    finally:
+        conn.execute(f'PRAGMA busy_timeout={timeout}')
+
+
 def connect(path: str | Path, *, readonly: bool = False, timeout_ms: int = 5000) -> sqlite3.Connection:
     """Per-connection PRAGMAs every time (DBA §5.1). Autocommit; callers BEGIN IMMEDIATE."""
     p = _filesystem_path(path)
