@@ -482,15 +482,12 @@ async def test_failed_session_does_not_block_a_new_session_and_end_fills_the_hol
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://127.0.0.1:8780") as client:
             token = await token_of(app, client)
             held = asyncio.create_task(push(client, token, "class", "old", 2, "舊會話後段".encode()))
-            # ASR leaves _active in well under 20ms. Spin until the reorder buffer parks seq 2.
-            for _ in range(4000):
-                if ("class", "old", 2) in app.state.pipeline._active or 2 in app.state.pipeline._held.get(("class", "old"), {}):
-                    break
-                await asyncio.sleep(0)
-            for _ in range(4000):
-                if 2 in app.state.pipeline._held.get(("class", "old"), {}):
-                    break
-                await asyncio.sleep(0)
+            # Wait until the reorder buffer parks seq 2. Windows CI flake root cause: the old loop counted
+            # 4000 bare event-loop yields, but decode/ASR run on worker threads, so a slow runner could
+            # finish the yields before the thread did. Wait on the condition with a real-time bound.
+            deadline = time.monotonic() + 10.0
+            while 2 not in app.state.pipeline._held.get(("class", "old"), {}) and time.monotonic() < deadline:
+                await asyncio.sleep(0.002)
             assert 2 in app.state.pipeline._held.get(("class", "old"), {})
             fresh = await push(client, token, "class", "new", 1, "新會話".encode())
             assert fresh.status_code == 200

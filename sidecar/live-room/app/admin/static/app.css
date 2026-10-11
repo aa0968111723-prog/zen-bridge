@@ -1,0 +1,25 @@
+body{font-family:system-ui,"Noto Sans TC",sans-serif;margin:0;color:#111;background:#fafafa}
+header{display:flex;gap:1em;align-items:center;padding:.5em 1em;background:#223;color:#fff}
+header h1{font-size:1.1em;margin:0;flex:1}
+nav ul{display:flex;flex-wrap:wrap;gap:.25em;list-style:none;margin:0;padding:.4em 1em;background:#eef}
+nav a{padding:.3em .6em;border-radius:4px;color:#113}
+nav a[aria-current=page]{background:#223;color:#fff}
+main{padding:1em;max-width:1200px}
+.skip{position:absolute;left:-999px}.skip:focus{left:1em;top:1em;background:#ff0;padding:.3em}
+#banner{padding:.6em 1em;background:#fdd;border-bottom:2px solid #c00}
+#banner.info{background:#def;border-color:#36c}
+table{border-collapse:collapse;width:100%;margin:.5em 0}
+td,th{border:1px solid #ccc;padding:.25em .4em;text-align:left;vertical-align:top;font-size:.92em}
+tr.sel{outline:3px solid #36c}
+.card{display:inline-block;min-width:9em;margin:.3em;padding:.6em;border-radius:6px;background:#fff;border:1px solid #ccc}
+.card b{display:block;font-size:1.4em}
+.green{background:#dfd}.amber{background:#fec}.red{background:#fcc}.unknown{background:#eee}
+.stale{opacity:.55;border-style:dashed}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.6em}
+pre{white-space:pre-wrap;background:#fff;border:1px solid #ddd;padding:.5em;max-height:24em;overflow:auto}
+button:focus,a:focus,input:focus,select:focus,textarea:focus{outline:3px solid #f90;outline-offset:1px}
+textarea{width:100%;min-height:3em}
+
+/* zen-shi logo (柏能 chose /workspace/zen-logo) */
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand img { border-radius: 6px; }

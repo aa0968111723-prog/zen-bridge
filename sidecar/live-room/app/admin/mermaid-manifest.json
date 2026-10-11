@@ -1,0 +1,16 @@
+{
+  "version": "12.1.0",
+  "license": "MIT",
+  "source": "https://registry.npmjs.org/mermaid/-/mermaid-12.1.0.tgz",
+  "integrity": "sha512-wlVCp+8eTupfCeeFvoZNNiTuHrvag0P2jz/ILgb/f/6jkVokUefOcujefi8qUe/j2asHiSePncVsz/xzzA80LQ==",
+  "files": {
+    "mermaid-LICENSE": {
+      "size": 1089,
+      "sha256": "ec9fb67dcb25eccc416ed56e1aab819222c805a2a4bfe4cb19e7556bf2ffde80"
+    },
+    "mermaid.min.js": {
+      "size": 5493176,
+      "sha256": "6484afc32872a3aa16cac9a76ba1816a1ed4cc870a6593cc2e17757750f518b2"
+    }
+  }
+}

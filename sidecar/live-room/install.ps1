@@ -19,7 +19,9 @@ try {
     }
     $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'bootstrap-manifest.json') -Raw | ConvertFrom-Json
     $asset = $manifest.python
-    $pythonRoot = Join-Path $PSScriptRoot ('.python\' + $asset.version)
+    $pythonDirectory = $asset.version
+    if ($asset.directory) { $pythonDirectory = $asset.directory }
+    $pythonRoot = Join-Path $PSScriptRoot ('.python\' + $pythonDirectory)
     $python = Join-Path $pythonRoot 'tools\python.exe'
     if (-not (Test-Path -LiteralPath $python)) {
         $cache = Join-Path $PSScriptRoot '.downloads'

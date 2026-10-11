@@ -1,0 +1,3 @@
+# Optional extras for the local backend (Silero VAD). Installed by scripts/setup_local.ps1.
+# Not part of requirements-lock.txt so the existing installer/runtime manifest is unchanged.
+onnxruntime==1.31.0

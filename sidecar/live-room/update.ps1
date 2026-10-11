@@ -1,4 +1,4 @@
-param([switch]$Rollback, [switch]$Check)
+param([switch]$Rollback, [switch]$Check, [switch]$RestoreDb)
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $asset = (Get-Content bootstrap-manifest.json -Raw | ConvertFrom-Json).python
@@ -14,5 +14,6 @@ $env:SSLKEYLOGFILE = $null
 $arguments = @('scripts\update.py')
 if ($Rollback) { $arguments += '--rollback' }
 if ($Check) { $arguments += '--check' }
+if ($RestoreDb) { $arguments += '--restore-db' }
 & $python @arguments
 exit $LASTEXITCODE

@@ -14,7 +14,7 @@ from app.textutil import scrub_caption
 _PASS = (
     "type", "id", "room_id", "session_id", "session_ord", "seq", "version",
     "zh", "en", "status", "translate_status", "error", "t0_ms", "t1_ms", "zh_raw",
-    "term_flags", "epoch",
+    "term_flags", "epoch", "tgt_lang", "segments", "ruby",
 )
 # Audience sockets. Same caption fields, without zh_raw. A host token or listen
 # key is not a caption field and must not be added here.
@@ -22,6 +22,9 @@ _LISTENER_PASS = (
     "type", "id", "room_id", "session_id", "session_ord", "seq", "version",
     "zh", "en", "status", "translate_status", "error", "t0_ms", "t1_ms",
     "epoch", "cursor", "ids",
+    # round4 #7: ja sessions. tgt_lang, the <wbr> segments and first-occurrence ruby
+    # (glossary readings) are audience-safe caption fields; shapes are checked in for_listener.
+    "tgt_lang", "segments", "ruby",
 )
 _AUDIENCE_DENY = frozenset({
     "zh_raw", "term_flags", "host_token", "token", "listen_key", "listen_url", "authorization",
@@ -38,7 +41,35 @@ def for_listener(event: dict) -> dict:
     if not isinstance(event, dict):
         return {}
     safe = scrub_caption(event)
-    return {key: safe[key] for key in _LISTENER_PASS if key in safe and key not in _AUDIENCE_DENY}
+    out = {key: safe[key] for key in _LISTENER_PASS if key in safe and key not in _AUDIENCE_DENY}
+    _shape_ja_fields(out)
+    return out
+
+
+def _shape_ja_fields(out: dict) -> None:
+    """tgt_lang is a short code, segments a list of strings, ruby a list of {text, reading} strings.
+    Anything else is dropped (the page then shows plain text; textContent only, never HTML)."""
+    for key in ("tgt_lang", "segments", "ruby"):
+        if out.get(key) is None:
+            out.pop(key, None)
+    lang = out.get("tgt_lang")
+    if lang is not None and not (isinstance(lang, str) and lang in ("en", "ja")):
+        out.pop("tgt_lang", None)
+    segs = out.get("segments")
+    if segs is not None and not (isinstance(segs, list) and len(segs) <= 200
+                                 and all(isinstance(x, str) for x in segs)):
+        out.pop("segments", None)
+    ruby = out.get("ruby")
+    if ruby is not None:
+        ok = isinstance(ruby, list) and len(ruby) <= 50
+        rows = []
+        for r in ruby if ok else []:
+            if isinstance(r, dict) and isinstance(r.get("text"), str) and isinstance(r.get("reading"), str):
+                rows.append({"text": r["text"][:64], "reading": r["reading"][:64]})
+        if rows:
+            out["ruby"] = rows
+        else:
+            out.pop("ruby", None)
 
 
 class RoomBus:
@@ -79,6 +110,9 @@ class RoomBus:
         room = str(event.get("room_id") or "")
         raw_updated = event.get("updated_at")
         snap = {key: event.get(key) for key in _PASS}
+        for key in ("tgt_lang", "segments", "ruby"):        # en captions keep their old shape
+            if snap.get(key) is None:
+                snap.pop(key, None)
         snap["type"] = snap.get("type") or "caption"
         snap["room_id"] = room
         self._epoch.setdefault(room, self._boot)
@@ -341,8 +375,10 @@ class RoomBus:
 class ListenerSlot:
     """Bounded per-connection send queue. offer() never waits on the socket."""
 
-    def __init__(self, sender: Callable[[dict], Awaitable[None]], maxsize: int = 32, send_timeout: float = 2.0):
+    def __init__(self, sender: Callable[[dict], Awaitable[None]], maxsize: int = 32, send_timeout: float = 2.0,
+                 on_sent: Callable[[dict], None] | None = None):
         self.sender = sender
+        self.on_sent = on_sent                     # M-03: latency hook after a completed write
         self.q: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
         self.send_timeout = send_timeout
         self.task: asyncio.Task | None = None
@@ -369,6 +405,11 @@ class ListenerSlot:
                 except asyncio.TimeoutError:
                     self.alive = False
                     return
+                if self.on_sent is not None:
+                    try:
+                        self.on_sent(msg)
+                    except Exception:              # a metrics hook never breaks delivery
+                        pass
                 if cancellation_pending():
                     raise asyncio.CancelledError()
                 if not self.alive:

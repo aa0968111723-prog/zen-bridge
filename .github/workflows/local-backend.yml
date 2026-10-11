@@ -1,0 +1,47 @@
+name: Windows local translation backend
+on:
+  pull_request:
+    paths:
+      - 'sidecar/live-room/**'
+      - '.github/workflows/local-backend.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: '1'
+    defaults:
+      run:
+        working-directory: sidecar/live-room
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned dependencies
+        run: python -m pip install -r requirements-lock.txt -r requirements-dev.txt
+      - name: Windows functional and existing regression gates
+        run: python -m pytest -q tests
+      - name: Privacy capture and audience controls
+        run: |
+          node tests/recorder_machine.test.mjs
+          node tests/room_client.test.mjs
+          node tests/recorder_private_pause.test.mjs
+          node tests/audience_private_pause.test.mjs
+      - name: Validate PowerShell 5.1 parsing
+        shell: powershell
+        run: |
+          foreach ($file in @('scripts/setup_local.ps1','scripts/start_backend.ps1','scripts/bench_local.ps1','scripts/bench/collect_env.ps1')) {
+            $tokens=$null; $errors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Get-Location) $file),[ref]$tokens,[ref]$errors) | Out-Null
+            if ($errors.Count) { throw "PowerShell parse failed: $file" }
+          }
+      - name: Fetch byte-pinned native runtime and VAD
+        run: |
+          python scripts/fetch_windows_runtime.py
+          python scripts/fetch_silero_vad.py
+      - name: Real native ONNX smoke
+        run: python -c "from app.vad import SileroVad; import numpy as np; assert SileroVad().analyze_pcm(np.zeros(16000,dtype=np.float32)).speech_ratio == 0"

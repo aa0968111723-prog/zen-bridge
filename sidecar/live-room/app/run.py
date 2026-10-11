@@ -38,6 +38,8 @@ def open_when_serving(port: int, stopped: threading.Event, timeout_s: float = 20
 
 
 def main() -> None:
+    from app.console import safe_console
+    safe_console()
     os.chdir(ROOT)
     fill_process_environ()
     try:
@@ -52,7 +54,11 @@ def main() -> None:
                 print(f"待修正 {check['name']}：{check['detail']}")
         print("服務尚未啟動；請修正後重跑 start.bat。")
         raise SystemExit(1)
+    from app.logfile import install_file_log
+    log_path = install_file_log("live-room")      # QA CTO-07: persistent rotating log
     print(f"字幕服務啟動中，主持頁：http://127.0.0.1:{settings.port}", flush=True)
+    if log_path:
+        print(f"log：{log_path}", flush=True)
     stopped = threading.Event()
     if os.getenv("BREEZE_OPEN_BROWSER") == "1":
         threading.Thread(target=open_when_serving, args=(settings.port, stopped, settings.resident_startup_s + 20), daemon=True).start()

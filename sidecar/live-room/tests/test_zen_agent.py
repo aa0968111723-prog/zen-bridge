@@ -21,9 +21,12 @@ def test_agent_verified_tls_native_contract_and_cleanup(monkeypatch):
         {'type': 'transcribe', 'id': 'valid', 'audio': base64.b64encode(audio.getvalue()).decode(), 'language': 'en'},
     ]
     received, files = [], []
+    # This transport unit must not probe any real Hermes/Ollama service.
+    monkeypatch.setattr(zen_agent.AgentRequests,'status',lambda self: {'asr_ready':True,'metrics':self.metrics.snapshot()})
 
     async def exercise():
         closed = asyncio.Event()
+        replied = asyncio.Event()
 
         class Asr:
             ready = True
@@ -38,12 +41,19 @@ def test_agent_verified_tls_native_contract_and_cleanup(monkeypatch):
 
         class Socket:
             async def __aenter__(self): return self
-            async def __aexit__(self, *args): pass
-            async def send(self, message): received.append(json.loads(message))
+            async def __aexit__(self, *args): closed.set()
+            async def send(self, message):
+                parsed=json.loads(message)
+                received.append(parsed)
+                if parsed.get('type')=='result' and parsed.get('id')=='valid':
+                    replied.set()
             async def close(self, **kwargs): closed.set()
             def __aiter__(self): return self.messages()
             async def messages(self):
                 for request in requests: yield json.dumps(request)
+                # A real peer stays connected while accepted jobs complete.
+                # EOF before completion is a disconnect, and cancels jobs.
+                await replied.wait()
 
         def connect(url, **kwargs):
             context = kwargs['ssl']
@@ -63,6 +73,8 @@ def test_agent_verified_tls_native_contract_and_cleanup(monkeypatch):
 
     asyncio.run(exercise())
     assert received[0]['type'] == 'ready'
-    assert received[1]['ok'] is False
-    assert received[2]['ok'] is True and received[2]['source'] == 'public test'
+    assert received[0]['capabilities']==['asr','translate','metrics']
+    results=[message for message in received if message['type']=='result']
+    assert results[0]['id']=='invalid' and results[0]['ok'] is False
+    assert results[1]['id']=='valid' and results[1]['ok'] is True and results[1]['source'] == 'public test'
     assert files and all(not path.exists() for path in files)

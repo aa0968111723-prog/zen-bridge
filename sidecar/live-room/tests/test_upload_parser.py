@@ -64,6 +64,15 @@ _DIRECT_DEFAULTS = {
 }
 
 
+# optimization-round2: native worker tuning, read from the environment by app/asr_tuning.py.
+_NATIVE_TUNING_KEYS = {
+    "BREEZE_ASR_AUDIO_CONTEXT_MIN", "BREEZE_ASR_TEMPERATURE_INC", "BREEZE_ASR_FLASH_ATTN",
+    "BREEZE_ASR_MAX_TOKENS", "BREEZE_ASR_REPEAT_GUARD", "BREEZE_ASR_TIMINGS", "BREEZE_ASR_PRIORITY",
+    "BREEZE_ASR_ECOQOS_OFF",
+}
+_VAD_TRIM_DEFAULTS = {"BREEZE_VAD_TRIM": "1", "BREEZE_VAD_TRIM_PAD_MS": "200"}
+
+
 def test_env_example_matches_code_defaults():
     """Every key install_runtime would copy has to match the code default.
 
@@ -83,7 +92,15 @@ def test_env_example_matches_code_defaults():
     for name in Settings.__dataclass_fields__:
         assert getattr(bare, name) == getattr(builtin, name), name
     loaded = Settings.from_env({}, env_file=example_path)
+    from app.asr_tuning import NativeTuning
     for key, value in example.items():
+        if key in _NATIVE_TUNING_KEYS:
+            # Read by app/asr_tuning.py / pipeline from the environment, not by Settings.
+            assert NativeTuning.from_env({key: value}) == NativeTuning.from_env({}), key
+            continue
+        if key in _VAD_TRIM_DEFAULTS:
+            assert value == _VAD_TRIM_DEFAULTS[key], key
+            continue
         if key in _DIRECT_DEFAULTS:
             assert value == _DIRECT_DEFAULTS[key], key
             continue
@@ -102,7 +119,7 @@ def test_env_example_matches_code_defaults():
             assert bare.data_path == ""
             continue
         assert getattr(loaded, name) == getattr(bare, name), name
-    unknown = set(example) - set(_DIRECT_DEFAULTS) - set(_INSTALL_PROFILE)
+    unknown = set(example) - set(_DIRECT_DEFAULTS) - set(_INSTALL_PROFILE) - _NATIVE_TUNING_KEYS - set(_VAD_TRIM_DEFAULTS)
     # Any other key must be one Settings.from_env actually reads. A typo would
     # have passed the per-key check above, because an unread key changes nothing.
     known = {

@@ -8,7 +8,9 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
+from urllib.parse import quote
 from contextlib import asynccontextmanager
 from email.utils import formatdate
 from mimetypes import guess_type
@@ -22,8 +24,17 @@ from app.aio import cancellation_pending, wait_bounded
 from app.asr import CliAsr, ResidentAsr
 from app.native_asr import NativeResidentAsr
 from app.audio import AudioError, convert_to_wav, ffmpeg_bin, wav_duration_seconds
-from app.auth import audience_origin_allowed, new_host_token, require_host, require_local_host, same_secret
+from app.draft_hub import DraftHub
+from app.share import machine_share_name
+from app.hw_routes import make_router as make_hw_router
+from app.overlay_routes import router as overlay_router
+from app.visual_routes import VisualHub, build_visual_router
+from app.mt_backend import TargetLangError, validate_tgt_lang
+from app import hw_tune
+from app.asr_gpu import GpuWithCpuFallback, build_asr as build_gpu_or_cpu_asr, gpu_status as asr_gpu_status
+from app.auth import audience_origin_allowed, host_is_allowed, new_host_token, origin_is_allowed, require_host, require_local_host, same_secret
 from app.dispatch import ListenerSlot, RoomBus, for_listener
+from app.glossary_ja import validate_terms_ja   # round4 #7: ja/reading (glossary.py untouched)
 from app.glossary import (
     GLOSSARY_MAX_BODY,
     LEGACY_BOX_LIMIT,
@@ -40,6 +51,9 @@ from app.share import list_share_hosts, listen_url
 from app.store import CaptionStore
 from app.textutil import export_text, scrub_caption, strict_legacy_rows, utf8_text
 from app.translate import Translator
+from app.translate_config import build_translator
+from app.ledger import ledger_from_env
+from app.tm import tm_from_env
 
 class GlossaryConflict(Exception):
     """The room glossary changed before this write. `version` is the one still stored."""
@@ -98,7 +112,8 @@ DEFAULT_MODEL = ROOT / "models" / "ggml-breeze-asr-25-q5_0.bin"
 DEFAULT_WHISPER = ROOT / "tools" / "whisper-cli.exe"
 DEFAULT_SERVER = ROOT / "tools" / "whisper-server.exe"
 TMP = ROOT / "tmp"
-PROMPT = "以下是台灣國語的句子，請用繁體中文輸出。常見專有名詞：般若、菩提心、空性、因緣。這是提示偏置，不保證鎖詞。"
+PROMPT = "以下是台灣國語的句子，請用繁體中文輸出。常見專有名詞：般若、菩提心、空性、因緣。"
+# round3 C8: no note to humans inside the prompt; Whisper reads it as preceding speech.
 
 _TRACKED: list[FastAPI] = []
 # First 8 hex digits of the file's sha256. Long enough to bust a cache, short enough for a URL.
@@ -274,9 +289,9 @@ def rss_bytes() -> int:
 
 
 class Conn:
-    def __init__(self, ws: WebSocket, maxsize: int):
+    def __init__(self, ws: WebSocket, maxsize: int, on_sent=None):
         self.ws = ws
-        self.slot = ListenerSlot(ws.send_json, maxsize=maxsize)
+        self.slot = ListenerSlot(ws.send_json, maxsize=maxsize, on_sent=on_sent)
         self.slot.last_pong = time.monotonic()
         self.client_id = ""
         self.supplement = False
@@ -743,9 +758,14 @@ async def _push_form(request: Request, settings: Settings):
         sent = True
         return {"type": "http.request", "body": body, "more_body": False}
 
-    capped = Request(request.scope, replay)
+    scope = request.scope
+    def parse_in_worker():
+        async def parse():
+            capped = Request(scope, replay)
+            return await capped.form(max_files=1, max_fields=16, max_part_size=_FIELD_MAX)
+        return asyncio.run(parse())
     try:
-        return await capped.form(max_files=1, max_fields=16, max_part_size=_FIELD_MAX)
+        return await asyncio.to_thread(parse_in_worker)
     except HTTPException:
         raise
     except Exception as exc:
@@ -775,6 +795,16 @@ def _optional_ms(form, request: Request, name: str) -> int | None:
     if value > _MAX_SEGMENT_MS:
         return _MAX_SEGMENT_MS
     return value
+
+
+def _wall_ms(form, request: Request, name: str) -> int | None:
+    """Host wall clock (epoch ms) for latency only. Out of a sane range = no sample."""
+    raw = _field(form, request, name)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if 1_500_000_000_000 < value < 4_000_000_000_000 else None
 
 
 def _public_result(done: Segment) -> JSONResponse:
@@ -825,28 +855,58 @@ class _ReferrerPolicy:
         await self.app(scope, receive, send_policy)
 
 
-def create_app(settings: Settings | None = None, asr=None, translator: Translator | None = None, decoder=None) -> FastAPI:
+def _translate_configured(translator) -> bool:
+    configured = getattr(translator, "configured", None)
+    if isinstance(configured, bool):
+        return configured
+    return bool(translator.key)
+
+
+def _zen_db_path():
+    try:
+        from app.admin.db import default_db_path
+        return default_db_path()
+    except Exception:
+        return None
+
+
+# Captions with settled Chinese text (with or without the translation) feed visual V2.
+VISUAL_FINAL_STATUSES = frozenset({"zh_ready", "ready", "translate_failed", "term_violation"})
+
+
+def create_app(settings: Settings | None = None, asr=None, translator: Translator | None = None, decoder=None,
+               draft_factory=None) -> FastAPI:
     if settings is None:
         fill_process_environ()
         settings = Settings.from_env()
     token = new_host_token()
-    translator = translator or Translator(
-        enabled=settings.translate,
-        key=os.getenv("OPENAI_API_KEY", ""),
-        token_budget=settings.token_budget,
-    )
+    injected_translator = translator is not None
+    # BREEZE_TRANSLATE_ENGINE=local (default: Ollama on loopback) or openai (legacy cloud).
+    # A non-loopback local URL raises here so the misconfiguration is visible at start.
+    translator = translator or build_translator(settings)
+    # zen.sqlite3 ledger (opt-in: ZEN_LEDGER=1). Never on the caption path: submit() only queues.
+    ledger = ledger_from_env()
+    ledger.engine = str(getattr(translator, "engine", "") or "")
+    ledger.model = str(getattr(translator, "model", "") or "")
+    if not injected_translator:
+        # Translation memory (opt-in: BREEZE_TM=1). Reads zen.sqlite3; a missing file = no TM.
+        translator = tm_from_env(translator, ledger.path or _zen_db_path(), ledger=ledger)
     model = Path(settings.model_path) if settings.model_path else DEFAULT_MODEL
     whisper = Path(settings.whisper_path) if settings.whisper_path else DEFAULT_WHISPER
     resident_error = ""
     book = RoomBook(settings.max_rooms, settings.room_idle_s)
     bus = RoomBus(settings.history_limit, caption_cap=getattr(settings, "room_caption_cap", 5000))
     store = CaptionStore(settings.data_path or None)
+    visual_hub = VisualHub.from_env()          # V2 visuals (aitest): off unless BREEZE_VISUAL_LLM_* set
     if asr is None:
         if settings.asr_mode == "native":
-            asr = NativeResidentAsr(model, threads=settings.asr_threads,
-                startup_timeout_s=settings.resident_startup_s, inference_timeout_s=settings.asr_timeout_s,
-                audio_context=settings.asr_audio_context, beam_size=settings.asr_beam_size, best_of=settings.asr_best_of)
-            started = asr.start()
+            def _cpu_worker():
+                return NativeResidentAsr(model, threads=settings.asr_threads,
+                    startup_timeout_s=settings.resident_startup_s, inference_timeout_s=settings.asr_timeout_s,
+                    audio_context=settings.asr_audio_context, beam_size=settings.asr_beam_size,
+                    best_of=settings.asr_best_of)
+            # Opt-in GPU path (BREEZE_ASR_GPU=vulkan + BREEZE_WHISPER_DIR); self-test, CPU fallback.
+            asr, started = build_gpu_or_cpu_asr(_cpu_worker, model)
             if not started.ok:
                 resident_error = started.error
         elif settings.asr_mode == "resident":
@@ -907,6 +967,9 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             hosts.append(chosen)
         if settings.share_host:
             hosts.append(settings.share_host)
+        name = machine_share_name()
+        if name:
+            hosts.append(name)          # round4 #6: the 「用名稱連線」 QR
         return tuple(hosts)
 
     def _load_replay_floor(room_id: str) -> float | None:
@@ -1047,12 +1110,30 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             if snap is None:
                 return None
             _fanout(snap)
+            try:
+                # aitest V2 takes Segment.public()-style "final" events; the bus snapshot is
+                # type "caption". Screenshot find: feeding it raw meant no diagram was ever made.
+                if (snap.get("type") == "caption" and str(snap.get("zh") or "").strip()
+                        and snap.get("status") in VISUAL_FINAL_STATUSES):
+                    visual_hub.feed({**snap, "type": "final"})   # non-blocking; upserts by id
+            except Exception:
+                logging.getLogger("breeze.server").exception("visual feed failed")
             if store.enabled and snap.get("id") and snap.get("type") not in {"captions_cleared", "caption_deleted", "captions_expired"}:
                 store.submit_save(snap)
+            _ledger_submit(snap, event)
             return snap
         except Exception:
             logging.getLogger("breeze.server").exception("caption publish failed")
             return None
+
+    def _ledger_submit(snap: dict, event: dict) -> None:
+        # Ledger-only fields (not in the bus snapshot, never sent to listeners).
+        try:
+            if ledger.enabled:
+                extra = {k: event[k] for k in ("en_origin", "en_merged_from", "speech_ratio", "ids") if k in event}
+                ledger.submit({**snap, **extra} if extra else snap)
+        except Exception:
+            logging.getLogger("breeze.server").exception("ledger submit failed")
 
     def _release_room(room_id: str) -> None:
         """Idle or close drops runtime, not captions that are still inside the ttl."""
@@ -1076,6 +1157,10 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         else:
             bus.drop(room_id)
         pipeline.drop_room(room_id)
+        try:
+            asyncio.get_running_loop().create_task(visual_hub.close_room(room_id))
+        except RuntimeError:
+            pass
         if retained:
             pipeline.note_retained_order(room_id, retained)
         _seal_replay(room_id)
@@ -1189,10 +1274,18 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             await asyncio.gather(*pending, return_exceptions=True)
         tasks.clear()
         close_jobs.clear()
+        try:
+            await visual_hub.stop()
+        except Exception:
+            logging.getLogger("breeze.server").exception("visual hub stop failed")
         await pipeline.aclose()
         if hasattr(asr, "close"):
             asr.close()
         store.close()
+        try:
+            await asyncio.to_thread(ledger.close)
+        except Exception:
+            logging.getLogger("breeze.server").exception("ledger close failed")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -1234,6 +1327,36 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
 
     static_files = RevalidatingStaticFiles(directory=STATIC)
     app.mount("/static", static_files, name="static")
+    # Teammate routers (integrator wiring, grok/integrate):
+    app.include_router(overlay_router)                                   # fullstack: OBS /overlay
+    app.include_router(make_hw_router(lambda r: require_host(r, token, settings),
+                                      status_fn=lambda **kw: {**hw_tune.status(**kw), "asr_gpu": asr_gpu_status()}))   # perf: /api/hw/status
+
+    def _visual_ws_guard(ws, room_id):
+        if not audience_origin_allowed(ws.headers.get("origin"), ws.headers.get("host", ""), settings,
+                                       _audience_extra_hosts()):
+            return False
+        room = book.get(room_id)
+        return room is None or _listener_authorized(ws, room, ws.query_params.get("k", ""))
+
+    app.state.visual_hub = visual_hub
+    def _visual_trigger_guard(request):
+        # CTO/CISO P2: the manual trigger is a host action. Header-only Bearer token (a cross-site page
+        # cannot attach it without a CORS preflight this app never grants) + allowed Origin, and a
+        # browser's Sec-Fetch-Site: cross-site is refused outright (CSRF).
+        require_host(request, token, settings)
+        if (request.headers.get("sec-fetch-site") or "").lower() == "cross-site":
+            raise HTTPException(status_code=403, detail="這個頁面不能操作主持端")
+
+    def _visual_http_guard(request, room_id):
+        if not host_is_allowed(request.headers.get("host", ""), settings, _audience_extra_hosts()):
+            return False
+        room = book.get(room_id)
+        return room is not None and _listener_authorized(request, room, request.query_params.get("k", ""))
+
+    app.include_router(build_visual_router(visual_hub, ws_guard=_visual_ws_guard,
+                                           http_guard=_visual_http_guard,
+                                           host_guard=_visual_trigger_guard))   # aitest: /visual
     app.state.settings = settings
     app.state.token = token
     app.state.pipeline = pipeline
@@ -1241,6 +1364,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
     app.state.room_book = book
     app.state.bus = bus
     app.state.translator = translator
+    app.state.ledger = ledger
     app.state.asr = asr
     app.state.store = store
     app.state.share_override = share_override
@@ -1286,8 +1410,9 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         host_view = _host_authorized(request)
         url = share_for(room_id, include_key=host_view)
-        resident_ready = isinstance(asr, ResidentAsr) and await asyncio.to_thread(asr.health)
-        asr_ready = resident_ready if isinstance(asr, ResidentAsr) else (whisper.is_file() and model.is_file() if isinstance(asr, CliAsr) else True)
+        gpu_wrapped = isinstance(asr, GpuWithCpuFallback)
+        resident_ready = (isinstance(asr, ResidentAsr) or gpu_wrapped) and await asyncio.to_thread(asr.health)
+        asr_ready = resident_ready if (isinstance(asr, ResidentAsr) or gpu_wrapped) else (whisper.is_file() and model.is_file() if isinstance(asr, CliAsr) else True)
         payload = {
             "room": room_id,
             "listen_url": url,
@@ -1299,17 +1424,22 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "whisper": whisper.exists(),
             "model": model.exists(),
             "ffmpeg": ffmpeg_bin(ROOT) is not None,
-            "translate_configured": bool(translator.key) and settings.translate,
+            "translate_configured": _translate_configured(translator) and settings.translate,
             "translate_verified": False,
             "translate_label": translator.status_label(),
-            "asr_mode": "native" if isinstance(asr, NativeResidentAsr) else ("resident" if isinstance(asr, ResidentAsr) else "cli"),
+            "asr_mode": ("native-gpu" if asr.on_gpu else "native") if gpu_wrapped else ("native" if isinstance(asr, NativeResidentAsr) else ("resident" if isinstance(asr, ResidentAsr) else "cli")),
             "asr_ready": asr_ready,
+            **(asr.restart_status() if isinstance(asr, (NativeResidentAsr, GpuWithCpuFallback)) else {"asr_degraded": False}),
+            "asr_gpu": asr_gpu_status(),
             "model_reloads_each_segment": isinstance(asr, CliAsr),
             "resident_error": getattr(asr, "last_error", "") or resident_error,
             "host_token": None,
             "queue": pipeline.stats(),
             "listeners": _seated_listeners(book.rooms.values()),
             "storage": store.enabled,
+            "draft_available": drafts_available,
+            "tgt_lang": (book.get(room_id) or {}).get("tgt_lang") or pipeline.targets.default,
+            "listen_url_name": share_by_name(room_id, include_key=host_view),
             "storage_recovered": bool(getattr(store, "recovered", False)),
         }
         if host_view:
@@ -1325,13 +1455,92 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         error = getattr(asr, "last_error", "") or resident_error
         return JSONResponse({"service": "breeze-live-room", "ready": ready, "asr_ready": asr_ready, "error": error, "instance_id": os.getenv("BREEZE_DESKTOP_INSTANCE", "")}, status_code=200 if ready else 503, headers={"Cache-Control": "no-store"})
 
+    def share_by_name(room_id: str, *, include_key: bool = False) -> str | None:
+        name = machine_share_name()
+        if not name:
+            return None
+        key = _listen_key_of(room_id) if include_key else ""
+        url = f"{settings.share_scheme}://{name}:{settings.port}/r/{quote(room_id)}"
+        return url + ("?k=" + quote(key, safe="") if key else "")
+
+    def _qr_png(url: str) -> Response:
+        import qrcode
+        img = qrcode.make(url)
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return Response(buf.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    # round4 #6: download hand-off. Host-only to create; the phone link works once, for 10 min,
+    # for exactly one room + format. Unknown/expired/used -> 404 (never 401: not a guessable door).
+    handoffs: dict[str, tuple[str, str, float]] = {}
+    HANDOFF_TTL_S, HANDOFF_MAX = 600.0, 8
+
+    def _handoff_prune(now: float) -> None:
+        for tok in [t for t, (_, _, exp) in handoffs.items() if exp <= now]:
+            handoffs.pop(tok, None)
+        while len(handoffs) >= HANDOFF_MAX:
+            handoffs.pop(min(handoffs, key=lambda t: handoffs[t][2]))
+
+    @app.post("/api/export-handoff")
+    async def export_handoff(request: Request) -> dict:
+        require_host(request, token, settings)
+        body = await _json(request)
+        room_id = validate_room_id(str(body.get("room_id") or "class"))
+        kind = str(body.get("kind") or "srt")
+        if kind not in {"txt", "json", "srt", "vtt"}:
+            raise HTTPException(status_code=400, detail="不支援的匯出格式")
+        now = time.monotonic()
+        _handoff_prune(now)
+        tok = secrets.token_urlsafe(16)
+        handoffs[tok] = (room_id, kind, now + HANDOFF_TTL_S)
+        base = share_for(room_id)
+        url = None
+        if base:
+            url = base.split("/r/", 1)[0] + "/h/" + tok
+        return {"ok": True, "token": tok, "url": url, "expires_in": int(HANDOFF_TTL_S), "single_use": True}
+
+    @app.get("/api/export-handoff/qr")
+    async def export_handoff_qr(request: Request, token_id: str = "") -> Response:
+        require_host(request, token, settings)
+        entry = handoffs.get(token_id)
+        base = share_for(entry[0]) if entry else None
+        if not entry or not base:
+            raise HTTPException(status_code=404, detail="找不到")
+        return _qr_png(base.split("/r/", 1)[0] + "/h/" + token_id)
+
+    @app.get("/h/{tok}")
+    async def handoff_download(tok: str) -> Response:
+        now = time.monotonic()
+        entry = handoffs.pop(tok, None)            # single use: gone even if the export fails below
+        if not entry or entry[2] <= now:
+            raise HTTPException(status_code=404, detail="找不到")
+        room_id, kind, _ = entry
+        if store.enabled:
+            events = await asyncio.to_thread(store.room_rows, room_id)
+        else:
+            events = bus.caption_state(room_id)
+        try:
+            payload = export_text(events, kind)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="找不到") from exc
+        media = "application/json" if kind == "json" else "text/plain; charset=utf-8"
+        return Response(payload, media_type=media, headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="{room_id}.{kind}"'})
+
     @app.get("/api/qr")
-    async def qr(request: Request, room_id: str = "class") -> Response:
+    async def qr(request: Request, room_id: str = "class", variant: str = "ip") -> Response:
         try:
             room_id = validate_room_id(room_id)
         except RoomIdError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        url = share_for(room_id, include_key=_host_authorized(request))
+        authorized = _host_authorized(request)
+        if variant == "name":
+            url = share_by_name(room_id, include_key=authorized)
+            if not url:
+                return JSONResponse(status_code=409, content={"ok": False, "detail": "這台電腦沒有可用的名稱"})
+            return _qr_png(url)
+        url = share_for(room_id, include_key=authorized)
         if not url:
             return JSONResponse(status_code=409, content={"ok": False, "detail": "尚無可供其他裝置使用的連結"})
         import qrcode
@@ -1345,13 +1554,23 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         require_host(request, token, settings)
         body = await _json(request)
         room_id = validate_room_id(str(body.get("room_id") or "class"))
+        lang = None
+        if body.get("tgt_lang") not in (None, ""):
+            try:
+                lang = validate_tgt_lang(str(body.get("tgt_lang")))     # round4 #7: en | ja per room
+            except TargetLangError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         room = ensure_room(room_id)
+        if lang:
+            room["tgt_lang"] = lang
         await ensure_hydrated(room_id)
         return {
             "ok": True,
             "room": room_id,
+            "tgt_lang": room.get("tgt_lang") or pipeline.targets.default,
             "listen_url": share_for(room_id, include_key=True),
             "listen_key": room.get("listen_key") or "",
+            "paused": pipeline.is_paused(room_id),
         }
 
     @app.post("/api/rooms/touch")
@@ -1400,6 +1619,62 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         book.set_session_active(room_id, bool(body.get("active")))
         _announce_live(room_id)
         return {"ok": True}
+
+    # round3 §1.3-1 private pause: drops queued + in-flight slices; listeners see "paused".
+    def _announce_pause(room_id: str, paused: bool) -> None:
+        room = book.get(room_id)
+        if room is None:
+            return
+        note = {"type": "paused" if paused else "resumed", "room_id": room_id}
+        dead = []
+        for conn in list(room["listeners"]):
+            if not conn.slot.offer(note):
+                dead.append(conn)
+        _drop_unsendable(room, dead)
+
+    def _publish_draft(event: dict) -> None:
+        # round4 #5: drafts are screen-only. Never into bus history, store, ledger or TM, and a
+        # listener whose queue is nearly full simply skips a draft instead of being dropped.
+        room = book.get(event["room_id"])
+        if room is None:
+            return
+        for conn in list(room["listeners"]):
+            q = getattr(conn.slot, "q", None)
+            if q is not None and q.maxsize and q.qsize() >= max(1, q.maxsize // 2):
+                continue
+            conn.slot.offer(event)
+
+    drafts = DraftHub(draft_factory, publish=_publish_draft, is_paused=pipeline.is_paused,
+                      latency=pipeline.latency)
+
+    def _listener_sent(msg: dict) -> None:
+        # CTO M-03: A7 = ASR done -> first completed listener write of that caption; B1 closes on the
+        # first draft write of a seq. Each closes once (finish pops the mark).
+        key = msg.get("id") if isinstance(msg, dict) else None
+        if not key or not msg.get("zh"):
+            return
+        pipeline.latency.finish("B1" if msg.get("type") == "draft" else "A7", str(key))
+    app.state.drafts = drafts
+
+    @app.post("/api/rooms/{room_id}/pause")
+    async def room_pause(room_id: str, request: Request) -> dict:
+        require_host(request, token, settings)
+        room_id = validate_room_id(room_id)
+        if book.get(room_id) is None:
+            ensure_room(room_id)
+        out = pipeline.pause_room(room_id)
+        drafts.drop_room(room_id)                # round4 #5: in-flight draft text dies too
+        _announce_pause(room_id, True)
+        logging.getLogger("breeze.server").info("private pause room=%s voided=%d", room_id, out["voided"])
+        return {"ok": True, "paused": True, **out}
+
+    @app.post("/api/rooms/{room_id}/resume")
+    async def room_resume(room_id: str, request: Request) -> dict:
+        require_host(request, token, settings)
+        room_id = validate_room_id(room_id)
+        out = pipeline.resume_room(room_id)
+        _announce_pause(room_id, False)
+        return {"ok": True, "paused": False, **out}
 
     @app.post("/api/session/end")
     async def session_end(request: Request) -> dict:
@@ -1465,10 +1740,18 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
         session_id = validate_session_id(str(body.get("session_id") or ""))
         seq = int(body.get("seq") or 0)
         zh = body.get("zh")
+        en = body.get("en")
         # A long zh is normalized against every glossary span. Cap it before that work.
         if isinstance(zh, str) and len(zh.strip()) > _RETRANSLATE_ZH_MAX:
             raise HTTPException(status_code=413, detail=f"中文超過 {_RETRANSLATE_ZH_MAX} 字，已拒絕")
+        if en is not None and (not isinstance(en, str) or not en.strip() or len(en) > _RETRANSLATE_ZH_MAX * 4):
+            raise HTTPException(status_code=400, detail="en 必須是非空字串")
         try:
+            if isinstance(en, str):
+                # Human correction pushed from the admin backend: publish as-is, no LLM (QA 全端 B1).
+                segment = await pipeline.override_translation(room_id, session_id, seq, en.strip(),
+                                                              zh if isinstance(zh, str) else None)
+                return host_segment_payload(segment, ok=True)
             segment = await pipeline.retranslate(room_id, session_id, seq, zh if isinstance(zh, str) else None)
         except PipelineError as exc:
             raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
@@ -1591,7 +1874,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                 status_code=400,
                 content={"ok": False, "accepted": [], "rejected": [{"line": 0, "reason": "缺少 terms"}]},
             )
-        accepted, rejected = validate_terms(body.get("terms"))
+        accepted, rejected = validate_terms_ja(body.get("terms"))
         if rejected:
             return JSONResponse(
                 status_code=400,
@@ -1714,10 +1997,13 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "listeners": _seated_listeners(book.rooms.values()),
             "rooms": book._active_count(),
             "rss_bytes": rss_bytes(),
+            "asr_gpu": asr_gpu_status(),           # opt-in GPU path: active / fell back / why
             "tokens_used": translator.tokens_used,
             "price": translator.price_note(),
             "store_errors": store.errors,
             "storage_recovered": bool(getattr(store, "recovered", False)),
+            **ledger.stats(),
+            **(translator.stats() if callable(getattr(type(translator), "stats", None)) else {}),
         }
 
     @app.get("/api/export")
@@ -1770,6 +2056,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             pipeline.delete_segment(room_id, parsed_session, parsed_seq)
             event = bus.delete_caption(room_id, segment_id, parsed_session, parsed_seq)
             _fanout(event)
+            _ledger_submit(event, event)         # QA 全站測試長 D1
             return {"ok": True, "deleted": int(removed or 0), "id": segment_id}
         # The same lock as a glossary PUT, held until memory is cleared, so a
         # write that read the old version cannot land after this reset.
@@ -1789,6 +2076,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             pipeline.invalidate_room(room_id)
         event = bus.clear_room(room_id)
         _fanout(event)
+        _ledger_submit(event, event)             # QA 全站測試長 D1
         room = book.get(room_id)
         if room is not None:
             room["history"] = []
@@ -1836,12 +2124,17 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                 if t0_ms >= _MAX_SEGMENT_MS:
                     t0_ms = _MAX_SEGMENT_MS - 1
                 t1_ms = t0_ms + 1
+            drafts.note_pushed(room_id, session_id, seq)     # round4 #5: drafts move to seq+1
             segment = Segment(
                 room_id=room_id,
                 session_id=session_id,
                 seq=seq,
                 t0_ms=t0_ms,
                 t1_ms=t1_ms,
+                t1_wall_ms=_wall_ms(form, request, "t1_wall_ms"),     # round4 #3 (A2)
+                # round4 #7: the session keeps the room's target language from its first slice
+                tgt_lang=pipeline.session_lang(room_id, session_id, seq,
+                                               (book.get(room_id) or {}).get("tgt_lang")),
             )
             held = reserved
             reserved = False
@@ -1912,6 +2205,59 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             pass
         await ws.close(code=code)
 
+    drafts_available = drafts.available()
+
+    @app.websocket("/ws/draft")
+    async def draft_stream(ws: WebSocket, room_id: str = "class", session_id: str = "") -> None:
+        """round4 #5: host PCM16 16 kHz mono -> draft captions. First frame must be {"token": host}."""
+        await ws.accept()
+        origin = ws.headers.get("origin")
+        try:
+            room_id = validate_room_id(room_id)
+            session_id = validate_session_id(session_id)
+        except RoomIdError:
+            await ws.close(code=1008, reason="rejected")
+            return
+        if origin and not origin_is_allowed(origin, settings):
+            await ws.close(code=1008, reason="origin")
+            return
+        try:
+            hello = await asyncio.wait_for(ws.receive_json(), timeout=5)
+        except Exception:
+            await ws.close(code=1008, reason="auth")
+            return
+        supplied = str((hello or {}).get("token") or "")
+        if not same_secret(supplied, token):
+            await ws.close(code=1008, reason="auth")
+            return
+        sess = drafts.open(room_id, session_id) if drafts_available else None
+        if sess is None:
+            await ws.send_json({"type": "draft_off"})
+            await ws.close(code=1000, reason="draft_off")
+            return
+        await ws.send_json({"type": "draft_on", "seq": sess.seq})
+        try:
+            while True:
+                msg = await ws.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+                data = msg.get("bytes")
+                if not data:
+                    continue
+                try:
+                    drafts.emit(await asyncio.to_thread(drafts.feed, sess, data))
+                except ValueError:
+                    await ws.close(code=1009, reason="too_large")
+                    break
+                except Exception:
+                    logging.getLogger("breeze.draft").exception("draft feed failed room=%s", room_id)
+                    await ws.close(code=1011, reason="draft_error")
+                    break
+        except WebSocketDisconnect:
+            pass
+        finally:
+            drafts.close(sess)
+
     @app.websocket("/ws/listen")
     async def listen(ws: WebSocket, room_id: str = "class", cursor: int = 0, replay: int = 0, k: str = "", cid: str = "", supplement: int = 0) -> None:
         try:
@@ -1973,7 +2319,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             })
             await ws.close(code=1013)
             return
-        conn = Conn(ws, settings.listener_queue)
+        conn = Conn(ws, settings.listener_queue, on_sent=_listener_sent)
         conn.client_id = client_id
         conn.supplement = supplement_flag
         room["listeners"].add(conn)
@@ -2001,6 +2347,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "room_id": room_id,
             "epoch": bus.epoch(room_id),
             "host_live": bool(room.get("session_active")),
+            "paused": pipeline.is_paused(room_id),
         }
         wants_backfill = int(replay or 0) == 1 or (cursor > 0 and bool(resumed.get("gap")))
         if wants_backfill:

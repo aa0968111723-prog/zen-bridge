@@ -40,6 +40,8 @@ jobs:
           python -m pytest
           node tests/recorder_machine.test.mjs
           node tests/room_client.test.mjs
+          node tests/recorder_private_pause.test.mjs
+          node tests/audience_private_pause.test.mjs
       - run: pnpm build
         env:
           DEPLOY_TARGET: zeabur
