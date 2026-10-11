@@ -16,17 +16,19 @@ function inferredTarget(variables, zeaburEntry = false) {
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }
-assert.equal(inferredTarget({}), 'cloudflare');
+assert.equal(inferredTarget({}), 'local');
+assert.equal(inferredTarget({ DEPLOY_TARGET: 'cloudflare' }), 'cloudflare');
+assert.equal(inferredTarget({}, false), 'local');
 assert.equal(inferredTarget({ DATABASE_URL: 'present' }), 'zeabur');
 assert.equal(inferredTarget({ DATABASE_URL: 'present', DEPLOY_TARGET: 'cloudflare' }), 'cloudflare');
 assert.equal(inferredTarget({}, true), 'zeabur');
 
-for (const target of ['', crypto.randomUUID(), 'cloudflare']) {
+for (const target of ['', crypto.randomUUID(), 'cloudflare', 'local']) {
   const result = spawnSync(process.execPath, ['--experimental-strip-types', 'scripts/start.mjs', '--zeabur'],
     { env: { ...cleanEnv, DEPLOY_TARGET: target }, encoding: 'utf8' });
   assert.notEqual(result.status, 0);
   assert.ok(result.stderr.includes('DEPLOY_TARGET'));
-  if (target && target !== 'cloudflare') assert.ok(!result.stderr.includes(target));
+  if (target && target !== 'cloudflare' && target !== 'local') assert.ok(!result.stderr.includes(target));
 }
 
 for (const name of ['TRANSLATION_PROVIDER', 'HERMES_API_URL']) {
