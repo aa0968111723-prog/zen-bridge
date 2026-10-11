@@ -78,7 +78,7 @@ def _vulkan_devices() -> list[str]:
     return list(dict.fromkeys(names))
 
 
-def _power_plan() -> str:
+def _power_plan() -> tuple[str, str]:
     output = _run(["powercfg", "/getactivescheme"])
     match = re.search(
         r"\b([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\b"
@@ -87,7 +87,7 @@ def _power_plan() -> str:
     )
     if match is None:
         raise ValueError("powercfg returned no active scheme")
-    return match.group(2) or match.group(1)
+    return match.group(2) or match.group(1), match.group(1).lower()
 
 
 def probe() -> dict:
@@ -104,6 +104,7 @@ def probe() -> dict:
         "on_ac_power": None,
         "battery_percent": None,
         "power_plan": None,
+        "power_plan_guid": None,
         "vulkan_devices": [],
         "notes": [],
     }
@@ -155,7 +156,9 @@ def probe() -> dict:
 
         step("Windows CPU flags", windows_flags)
         result["notes"].append("Windows feature API cannot determine fma, f16c or VNNI flags")
-        result["power_plan"] = step("power plan", _power_plan)
+        plan = step("power plan", _power_plan)
+        if plan is not None:
+            result["power_plan"], result["power_plan_guid"] = plan
     elif result["os"] == "Linux":
         info = step("Linux CPU info", _linux_cpuinfo)
         if info is not None:
