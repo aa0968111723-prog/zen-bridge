@@ -120,17 +120,19 @@ def diarize(request):
 
 
 def evaluate(request):
-    import torch
-    from comet import load_from_checkpoint
     checkpoint=Path(request['checkpoint'])
     if not checkpoint.is_file():
         raise ValueError('COMET checkpoint not downloaded')
+    os.environ['HF_HUB_CACHE']=str(checkpoint.parents[1]/'encoder-cache')
+    os.environ['HF_HUB_OFFLINE']='1'
+    import torch
+    from comet import load_from_checkpoint
     rows=request['rows']
     if not isinstance(rows,list) or not 1<=len(rows)<=64 or any(not isinstance(r,dict) or
             any(not isinstance(r.get(k),str) or len(r[k])>8000 for k in ('src','mt')) for r in rows):
         raise ValueError('Invalid evaluation batch')
     torch.set_num_threads(2)
-    model=load_from_checkpoint(str(checkpoint))
+    model=load_from_checkpoint(str(checkpoint),local_files_only=True)
     result=model.predict(rows,batch_size=4,gpus=0,num_workers=0)
     return {'scores':list(result.scores),'system_score':float(result.system_score)}
 

@@ -28,6 +28,28 @@ def verify_file(path,size,lfs_sha256=None,blob_id=None):
         raise ValueError('Model file checksum mismatch')
 
 
+def fetch_comet_encoder(root):
+    from huggingface_hub import HfApi,snapshot_download
+    repo='microsoft/infoxlm-large'
+    revision='d616d637f0720deda963cebbfc630657d2b7d3ae'
+    names=['config.json','sentencepiece.bpe.model','tokenizer.json']
+    info=HfApi().model_info(repo,revision=revision,files_metadata=True,timeout=30)
+    cache=root/'encoder-cache'
+    snapshot=Path(snapshot_download(repo_id=repo,revision=revision,cache_dir=str(cache),
+                                   allow_patterns=names,max_workers=2))
+    specs={entry.rfilename:entry for entry in info.siblings}
+    for name in names:
+        entry=specs[name]
+        verify_file(snapshot/name,entry.size,getattr(entry.lfs,'sha256',None),entry.blob_id)
+    # COMET resolves its encoder by repo name. Pin that reference in its own cache,
+    # without changing the cache used by Grok or Hermes.
+    refs=cache/'models--microsoft--infoxlm-large/refs'
+    refs.mkdir(parents=True,exist_ok=True)
+    (refs/'main').write_text(revision,encoding='utf-8')
+    (root/'encoder-origin.json').write_text(json.dumps({'repo':repo,'revision':revision,
+                                                    'status':'verified','files':names}),encoding='utf-8')
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('model',choices=MODELS)
@@ -41,7 +63,7 @@ def main():
         print(json.dumps({'status':'hf_login_required','model':args.model}))
         return 2
     repo,folder=MODELS[args.model]
-    info=HfApi().model_info(repo,revision=REVISIONS[args.model],files_metadata=True)
+    info=HfApi().model_info(repo,revision=REVISIONS[args.model],files_metadata=True,timeout=30)
     root=Path(os.getenv('LOCALAPPDATA',Path.home()/'AppData'/'Local'))/'ZenBridge/models'/folder
     root.mkdir(parents=True,exist_ok=True)
     snapshot_download(repo_id=repo,revision=info.sha,local_dir=str(root),
@@ -53,6 +75,8 @@ def main():
         sha=getattr(entry.lfs,'sha256',None)
         verify_file(root/name,entry.size,sha,entry.blob_id)
         verified.append({'name':name,'size':entry.size,'sha256':sha,'git_blob':entry.blob_id})
+    if args.model=='cometkiwi':
+        fetch_comet_encoder(root)
     metadata={'repo':repo,'revision':info.sha,'license':getattr(info.card_data,'license',None),
               'status':'verified','files':verified}
     (root/'zen-model-origin.json').write_text(json.dumps(metadata,indent=2),encoding='utf-8')
