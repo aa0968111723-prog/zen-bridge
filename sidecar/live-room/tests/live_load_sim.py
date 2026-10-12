@@ -128,6 +128,7 @@ class Result:
     max_queue: int = 0
     checkpoint: dict = field(default_factory=dict)
     periodic_truncate: dict = field(default_factory=dict)
+    trunc_samples_s: list = field(default_factory=list)
     lock_probe: dict = field(default_factory=dict)
     wal_bytes_per_commit: float = 0.0
     elapsed_s: float = 0.0
@@ -388,6 +389,7 @@ def run(sc: Scenario, workdir: Path) -> Result:
                   "mean_batch": round(statistics.fmean(led.batch_sizes), 2) if led.batch_sizes else 0}
     res.ledger_lat = _lat(led.lat)
     if sc.truncate_every:
+        res.trunc_samples_s = list(trunc_lat)
         res.periodic_truncate = {"runs": len(trunc_lat), "busy": trunc_busy, **_lat(trunc_lat),
                                  "wal_before_max": max(trunc_wal_before or [0])}
     if sc.reader == "pinned" and led.batch_sizes:

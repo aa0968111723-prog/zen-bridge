@@ -293,8 +293,8 @@ class _Writer:
                 _status[room] = {"room_id": room, "collecting": False, "armed": True, "speaker_id": a["speaker_id"],
                                  "label": a["label"]}
         if not self.recovered:
-            self.recovered = True
             self._recover()
+            self.recovered = True          # 逐字稿落盤後才算恢復完成；寫檔失敗下一輪再試
 
     def _recover(self) -> None:
         """Sessions left open by a crash: close them from what is on disk and write the transcript."""
@@ -310,11 +310,13 @@ class _Writer:
         c = self.c
         rec = recordings.get(c, r["recording_id"]) if r["recording_id"] else None
         audio_s = classaudio.total_seconds(Path(self.root) / rec["dir"] / "audio") if rec else 0
-        c.execute("UPDATE class_sessions SET stopped_at=?, stop_reason=?, audio_s=MAX(audio_s, ?) WHERE id=?",
-                  (time.time(), reason, audio_s, r["id"]))
+        # 先寫逐字稿再標記結束。若先改 stop_reason，Windows 上寫檔還沒完成（或寫檔前當掉）
+        # 就會變成已恢復但沒有 transcript.json，而且下次只會收拾 stopped_at 仍是 NULL 的列。
         if rec:
             recordings.finish(c, self.root, rec["id"])
             self.pending_derive.append(rec["id"])
+        c.execute("UPDATE class_sessions SET stopped_at=?, stop_reason=?, audio_s=MAX(audio_s, ?) WHERE id=?",
+                  (time.time(), reason, audio_s, r["id"]))
 
     def _open(self, room: str, session_id: str) -> _Session | None:
         a = _armed.get(room)
@@ -460,8 +462,8 @@ class _Writer:
         s.event({"type": "end", "reason": reason})
         s.close()
         self._save(s)
+        recordings.finish(self.c, self.root, s.rec["id"])                       # 完整逐字稿先落盤，再標記結束
         self.c.execute("UPDATE class_sessions SET stopped_at=?, stop_reason=? WHERE id=?", (time.time(), reason, s.id))
-        recordings.finish(self.c, self.root, s.rec["id"])                       # 完整逐字稿（JSON／SRT／VTT／TXT）
         self.pending_derive.append(s.rec["id"])
         a = _armed.get(room)
         if a:
