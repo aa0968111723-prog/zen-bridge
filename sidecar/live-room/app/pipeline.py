@@ -2362,7 +2362,8 @@ class Pipeline:
         self._wake(segment.key, segment)
         return self.results.get((room_id, session_id, seq), segment)
 
-    async def retranslate(self, room_id: str, session_id: str, seq: int, zh: str | None = None) -> Segment:
+    async def retranslate(self, room_id: str, session_id: str, seq: int, zh: str | None = None,
+                          *, expected_zh: str | None = None, expected_epoch: int | None = None) -> Segment:
         self.ensure_workers()
         if f"{room_id}:{session_id}:{seq}" in self._sealed.get(room_id, ()):
             raise PipelineError(404, "找不到這段字幕")
@@ -2373,6 +2374,9 @@ class Pipeline:
             raise PipelineError(404, "找不到這段字幕")
         if segment.status in {"cancelled", "missing"}:
             raise PipelineError(409, "這段已取消或缺少，不能重譯")
+        if expected_zh is not None and (segment.zh != expected_zh or segment.en_origin == 'human'
+                or self._tr_epoch.get(segment.key) != expected_epoch):
+            raise PipelineError(409, "字幕已修正，保留目前內容")
         if zh is not None:
             segment.zh_raw = segment.zh_raw or segment.zh
             segment.zh = annotate_question(normalize(zh.strip(), self.terms_for(room_id)))

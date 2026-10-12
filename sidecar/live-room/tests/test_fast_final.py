@@ -92,6 +92,64 @@ def test_env_off_by_default_and_fails_soft(tmp_path):
         fast_final.SherpaOfflineFinal("qwen", None, recognizer=FakeRecognizer(), convert=str)
 
 
+def test_fast_audio_rejects_unbounded_input(tmp_path):
+    with pytest.raises(ValueError, match="30 seconds"):
+        _fast().transcribe(_wav(tmp_path, seconds=31))
+
+
+@pytest.mark.anyio
+async def test_shutdown_waits_for_native_reader_without_applying_correction(tmp_path):
+    import threading
+    started, release = threading.Event(), threading.Event()
+    applied = []
+    class BlockingAsr:
+        def transcribe(self, path, prompt):
+            started.set()
+            assert release.wait(5)
+            assert Path(path).exists()
+            return AsrResult(ok=True, text="晚到校正")
+    async def apply(*args):
+        applied.append(args)
+    c = fast_final.Corrector(BlockingAsr(), "", tmp_path, apply)
+    c.submit("r", "s", 1, _wav(tmp_path).read_bytes(), "原句")
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        closing = asyncio.create_task(c.aclose())
+        await asyncio.sleep(0)
+        assert not closing.done()
+        c.submit("r", "s", 2, b"ignored", "原句")
+    finally:
+        release.set()
+    await closing
+    assert not applied and c.stats()['pending'] == 0
+    assert not list(tmp_path.glob('correct-*'))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('edit', ['zh', 'human_en', 'retranslate'])
+async def test_late_background_correction_cannot_replace_host_edit(edit):
+    from app.pipeline import PipelineError, Segment
+    app = _app(WavAsr(), English())
+    p = app.state.pipeline
+    row = Segment('class', 's1', 1, zh='快稿', status='ready')
+    p.results[row.key] = row
+    epoch = p._next_epoch(row.key)
+    try:
+        if edit == 'zh':
+            row.zh = '人工逐字稿'
+        elif edit == 'human_en':
+            await p.override_translation('class', 's1', 1, 'Human translation')
+        else:
+            p._next_epoch(row.key)
+        before = (row.zh, row.en, row.status)
+        with pytest.raises(PipelineError) as error:
+            await p.retranslate('class', 's1', 1, '晚到校正', expected_zh='快稿', expected_epoch=epoch)
+        assert error.value.status == 409
+        assert (row.zh, row.en, row.status) == before
+    finally:
+        await stop(app)
+
+
 @pytest.mark.anyio
 async def test_corrector_keeps_same_text_replaces_different_and_skips_backlog(tmp_path):
     applied = []

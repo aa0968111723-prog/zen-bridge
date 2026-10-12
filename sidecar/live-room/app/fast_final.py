@@ -26,6 +26,7 @@ import contextvars
 import logging
 import os
 import threading
+import tempfile
 import wave
 from pathlib import Path
 from typing import Callable
@@ -49,6 +50,8 @@ def _pcm_floats(wav: Path) -> list[float]:
     with wave.open(str(wav), "rb") as w:
         if w.getnchannels() != 1 or w.getsampwidth() != 2 or w.getframerate() != SAMPLE_RATE:
             raise ValueError("fast final expects 16 kHz mono 16-bit WAVE")
+        if not 0 < w.getnframes() <= SAMPLE_RATE * 30:
+            raise ValueError("fast final audio must be between 0 and 30 seconds")
         a = array.array("h")
         a.frombytes(w.readframes(w.getnframes()))
     return [x / 32768.0 for x in a]
@@ -71,6 +74,8 @@ class SherpaOfflineFinal:
                 raise FastFinalUnavailable(str(exc)) from exc
         self.convert = convert
         if recognizer is None:
+            from app.speech_extras import bootstrap
+            bootstrap()
             try:
                 import sherpa_onnx  # type: ignore
             except ImportError as exc:
@@ -140,9 +145,13 @@ class Corrector:
         self.skipped = 0
         self.corrected = 0
         self.kept = 0
+        self._closed = False
 
-    def submit(self, room_id: str, session_id: str, seq: int, wav_bytes: bytes, fast_text: str) -> None:
-        self._pending.append((room_id, session_id, seq, wav_bytes, fast_text))
+    def submit(self, room_id: str, session_id: str, seq: int, wav_bytes: bytes, fast_text: str,
+               *, expected_epoch: int | None = None) -> None:
+        if self._closed:
+            return
+        self._pending.append((room_id, session_id, seq, wav_bytes, fast_text, expected_epoch))
         while len(self._pending) > self.max_pending:
             self._pending.pop(0)               # the room has moved on; that line keeps the fast text
             self.skipped += 1
@@ -151,18 +160,29 @@ class Corrector:
 
     async def _run(self) -> None:
         while self._pending:
-            room_id, session_id, seq, wav_bytes, fast_text = self._pending.pop(0)
-            path = self.tmp_dir / f"correct-{room_id}-{session_id}-{seq}.wav"
+            room_id, session_id, seq, wav_bytes, fast_text, expected_epoch = self._pending.pop(0)
+            fd, name = tempfile.mkstemp(prefix="correct-", suffix=f"-{seq}.wav", dir=self.tmp_dir)
+            path = Path(name)
             try:
-                path.write_bytes(wav_bytes)
-                res = await asyncio.to_thread(self.primary.transcribe, path, self.prompt)
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(wav_bytes)
+                def transcribe():
+                    from app.runtime_activity import work
+                    with work('transcribe'):
+                        return self.primary.transcribe(path, self.prompt)
+                res = await asyncio.to_thread(transcribe)
+                if self._closed:
+                    continue
                 text = (getattr(res, "text", "") or "").strip()
                 if not getattr(res, "ok", False) or not text:
                     continue
                 if _norm(text) == _norm(fast_text):
                     self.kept += 1
                     continue
-                await self.apply(room_id, session_id, seq, text)
+                if expected_epoch is None:
+                    await self.apply(room_id, session_id, seq, text)
+                else:
+                    await self.apply(room_id, session_id, seq, text, fast_text, expected_epoch)
                 self.corrected += 1
             except Exception:
                 log.exception("Breeze correction failed room=%s seq=%s", room_id, seq)
@@ -175,6 +195,13 @@ class Corrector:
     def stats(self) -> dict:
         return {"pending": len(self._pending), "corrected": self.corrected, "kept": self.kept,
                 "skipped": self.skipped}
+
+    async def aclose(self) -> None:
+        self._closed = True
+        self._pending.clear()
+        # Do not cancel to_thread and unlink a WAV while native ASR still reads it.
+        if self._task is not None:
+            await asyncio.shield(self._task)
 
 
 def fast_final_from_env(env: dict | None = None) -> SherpaOfflineFinal | None:

@@ -16,11 +16,20 @@ from scripts.package_release import source_files
 from scripts.install_runtime import download_verified, extract_binaries, verified
 
 def prepare(output, assets, sdk=None):
+    # pip's wheel extraction can still hit MAX_PATH on standard Windows installs.
+    # Check before downloading or creating a partially installed interpreter.
+    if os.name == 'nt':
+        longest = output / '.python/3.12.10-zen052/tools/Lib/site-packages/onnxruntime/tools/ort_format_model/ort_flatbuffers_py/fbs/RuntimeOptimizationRecordContainerEntry.py'
+        if len(str(longest.resolve())) >= 260:
+            raise ValueError('Windows payload path is too long. Use a short build directory such as %LOCALAPPDATA%/ZenBridge/build/payload.')
+    environment = os.environ.copy()
+    environment.pop('SSLKEYLOGFILE', None)
+    environment['PYTHONUTF8'] = '1'
     # Optional native features must have their verified assets staged before
     # enumerating source_files; the resulting installer works offline.
-    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_windows_runtime.py')], check=True)
-    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_silero_vad.py')], check=True)
-    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_vulkan_runtime.py')], check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_windows_runtime.py')], env=environment, check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_silero_vad.py')], env=environment, check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_vulkan_runtime.py')], env=environment, check=True)
     from scripts.fetch_draft_model import stage as stage_draft
     draft_manifest=json.loads((ROOT/'app/draft-model-manifest.json').read_text())
     draft_source=assets/'models/draft'/draft_manifest['name']

@@ -1211,9 +1211,11 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
     pipeline = Pipeline(asr, translator, PROMPT, TMP, settings, on_event=on_event)
     corrector = None
     if fast_engine is not None and (os.environ.get("BREEZE_FAST_FINAL_CORRECT") or "1").strip() != "0":
-        async def _apply_correction(room_id: str, session_id: str, seq: int, zh: str) -> None:
+        async def _apply_correction(room_id: str, session_id: str, seq: int, zh: str,
+                                    expected_zh: str, expected_epoch: int) -> None:
             try:
-                await pipeline.retranslate(room_id, session_id, seq, zh)
+                await pipeline.retranslate(room_id, session_id, seq, zh,
+                                           expected_zh=expected_zh, expected_epoch=expected_epoch)
             except PipelineError as exc:
                 logging.getLogger("breeze.fast_final").info(
                     "correction not applied room=%s seq=%s: %s", room_id, seq, exc.detail)
@@ -1292,6 +1294,8 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             await asyncio.gather(*pending, return_exceptions=True)
         tasks.clear()
         close_jobs.clear()
+        if corrector is not None:
+            await corrector.aclose()
         try:
             await visual_hub.stop()
         except Exception:
@@ -2292,7 +2296,8 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             done = await job
             if corrector is not None and done is not None and (done.zh_raw or done.zh) \
                     and getattr(done, "status", "") not in ("cancelled", "missing", "error", "silent"):
-                corrector.submit(utt.room_id, utt.session_id, utt.seq, utt.wav, done.zh_raw or done.zh)
+                corrector.submit(utt.room_id, utt.session_id, utt.seq, utt.wav, done.zh,
+                                 expected_epoch=pipeline._tr_epoch.get(done.key, -1))
         except (PipelineError, AudioError) as exc:
             log.info("endpoint final not processed room=%s seq=%s: %s", utt.room_id, utt.seq,
                      getattr(exc, "detail", exc))
