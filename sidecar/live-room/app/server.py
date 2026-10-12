@@ -26,6 +26,7 @@ from app.native_asr import NativeResidentAsr
 from app.audio import AudioError, convert_to_wav, ffmpeg_bin, wav_duration_seconds
 from app.draft_hub import DraftHub, FinalUtterance
 from app.endpointer import Endpointer, config_from_env as endpoint_config_from_env
+from app import fast_final as fast_final_mod
 from app.share import machine_share_name
 from app.hw_routes import make_router as make_hw_router
 from app.overlay_routes import router as overlay_router
@@ -1200,7 +1201,23 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             bus.drop(room_id)
             pipeline.drop_room(room_id)
 
+    # grok/fast-draft-asr: endpoint-cut lines may be answered by a fast offline model first
+    # (BREEZE_FAST_FINAL), then corrected by Breeze in the background. Off by default.
+    breeze_asr = asr
+    fast_engine = (fast_final_mod.fast_final_from_env()
+                   if (os.environ.get("BREEZE_ENDPOINT_FINAL") or "").strip() == "1" else None)
+    if fast_engine is not None:
+        asr = fast_final_mod.FastFinalAsr(breeze_asr, fast_engine)
     pipeline = Pipeline(asr, translator, PROMPT, TMP, settings, on_event=on_event)
+    corrector = None
+    if fast_engine is not None and (os.environ.get("BREEZE_FAST_FINAL_CORRECT") or "1").strip() != "0":
+        async def _apply_correction(room_id: str, session_id: str, seq: int, zh: str) -> None:
+            try:
+                await pipeline.retranslate(room_id, session_id, seq, zh)
+            except PipelineError as exc:
+                logging.getLogger("breeze.fast_final").info(
+                    "correction not applied room=%s seq=%s: %s", room_id, seq, exc.detail)
+        corrector = fast_final_mod.Corrector(breeze_asr, PROMPT, TMP, _apply_correction)
     hydrated: set[str] = set()
     hydrate_jobs: dict[str, asyncio.Task] = {}
 
@@ -1440,6 +1457,8 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "storage": store.enabled,
             "draft_available": drafts_available,
             "endpoint_final": drafts_available and endpoint_final_on,
+            "fast_final": (fast_engine.kind if fast_engine is not None and endpoint_final_on else None),
+            "fast_final_corrections": corrector.stats() if corrector is not None else None,
             "tgt_lang": (book.get(room_id) or {}).get("tgt_lang") or pipeline.targets.default,
             "listen_url_name": share_by_name(room_id, include_key=host_view),
             "storage_recovered": bool(getattr(store, "recovered", False)),
@@ -2259,14 +2278,21 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                                                (book.get(utt.room_id) or {}).get("tgt_lang")),
             )
             owned, held = held, False
-            job = asyncio.ensure_future(pipeline.submit(segment, utt.wav, _wav_passthrough, slot_held=owned,
-                                                        owner=owned, wait_translation=False))
+            route = fast_final_mod.ROUTE.set("fast" if fast_engine is not None else "")
+            try:      # the task copies the context now, so only this line's ASR call is routed
+                job = asyncio.ensure_future(pipeline.submit(segment, utt.wav, _wav_passthrough, slot_held=owned,
+                                                            owner=owned, wait_translation=False))
+            finally:
+                fast_final_mod.ROUTE.reset(route)
             await asyncio.sleep(0)          # the pipeline registers the seq before the host hears of it
             if notify:
                 await notify({"type": "final_seq", "seq": utt.seq, "t0_ms": t0, "t1_ms": t1, "reason": utt.reason})
             if registered is not None:
                 registered.set()
-            await job
+            done = await job
+            if corrector is not None and done is not None and (done.zh_raw or done.zh) \
+                    and getattr(done, "status", "") not in ("cancelled", "missing", "error", "silent"):
+                corrector.submit(utt.room_id, utt.session_id, utt.seq, utt.wav, done.zh_raw or done.zh)
         except (PipelineError, AudioError) as exc:
             log.info("endpoint final not processed room=%s seq=%s: %s", utt.room_id, utt.seq,
                      getattr(exc, "detail", exc))
