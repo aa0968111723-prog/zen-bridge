@@ -65,6 +65,17 @@ def test_worker_rejects_oversized_request_and_ambiguous_results(tmp_path,monkeyp
         agent_suite.call_worker('translate',{},runner)
 
 
+def test_heavy_model_is_not_started_with_insufficient_memory(tmp_path,monkeypatch):
+    monkeypatch.setattr(agent_suite,'suite_root',lambda:tmp_path)
+    monkeypatch.setattr(agent_suite,'available_memory_gb',lambda:.5)
+    py=tmp_path/'evaluation'/('Scripts/python.exe' if agent_suite.os.name=='nt' else 'bin/python')
+    py.parent.mkdir(parents=True);py.write_text('test path')
+    def runner(*args,**kwargs):
+        raise AssertionError('A heavy model must not start while memory is occupied')
+    with pytest.raises(RuntimeError,match='記憶體'):
+        agent_suite.call_worker('evaluate',{},runner)
+
+
 def test_topic_context_handles_languages_and_corrupt_database(tmp_path,monkeypatch):
     import sqlite3
     from app import agent_context
