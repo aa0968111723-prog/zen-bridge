@@ -4,10 +4,13 @@ on:
     paths:
       - 'sidecar/live-room/**'
       - '.github/workflows/live-room-windows-tests.yml'
+      - '.github/workflows/local-backend.yml'
   push:
+    branches: [main, feat/local-translation-backend]
     paths:
       - 'sidecar/live-room/**'
       - '.github/workflows/live-room-windows-tests.yml'
+      - '.github/workflows/local-backend.yml'
   workflow_dispatch:
 permissions:
   contents: read
