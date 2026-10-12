@@ -10,10 +10,22 @@ from app.desktop_llm import DesktopTranslator
 class AgentRequests:
     def __init__(self,asr,root):
         self.asr=asr;self.root=root;self.metrics=AgentMetrics();self.translator=DesktopTranslator()
+        import os
+        if os.getenv('ZEN_AGENT_SUITE_GRAPH','0')=='1':
+            from app.agent_suite import AgentSuiteTranslator
+            self.translator=AgentSuiteTranslator(self.translator)
         self.asr_lane=asyncio.Semaphore(1);self.translation_lane=asyncio.Semaphore(1)
     def status(self):
-        return {'metrics':self.metrics.snapshot(),'translation':self.translator.status(),'asr_ready':self.asr.health()}
-    async def _run_blocking(self, function, *args):
+        from app.agent_suite import suite_status
+        translation=self.translator.status()
+        translation.setdefault('agent_suite',{'profiles':suite_status(),'enabled':False})
+        return {'metrics':self.metrics.snapshot(),'translation':translation,'asr_ready':self.asr.health()}
+    async def _run_blocking(self, function, *args, kind='transcribe'):
+        from app.runtime_activity import work
+        with work(kind):
+            return await self._await_blocking(function,*args)
+
+    async def _await_blocking(self, function, *args):
         operation=asyncio.create_task(asyncio.to_thread(function,*args))
         try:
             return await asyncio.shield(operation)
@@ -31,7 +43,7 @@ class AgentRequests:
         try:
             if kind=='translate':
                 async with self.translation_lane:
-                    result=await self._run_blocking(self.translator.translate,request.get('instructions'),request.get('input'),request.get('mode'))
+                    result=await self._run_blocking(self.translator.translate,request.get('instructions'),request.get('input'),request.get('mode'),kind='translate')
                 route=result['route'];response.update(ok=True,result=result)
             else:
                 async with self.asr_lane:

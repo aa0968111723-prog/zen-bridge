@@ -16,11 +16,31 @@ from scripts.package_release import source_files
 from scripts.install_runtime import download_verified, extract_binaries, verified
 
 def prepare(output, assets, sdk=None):
+    # pip's wheel extraction can still hit MAX_PATH on standard Windows installs.
+    # Check before downloading or creating a partially installed interpreter.
+    if os.name == 'nt':
+        longest = output / '.python/3.12.10-zen052/tools/Lib/site-packages/onnxruntime/tools/ort_format_model/ort_flatbuffers_py/fbs/RuntimeOptimizationRecordContainerEntry.py'
+        if len(str(longest.resolve())) >= 260:
+            raise ValueError('Windows payload path is too long. Use a short build directory such as %LOCALAPPDATA%/ZenBridge/build/payload.')
+    environment = os.environ.copy()
+    environment.pop('SSLKEYLOGFILE', None)
+    environment['PYTHONUTF8'] = '1'
     # Optional native features must have their verified assets staged before
     # enumerating source_files; the resulting installer works offline.
-    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_windows_runtime.py')], check=True)
-    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_silero_vad.py')], check=True)
-    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_vulkan_runtime.py')], check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_windows_runtime.py')], env=environment, check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_silero_vad.py')], env=environment, check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/fetch_vulkan_runtime.py')], env=environment, check=True)
+    from scripts.fetch_draft_model import stage as stage_draft
+    draft_manifest=json.loads((ROOT/'app/draft-model-manifest.json').read_text())
+    draft_source=assets/'models/draft'/draft_manifest['name']
+    if not draft_source.is_dir():
+        draft_source=Path(os.getenv('LOCALAPPDATA',Path.home()/'AppData'/'Local'))/'ZenBridge/models/draft'/draft_manifest['name']
+    stage_draft(output/'models/draft'/draft_manifest['name'],draft_source if draft_source.is_dir() else None,draft_manifest)
+    fast_manifest=json.loads((ROOT/'app/fast-final-model-manifest.json').read_text())
+    fast_source=assets/'models/fast-final'/fast_manifest['name']
+    if not fast_source.is_dir():
+        fast_source=Path(os.getenv('LOCALAPPDATA',Path.home()/'AppData/Local'))/'ZenBridge/models/fast-final'/fast_manifest['name']
+    stage_draft(output/'models/fast-final'/fast_manifest['name'],fast_source if fast_source.is_dir() else None,fast_manifest)
     output.mkdir(parents=True, exist_ok=True)
     for path in source_files():
         relative = path.relative_to(ROOT)
@@ -92,6 +112,12 @@ def prepare(output, assets, sdk=None):
         'Breeze-ASR: https://huggingface.co/MediaTek-Research/Breeze-ASR-25\n'
         'Microsoft WebView2 SDK/runtime: Microsoft license; https://aka.ms/webview2\n', encoding='utf-8')
     with notices.open('a', encoding='utf-8') as writer:
+        writer.write('sherpa-onnx: Apache-2.0; https://github.com/k2-fsa/sherpa-onnx\n'
+                     'OpenCC Python: Apache-2.0; https://github.com/yichen0831/opencc-python\n'
+                     'X-ASR: https://github.com/Gilgamesh-J/X-ASR; model provenance: app/draft-model-manifest.json\n')
+        writer.write('SenseVoice: FunAudioLLM / Alibaba Group; ONNX export by Fangjun Kuang (sherpa-onnx). '
+                     'FunASR Model Open Source License; app/vendor/licenses/SenseVoice-MODEL-LICENSE.txt; '
+                     'fixed provenance: app/fast-final-model-manifest.json\n')
         writer.write('Silero VAD v6.2.3: MIT; https://github.com/snakers4/silero-vad\n'
                      'Microsoft Visual C++ runtime 14.50 x64: Microsoft redistributable license; '
                      'extracted from byte-pinned official vc_redist.x64.exe; see app/windows-runtime-manifest.json\n')

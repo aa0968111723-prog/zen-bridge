@@ -57,6 +57,28 @@ def test_compact_detects_modified_tools_even_with_unchanged_size(tmp_path):
     assert not verify_files(tmp_path, expected['fingerprint'], expected['tools'])
 
 
+def test_model_changes_force_full_update_and_same_size_damage_is_detected(tmp_path):
+    runtime(tmp_path)
+    legacy = fingerprint(tmp_path)
+    (tmp_path/'app').mkdir()
+    model = tmp_path/'models/fast-final/fixed/model.int8.onnx'
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b'verified model')
+    manifest = tmp_path/'app/fast-final-model-manifest.json'
+    value = {'name':'fixed','files':{'model.int8.onnx':{
+        'size':model.stat().st_size,'sha256':hashlib.sha256(model.read_bytes()).hexdigest()}}}
+    manifest.write_text(json.dumps(value))
+    expected = fingerprint(tmp_path)
+    assert expected != legacy and verify_files(tmp_path, expected)
+    model.write_bytes(b'x'*model.stat().st_size)
+    assert not verify_files(tmp_path, expected)
+    model.unlink()
+    assert not verify_files(tmp_path, expected)
+    value['name']='../outside'
+    manifest.write_text(json.dumps(value))
+    assert not verify_files(tmp_path, fingerprint(tmp_path))
+
+
 def test_compact_requires_matching_gpu_files_not_just_cpu_tools(tmp_path):
     runtime(tmp_path)
     native = tmp_path/'tools/whisper-vulkan'
