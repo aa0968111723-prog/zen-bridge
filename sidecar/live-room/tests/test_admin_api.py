@@ -396,8 +396,35 @@ def test_jobs_202_location_and_poll(env):
     assert asyncio.run(env["app"].state.worker.run_once()) is True
     done = env["client"].get(loc, headers=BEARER).json()
     assert done["state"] == "succeeded" and (env["tmp"] / "backups" / done["result"]["file"]).exists()
-    assert env["client"].post(f"{API}/jobs", json={"kind": "summarize"}, headers=BEARER).status_code == 422
+    summary = env["client"].post(f"{API}/jobs", json={"kind": "summarize", "target": {"session_id": "s1"}}, headers=BEARER)
+    assert summary.status_code == 202
+    assert env["client"].post(f"{API}/jobs", json={"kind": "embed_backfill"}, headers=BEARER).status_code == 422
     assert env["client"].post(f"{API}/jobs", json={"kind": "rm -rf"}, headers=BEARER).status_code == 422
+
+
+def test_listed_jobs_run_without_a_paid_model(env):
+    import asyncio
+    client, app = env["client"], env["app"]
+    summary = client.post(f"{API}/jobs", json={"kind": "summarize", "target": {"session_id": "s1"}}, headers=BEARER)
+    assert summary.status_code == 202
+    assert asyncio.run(app.state.worker.run_once()) is True
+    with db.connect(env["path"]) as c:
+        row = c.execute("SELECT kind, model, content_md FROM summaries WHERE session_id='s1'").fetchone()
+    assert row[0] == "minutes" and row[1] is None and "因緣具足" in row[2]
+
+    imported = client.post(f"{API}/jobs", json={"kind": "glossary_import", "params": {
+        "csv": "zh,target\n因緣,conditions\n"}}, headers=BEARER)
+    assert imported.status_code == 202
+    assert asyncio.run(app.state.worker.run_once()) is True
+    with db.connect(env["path"]) as c:
+        term = c.execute("SELECT en FROM glossary_terms WHERE zh='因緣'").fetchone()
+    assert term is not None and term[0] == "conditions"
+
+    batch = client.post(f"{API}/jobs", json={"kind": "retranslate_batch", "target": {"session_id": "s1"}}, headers=BEARER)
+    assert batch.status_code == 202
+    assert asyncio.run(app.state.worker.run_once()) is True
+    done = client.get(batch.headers["location"], headers=BEARER).json()
+    assert done["state"] == "succeeded" and done["result"]["done"] == 2
 
 
 def test_job_cancel(env):
