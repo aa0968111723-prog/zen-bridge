@@ -13,6 +13,16 @@ const BLOCK=1600; // 100 ms at 16 kHz (the real ScriptProcessor block is 4096; l
 const block=(amp)=>{const b=new Float32Array(BLOCK);for(let i=0;i<BLOCK;i++)b[i]=amp*Math.sin(i/3);return {inputBuffer:{getChannelData:()=>b}};};
 const run=(cap,plan)=>{for(const [amp,blocks] of plan)for(let i=0;i<blocks;i++)node.onaudioprocess(block(amp));};
 
+// Preview buffers are disposable and exclude private/backpressure pauses.
+{let paused=false;const previews=[];
+ const cap=await sandbox.exports.capture(()=>{},()=>{},{windowSeconds:6,stepSeconds:6,vad:true,endpoint:false,
+  isPaused:()=>paused,onPreview:(audio,offset)=>previews.push({audio,offset})});
+ run(cap,[[.2,12]]);assert.equal(previews.length,1);assert.equal(previews[0].audio.size,32044);
+ paused=true;run(cap,[[.2,5]]);assert.equal(previews.length,1);
+ paused=false;run(cap,[[.2,12]]);assert.equal(previews.length,2);assert.equal(previews[1].audio.size,32044);
+ assert.ok(previews[1].offset>=1.7);cap.stop();run(cap,[[.2,20]]);assert.equal(previews.length,2);
+}
+
 // 1. pause cut: 0.5 s silence, 1.5 s speech, 0.5 s silence -> one chunk right after the pause
 {const out=[];const cap=await sandbox.exports.capture((a,offset,final)=>out.push({a,offset,final}),()=>{},{windowSeconds:6,stepSeconds:6,vad:true,endpoint:{}});
  run(cap,[[0,5],[.2,15]]);assert.equal(out.length,0);

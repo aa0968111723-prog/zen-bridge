@@ -37,6 +37,7 @@ jobs:
           tests/test_asr_gpu.py tests/test_update_runtime.py
           tests/test_desktop_update.py tests/test_draft_model_package.py
           tests/test_fast_final.py
+          tests/test_preview_agent.py
       - name: Privacy capture and audience controls
         run: |
           node tests/recorder_machine.test.mjs

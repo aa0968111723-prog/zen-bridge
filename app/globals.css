@@ -664,3 +664,5 @@ button:focus-visible,a:focus-visible,summary:focus-visible {outline:3px solid va
  .error-banner [data-slot=button]:first-of-type {margin-left:27px}
  .database-guide {padding:12px}
 }
+
+.preview-source{color:#697582!important;opacity:.85}.preview-label{display:block;color:#697582;font-size:.85rem;margin-bottom:.4rem}

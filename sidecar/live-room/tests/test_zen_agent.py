@@ -10,6 +10,8 @@ from app import zen_agent
 
 
 def test_agent_verified_tls_native_contract_and_cleanup(monkeypatch):
+    from app.preview_asr import PreviewAsr
+    monkeypatch.setattr(PreviewAsr,'available',lambda self:False)
     monkeypatch.setenv('ZEN_BRIDGE_AGENT_URL', 'wss://example.com/asr-agent')
     monkeypatch.setenv('ZEN_BRIDGE_AGENT_TOKEN', 'a' * 64)
     audio = io.BytesIO()

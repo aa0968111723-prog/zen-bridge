@@ -15,11 +15,15 @@ class AgentRequests:
             from app.agent_suite import AgentSuiteTranslator
             self.translator=AgentSuiteTranslator(self.translator)
         self.asr_lane=asyncio.Semaphore(1);self.translation_lane=asyncio.Semaphore(1)
+        self.preview_lane=asyncio.Semaphore(1)
+        from app.preview_asr import PreviewAsr
+        self.preview=PreviewAsr(root)
     def status(self):
         from app.agent_suite import suite_status
         translation=self.translator.status()
         translation.setdefault('agent_suite',{'profiles':suite_status(),'enabled':False})
-        return {'metrics':self.metrics.snapshot(),'translation':translation,'asr_ready':self.asr.health()}
+        return {'metrics':self.metrics.snapshot(),'translation':translation,'asr_ready':self.asr.health(),
+                'preview_available':self.preview.available()}
     async def _run_blocking(self, function, *args, kind='transcribe'):
         from app.runtime_activity import work
         with work(kind):
@@ -36,7 +40,7 @@ class AgentRequests:
             raise
     async def handle(self,request):
         kind=request.get('type');identifier=request.get('id')
-        if kind not in ('transcribe','translate','status') or not isinstance(identifier,str) or len(identifier)>80:return None
+        if kind not in ('transcribe','translate','status','preview') or not isinstance(identifier,str) or len(identifier)>80:return None
         response={'type':'result' if kind=='transcribe' else 'control_result','id':identifier,'ok':False}
         if kind=='status':return {**response,'ok':True,'result':await asyncio.to_thread(self.status)}
         started=time.monotonic();duration=None;route=None
@@ -46,19 +50,23 @@ class AgentRequests:
                     result=await self._run_blocking(self.translator.translate,request.get('instructions'),request.get('input'),request.get('mode'),kind='translate')
                 route=result['route'];response.update(ok=True,result=result)
             else:
-                async with self.asr_lane:
-                    if not isinstance(request.get('audio'),str) or len(request['audio'])>6_700_000:raise ValueError()
+                async with (self.preview_lane if kind=='preview' else self.asr_lane):
+                    if not isinstance(request.get('audio'),str) or len(request['audio'])>(294000 if kind=='preview' else 6_700_000):raise ValueError()
                     audio=base64.b64decode(request['audio'],validate=True)
-                    if not 44<=len(audio)<=5_000_000:raise ValueError()
+                    if not 44<=len(audio)<=(220000 if kind=='preview' else 5_000_000):raise ValueError()
                     with tempfile.TemporaryDirectory(dir=self.root/'tmp',prefix='zen-audio-') as work:
                         wav=Path(work)/'audio.wav';wav.write_bytes(audio)
                         with wave.open(str(wav),'rb') as reader:
                             duration=reader.getnframes()/16000
-                            if (reader.getnchannels(),reader.getsampwidth(),reader.getframerate())!=(1,2,16000) or not 0<duration<=30:raise ValueError()
+                            if (reader.getnchannels(),reader.getsampwidth(),reader.getframerate())!=(1,2,16000) or not 0<duration<=(6.5 if kind=='preview' else 30):raise ValueError()
                         language=request.get('language','zh')
                         if language not in ('zh','en'):raise ValueError()
-                        result=await self._run_blocking(self.asr.transcribe,wav,str(request.get('prompt',''))[:2000],language)
-                        response.update(ok=result.ok,source=result.text if result.ok else '')
+                        if kind=='preview':
+                            text=await self._run_blocking(self.preview.transcribe,wav)
+                            response.update(ok=True,result={'source':text,'ephemeral':True})
+                        else:
+                            result=await self._run_blocking(self.asr.transcribe,wav,str(request.get('prompt',''))[:2000],language)
+                            response.update(ok=result.ok,source=result.text if result.ok else '')
         except Exception:response['error']='Selected desktop operation failed'
         self.metrics.record(kind,(time.monotonic()-started)*1000,response['ok'],duration,route)
         return response

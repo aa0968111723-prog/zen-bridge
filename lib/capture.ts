@@ -7,7 +7,7 @@ export function wav(samples:Float32Array,rate:number,targetRate=rate){
  return new Blob([buffer],{type:'audio/wav'});
 }
 export type Capture={stop:()=>void;flush:()=>void;deviceName:string;deviceId:string};
-export type CaptureOptions={deviceId?:string;monitorOnly?:boolean;onEnded?:()=>void;windowSeconds?:number;stepSeconds?:number;vad?:boolean;outputSampleRate?:number;isPaused?:()=>boolean;onPauseChange?:(paused:boolean)=>void;endpoint?:false|EndpointOptions};
+export type CaptureOptions={deviceId?:string;monitorOnly?:boolean;onEnded?:()=>void;windowSeconds?:number;stepSeconds?:number;vad?:boolean;outputSampleRate?:number;isPaused?:()=>boolean;onPauseChange?:(paused:boolean)=>void;endpoint?:false|EndpointOptions;onPreview?:(audio:Blob,offset:number)=>void};
 // grok/fast-draft-asr: with vad on (the Breeze path) a chunk ends at a pause instead of a fixed
 // window, so the final caption arrives ~2-4 s after speech instead of up to 6 s. Hard cuts go to
 // the quietest block in the last 0.8 s and the rest is kept for the next chunk (nothing dropped).
@@ -38,7 +38,7 @@ export async function capture(onChunk:(audio:Blob,offset:number,final:boolean)=>
  let ctx:AudioContext|undefined;
  try{
  ctx=new AudioContext();const context=ctx,source=context.createMediaStreamSource(stream),node=context.createScriptProcessor(4096,1,1),silence=context.createGain();silence.gain.value=0;
- let chunks:Float32Array[]=[],count=0,offset=0,stopped=false,lastSent=0,paused=false;
+ let chunks:Float32Array[]=[],count=0,offset=0,stopped=false,lastSent=0,paused=false,previewSamples=0;
  const windowSeconds=options.windowSeconds??8,stepSeconds=options.stepSeconds??windowSeconds;
  let fast=false;try{fast=typeof localStorage!=='undefined'&&localStorage.getItem('zen-agent-fast-captions')==='1';}catch{/* unavailable browser storage keeps fixed windows */}
  const endpoint=options.endpoint??(fast?{}:false);
@@ -46,8 +46,9 @@ export async function capture(onChunk:(audio:Blob,offset:number,final:boolean)=>
  const take=(k:number)=>{const head=chunks.slice(0,k);chunks=chunks.slice(k);let n=0;for(const c of head)n+=c.length;count-=n;return {head,n};};
  const emitBlocks=(k:number)=>{const {head,n}=take(k);if(n<context.sampleRate*.3){offset+=n/context.sampleRate;return;}const joined=new Float32Array(n);let p=0,energy=0;for(const c of head){joined.set(c,p);p+=c.length;for(const x of c)energy+=x*x;}if(Math.sqrt(energy/n)>.004)onChunk(wav(joined,context.sampleRate,options.outputSampleRate),offset,false);offset+=n/context.sampleRate;lastSent=0;};
  const emit=(retain:boolean,final=false)=>{if(count<context.sampleRate*.3)return;const joined=new Float32Array(count);let n=0,energy=0;for(const c of chunks){joined.set(c,n);n+=c.length;for(const x of c)energy+=x*x;}if(!options.vad||Math.sqrt(energy/count)>.004)onChunk(wav(joined,context.sampleRate,options.outputSampleRate),offset,final);if(retain){const step=Math.min(joined.length,Math.round(context.sampleRate*stepSeconds)),tail=joined.slice(step);chunks=tail.length?[tail]:[];count=tail.length;offset+=step/context.sampleRate;}else{offset+=count/context.sampleRate;chunks=[];count=0;}lastSent=0;};
- const flush=()=>{emit(false,true);ep?.reset();};
- node.onaudioprocess=e=>{if(stopped)return;const data=new Float32Array(e.inputBuffer.getChannelData(0));let energy=0;for(const x of data)energy+=x*x;onLevel(Math.min(1,Math.sqrt(energy/data.length)*8));if(options.monitorOnly)return;const nextPause=options.isPaused?.()??false;if(nextPause!==paused){paused=nextPause;if(paused){offset+=count/context.sampleRate;chunks=[];count=0;lastSent=0;ep?.reset();}options.onPauseChange?.(paused);}if(paused){offset+=data.length/context.sampleRate;return;}chunks.push(data);count+=data.length;lastSent+=data.length;if(ep){const a=ep.push(data);if(a.drop){const {n}=take(a.drop);offset+=n/context.sampleRate;}else if(a.emit)emitBlocks(a.emit);return;}if(count>=context.sampleRate*windowSeconds&&lastSent>=context.sampleRate*stepSeconds)emit(stepSeconds<windowSeconds);};
+ const flush=()=>{emit(false,true);ep?.reset();previewSamples=0;};
+ const preview=()=>{if(!options.onPreview||count<context.sampleRate*.5||count>context.sampleRate*6.5||previewSamples<context.sampleRate)return;previewSamples=0;const joined=new Float32Array(count);let p=0,energy=0;for(const block of chunks){joined.set(block,p);p+=block.length;for(const sample of block)energy+=sample*sample;}if(Math.sqrt(energy/count)>.004)options.onPreview(wav(joined,context.sampleRate,16000),offset);};
+ node.onaudioprocess=e=>{if(stopped)return;const data=new Float32Array(e.inputBuffer.getChannelData(0));let energy=0;for(const x of data)energy+=x*x;onLevel(Math.min(1,Math.sqrt(energy/data.length)*8));if(options.monitorOnly)return;const nextPause=options.isPaused?.()??false;if(nextPause!==paused){paused=nextPause;if(paused){offset+=count/context.sampleRate;chunks=[];count=0;lastSent=0;previewSamples=0;ep?.reset();}options.onPauseChange?.(paused);}if(paused){offset+=data.length/context.sampleRate;return;}chunks.push(data);count+=data.length;lastSent+=data.length;previewSamples+=data.length;preview();if(ep){const a=ep.push(data);if(a.drop){const {n}=take(a.drop);offset+=n/context.sampleRate;}else if(a.emit)emitBlocks(a.emit);return;}if(count>=context.sampleRate*windowSeconds&&lastSent>=context.sampleRate*stepSeconds)emit(stepSeconds<windowSeconds);};
  source.connect(node);node.connect(silence);silence.connect(context.destination);await context.resume();
  const stop=()=>{if(stopped)return;stopped=true;try{flush();}finally{node.disconnect();source.disconnect();silence.disconnect();stream.getTracks().forEach(t=>t.stop());void context.close().catch(()=>{});onLevel(0);}};
  const track=stream.getAudioTracks()[0];

@@ -18,7 +18,7 @@ try {
   await new Promise(resolve=>wrong.once('error',resolve));
   assert.equal(gateway.state().connected,false);
   agent=new WebSocket('ws://127.0.0.1:'+port+'/asr-agent',{headers});await once(agent,'open');
-  agent.send(JSON.stringify({type:'ready',protocol:1,capabilities:['asr','translate','metrics']}));
+  agent.send(JSON.stringify({type:'ready',protocol:1,capabilities:['asr','translate','metrics','preview']}));
   for(let i=0;i<20&&!gateway.state().connected;i++)await new Promise(r=>setTimeout(r,5));
   assert.equal(gateway.state().connected,true);
   const held=[];
@@ -43,6 +43,15 @@ try {
   agent.send(JSON.stringify({type:'control_result',id:translation.id,ok:true,result:{text:'Hello',route:'local'}}));
   assert.deepEqual(await (await translated).json(),{text:'Hello',route:'local'});
   assert.equal(gateway.state().control_pending,0);
+  const previewMessage=once(agent,'message');
+  const draft=fetch(base+'/preview',{method:'POST',headers,body:JSON.stringify({audio:'AAAA'.repeat(20),language:'zh'})});
+  const [previewBytes]=await previewMessage,preview=JSON.parse(previewBytes);
+  assert.equal(preview.type,'preview');
+  assert.equal((await fetch(base+'/preview',{method:'POST',headers,body:'{}'})).status,429);
+  agent.send(JSON.stringify({type:'control_result',id:preview.id,ok:true,result:{source:'temporary draft',ephemeral:true}}));
+  assert.deepEqual(await(await draft).json(),{source:'temporary draft',ephemeral:true});
+  assert.equal(gateway.state().preview_pending,0);
+  assert.ok(!JSON.stringify(gateway.state()).includes('temporary draft'));
   const request=transcribe();
   const [data]=await once(agent,'message'); const job=JSON.parse(data);
   assert.equal(job.language,'en');assert.equal(job.type,'transcribe');assert.ok(job.audio);
