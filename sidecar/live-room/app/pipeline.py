@@ -99,18 +99,34 @@ def ja_ruby(text: str, terms) -> list[dict]:
 
 
 
-async def _training_harvest(segment, wav) -> None:
-    """Fine-tune data (docs/finetune-data.md): keep this final segment + its WAV only when the host
-    opted this session in for a consented speaker. No training DB / no opt-in = a cached no-op."""
+def _training_tap(segment, wav) -> None:
+    """Fine-tune data (docs/finetune-data.md): whole-class audio for rooms where the host switched on
+    「收錄訓練資料」. Not armed = one dict lookup. Armed = read the decoded WAV and hand it to the
+    background writer thread; nothing here waits for disk or SQLite."""
     try:
-        from app.training import harvest
-        if not harvest.maybe_active():
-            return
-        await asyncio.to_thread(harvest.capture, room_id=segment.room_id, session_id=segment.session_id,
-                                seq=segment.seq, wav_path=wav, zh_raw=segment.zh_raw, zh=segment.zh,
-                                t0_ms=segment.t0_ms, t1_ms=segment.t1_ms, tgt_lang=segment.tgt_lang)
+        from app.training import capture
+        capture.tap_wav(segment.room_id, segment.session_id, segment.seq, segment.t0_ms, segment.t1_ms,
+                        getattr(segment, "t1_wall_ms", None), wav)
     except Exception:
         pass
+
+
+def _training_final(segment) -> None:
+    try:
+        from app.training import capture
+        capture.final(segment.room_id, segment.session_id, segment.seq, segment.t0_ms, segment.t1_ms,
+                      segment.zh_raw, segment.zh, segment.tgt_lang)
+    except Exception:
+        pass
+
+
+def _training_end(room_id, session_id) -> None:
+    try:
+        from app.training import capture
+        capture.end(room_id, session_id)
+    except Exception:
+        pass
+
 
 @dataclass
 class Segment:
@@ -1346,6 +1362,7 @@ class Pipeline:
             self._flushing.discard(group)
             self._closed.add(group)
             self._fill_session_holes(room_id, session_id)
+            _training_end(room_id, session_id)
 
     def fail_received(self, segment: Segment, detail: str, status: str = "error") -> Segment:
         segment.status = status
@@ -1590,6 +1607,7 @@ class Pipeline:
                 self.fail_received(segment, str(exc)[:180] or "解碼失敗", status="error")
                 return segment
             decode_s = time.perf_counter() - decode_mark
+            _training_tap(segment, wav)
             if segment.key in self._cancel:
                 self.fail_received(segment, "主持端取消這段", status="cancelled")
                 return segment
@@ -1728,7 +1746,7 @@ class Pipeline:
             self._release(segment)
             if self._stale(segment):
                 return segment
-            await _training_harvest(segment, wav)
+            _training_final(segment)
         finally:
             self._active.discard(segment.key)
             self._release_holder(holder)

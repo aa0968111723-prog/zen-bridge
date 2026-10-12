@@ -1331,6 +1331,14 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
     app.include_router(overlay_router)                                   # fullstack: OBS /overlay
     app.include_router(make_hw_router(lambda r: require_host(r, token, settings),
                                       status_fn=lambda **kw: {**hw_tune.status(**kw), "asr_gpu": asr_gpu_status()}))   # perf: /api/hw/status
+    def _training_room(room_id: str) -> str:
+        try:
+            return validate_room_id(room_id)
+        except RoomIdError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    from app.training.live_routes import make_router as make_training_router            # 訓練資料：主持頁「收錄」開關
+    app.include_router(make_training_router(lambda r: require_host(r, token, settings), _training_room))
 
     def _visual_ws_guard(ws, room_id):
         if not audience_origin_allowed(ws.headers.get("origin"), ws.headers.get("host", ""), settings,

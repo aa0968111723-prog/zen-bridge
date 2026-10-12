@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.training import audioq, dataset, harvest, importer, prompts, recordings, registry, review, studio
+from app.training import audioq, capture, dataset, derive, harvest, importer, prompts, recordings, registry, review, studio
 from app.training import db as tdb
 
 STATIC = Path(__file__).with_name("static")
@@ -71,7 +71,9 @@ def register(app, ctx) -> None:
             return {"speakers": registry.list_speakers(c), "consent_text": registry.CONSENT_TEXT,
                     "consent_version": registry.CONSENT_VERSION, "root": str(root),
                     "queue": dict(c.execute("SELECT status, COUNT(*) FROM clips GROUP BY status").fetchall()),
-                    "harvest": harvest.list_optins(c, active_only=True),
+                    "classes": harvest.sessions(c, limit=10), "lecturers": harvest.lecturers(c),
+                    "rooms": [dict(x) for x in c.execute("SELECT * FROM room_collect ORDER BY updated_at DESC")],
+                    "settings": derive.get_settings(c), "disk": derive.disk(c, root),
                     "mt_pairs": c.execute("SELECT COUNT(*) FROM mt_pairs").fetchone()[0]}
         return await th(f, write=False)
 
@@ -80,6 +82,21 @@ def register(app, ctx) -> None:
         b = await body(request)
         return await th(lambda c, root: registry.new_speaker(c, b.get("label"), accent_note=b.get("accent_note"),
                                                               actor=actor(user)))
+
+    @r.post("/speakers/quick", status_code=201)
+    async def quick_speaker(request: Request, user=Depends(need("admin"))):
+        """One form, one click: nickname + consent (defaults: ASR + MT + live class recording)."""
+        b = await body(request)
+
+        def f(c, root):
+            sp = registry.new_speaker(c, b.get("label"), accent_note=b.get("accent_note"), actor=actor(user))
+            registry.record_consent(c, sp["id"], scope_asr=b.get("scope_asr", True) is not False,
+                                    scope_mt=b.get("scope_mt", True) is not False,
+                                    harvest_live=b.get("harvest_live", True) is not False,
+                                    consent_date=b.get("consent_date"), recorded_by=b.get("recorded_by") or "",
+                                    confirm_text=b.get("confirm_text") is True)
+            return registry.get_speaker(c, sp["id"])
+        return await th(f)
 
     @r.get("/speakers/{sid}")
     async def get_speaker(sid: str, user=Depends(need("viewer"))):
@@ -102,8 +119,9 @@ def register(app, ctx) -> None:
         b = await body(request)
         if b.get("confirm") is not True:
             raise Problem(422, "confirm_required", "撤回會永久刪除這位講者的錄音，請帶 confirm=true")
-        harvest._cache["at"] = 0.0
-        return await th(lambda c, root: registry.withdraw(c, root, sid, actor=actor(user)), write=False)
+        out = await th(lambda c, root: registry.withdraw(c, root, sid, actor=actor(user)), write=False)
+        capture.refresh()          # same process (tests / single-process runs); the live server re-reads within 3 s
+        return out
 
     # ------------------------------------------------------------ prompts
     @r.get("/prompts")
@@ -174,12 +192,14 @@ def register(app, ctx) -> None:
 
         def f(c, root):
             rec = recordings.get(c, rid) or _404()
+            if rec["kind"] == "harvest" and name in recordings.TRANSCRIPT_FILES:
+                recordings.write_transcript(c, root, rid)          # reflects the latest review decisions
             if name == "source.wav":
                 if not rec["source_audio"]:
                     _404()
                 return tdb.absolute(root, rec["source_audio"])
             return tdb.absolute(root, f"{rec['dir']}/{name}")
-        p = await th(f, write=False)
+        p = await th(f)
         if not p.exists():
             raise Problem(404, "not_found", "還沒有這個檔案")
         mt = {"wav": "audio/wav", "json": "application/json", "srt": "text/plain", "vtt": "text/vtt",
@@ -189,15 +209,18 @@ def register(app, ctx) -> None:
 
     @r.get("/recordings/{rid}/bundle.zip")
     async def rec_bundle(rid: str, user=Depends(need("viewer"))):
-        from fastapi.responses import Response
+        from starlette.background import BackgroundTask
 
         def f(c, root):
             if not recordings.get(c, rid):
                 _404()
-            return recordings.bundle(c, root, rid)
-        data = await th(f)
-        return Response(data, media_type="application/zip", headers={
-            "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{rid}.zip"'})
+            tmp = Path(root) / "tmp"
+            tmp.mkdir(exist_ok=True)
+            return recordings.bundle(c, root, rid, out_path=tmp / f"{rid}-{time.time_ns()}.zip")
+        p = await th(f)
+        return FileResponse(p, media_type="application/zip", filename=f"{rid}.zip",
+                            headers={"Cache-Control": "no-store"},
+                            background=BackgroundTask(lambda: Path(p).unlink(missing_ok=True)))
 
     @r.post("/recordings/{rid}/speakers")
     async def rec_speakers(rid: str, request: Request, user=Depends(need("editor"))):
@@ -230,26 +253,79 @@ def register(app, ctx) -> None:
             raise Problem(404, "not_found", "音檔不存在")
         return FileResponse(p, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
-    # ------------------------------------------------------------ harvest (per session, host opt-in)
-    @r.get("/harvest")
-    async def harvest_list(user=Depends(need("viewer"))):
-        def f(c, root):
-            stopped = harvest.sweep(c, root)          # 5 分鐘沒有辨識結果 → 自動停止並寫出逐字稿
-            return {"optins": harvest.list_optins(c), "auto_stopped": stopped,
-                    "warn_idle_s": harvest.WARN_IDLE_S, "stop_idle_s": harvest.STOP_IDLE_S}
-        return await th(f)
+    # ------------------------------------------------------------ class collection (primary path)
+    @r.get("/classes")
+    async def classes(speaker_id: str | None = None, user=Depends(need("viewer"))):
+        return await th(lambda c, root: {"classes": harvest.sessions(c, speaker_id=speaker_id),
+                                         "lecturers": harvest.lecturers(c), "pending_derive": derive.pending(c)},
+                        write=False)
 
-    @r.post("/harvest", status_code=201)
-    async def harvest_enable(request: Request, user=Depends(need("host"))):
+    @r.post("/classes/room")
+    async def class_room(request: Request, user=Depends(need("host"))):
         b = await body(request)
         room = ctx.check_room_id(b.get("room_id") or "")
-        return await th(lambda c, root: harvest.enable(c, room_id=room, session_id=b.get("session_id") or None,
-                                                      speaker_id=b.get("speaker_id") or "", enabled_by=actor(user),
-                                                      hours=b.get("hours") or harvest.DEFAULT_HOURS))
+        return await th(lambda c, root: harvest.set_room(c, room_id=room, speaker_id=b.get("speaker_id") or None,
+                                                        collect=b.get("collect") is True, by=actor(user)))
 
-    @r.post("/harvest/{oid}/stop")
-    async def harvest_stop(oid: int, user=Depends(need("host"))):
-        return await th(lambda c, root: harvest.stop(c, root, oid) or _404())
+    @r.post("/classes/{cs_id}/stop")
+    async def class_stop(cs_id: int, user=Depends(need("host"))):
+        return await th(lambda c, root: harvest.stop_session(c, root, cs_id, by=actor(user)) or _404())
+
+    @r.get("/classes/{rid}/batch")
+    async def class_batch(rid: str, sort: str = "confidence", show: str = "todo",
+                          min_conf: float | None = Query(None, ge=0, le=1), user=Depends(need("viewer"))):
+        def f(c, root):
+            mc = derive.get_settings(c)["auto_approve_min"] if min_conf is None else min_conf
+            out = review.session_batch(c, rid, sort=sort, show=show, min_conf=mc)
+            out["min_conf"] = mc
+            out["session"] = next((dict(x) for x in c.execute("SELECT * FROM class_sessions WHERE recording_id=?", (rid,))),
+                                  None)
+            if out["session"] and out["session"]["derive_note"]:
+                import json
+                out["session"]["derive_note"] = json.loads(out["session"]["derive_note"])
+            return out
+        return await th(f, write=False)
+
+    @r.post("/classes/{rid}/approve-above")
+    async def class_approve_above(rid: str, request: Request, user=Depends(need("editor"))):
+        b = await body(request)
+        return await th(lambda c, root: review.approve_above(c, root, rid, min_conf=float(b.get("min_conf") or 0.85),
+                                                            actor=actor(user)))
+
+    @r.post("/classes/{rid}/derive")
+    async def class_derive(rid: str, user=Depends(need("editor"))):
+        return await th(lambda c, root: derive.derive_recording(c, root, rid), write=False)
+
+    @r.post("/classes/{rid}/delete-raw")
+    async def class_delete_raw(rid: str, user=Depends(need("editor"))):
+        def f(c, root):
+            cs = c.execute("SELECT id FROM class_sessions WHERE recording_id=?", (rid,)).fetchone() or _404()
+            return {"freed_bytes": derive.delete_raw(c, root, cs["id"], reason="reviewer")}
+        return await th(f)
+
+    @r.post("/clips/{cid}/exclude")
+    async def clip_exclude(cid: str, request: Request, user=Depends(need("editor"))):
+        b = await body(request)
+        return await th(lambda c, root: review.set_excluded(c, root, cid, excluded=b.get("excluded") is not False,
+                                                           actor=actor(user)))
+
+    @r.get("/stats/hours")
+    async def stats_hours(bucket: str = "week", user=Depends(need("viewer"))):
+        return await th(lambda c, root: {"bucket": bucket, "speakers": harvest.hours_over_time(c, bucket=bucket)},
+                        write=False)
+
+    @r.get("/settings")
+    async def get_settings(user=Depends(need("viewer"))):
+        return await th(lambda c, root: {**derive.get_settings(c), "disk": derive.disk(c, root)}, write=False)
+
+    @r.post("/settings")
+    async def put_settings(request: Request, user=Depends(need("admin"))):
+        b = await body(request)
+        return await th(lambda c, root: derive.set_settings(c, **{k: b.get(k) for k in derive.DEFAULTS}))
+
+    @r.post("/cleanup")
+    async def run_cleanup(user=Depends(need("admin"))):
+        return await th(lambda c, root: derive.cleanup(c, root))
 
     # ------------------------------------------------------------ review queue
     @r.get("/review")
