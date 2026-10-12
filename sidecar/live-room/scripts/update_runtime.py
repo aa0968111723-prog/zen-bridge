@@ -13,11 +13,13 @@ from pathlib import Path
 FILES = ('requirements-lock.txt', 'bootstrap-manifest.json', 'runtime-manifest.json',
          'desktop/desktop-manifest.json')
 GATE_VERSION = 1
+OPTIONAL_MODELS = {'app/draft-model-manifest.json': 'draft',
+                   'app/fast-final-model-manifest.json': 'fast-final'}
 
 
 def fingerprint(root: Path) -> str:
     contents = []
-    for name in FILES:
+    for name in (*FILES, *(name for name in OPTIONAL_MODELS if (root/name).is_file())):
         text = (root / name).read_text(encoding='utf-8-sig')
         value = json.loads(text) if name.endswith('.json') else '\n'.join(text.splitlines())
         contents.append((name, value))
@@ -62,6 +64,8 @@ def probably_compatible(root: Path, value: dict) -> bool:
             return False
         if not native_matches(root, full=False):
             return False
+        if not optional_models_match(root, full=False):
+            return False
         bootstrap = json.loads((root / 'bootstrap-manifest.json').read_text(encoding='utf-8-sig'))
         python = root / '.python' / bootstrap['python'].get('directory',bootstrap['python']['version']) / 'tools/python.exe'
         spec = json.loads((root / 'runtime-manifest.json').read_text(encoding='utf-8-sig'))['assets']['model']
@@ -71,6 +75,36 @@ def probably_compatible(root: Path, value: dict) -> bool:
                         for name, tool in value['tools'].items()))
     except (OSError, ValueError, KeyError, TypeError):
         return False
+
+
+def optional_models_match(root: Path, *, full: bool) -> bool:
+    for manifest_name, category in OPTIONAL_MODELS.items():
+        path = root/manifest_name
+        if not path.is_file():
+            continue  # Legacy installs have no optional model manifests.
+        try:
+            value = json.loads(path.read_text(encoding='utf-8-sig'))
+            name = value['name']
+            files = value['files']
+            if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_.-]+', name) or name in ('.', '..'):
+                return False
+            if not isinstance(files, dict) or not 1 <= len(files) <= 16:
+                return False
+            folder = root/'models'/category/name
+            for filename, spec in files.items():
+                if not re.fullmatch(r'[A-Za-z0-9_.-]+', filename) or filename in ('.', '..'):
+                    return False
+                size, digest = spec['size'], spec['sha256']
+                if type(size) is not int or not 0 < size < 1024**3 or not re.fullmatch('[a-f0-9]{64}', digest):
+                    return False
+                model_file = folder/filename
+                if not model_file.is_file() or model_file.stat().st_size != size:
+                    return False
+                if full and file_digest(model_file) != digest:
+                    return False
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+    return True
 
 
 def native_matches(root: Path, *, full: bool) -> bool:
@@ -99,6 +133,8 @@ def verify_files(root: Path, expected: str, tools: dict | None = None) -> bool:
     if not re.fullmatch('[a-f0-9]{64}', expected) or fingerprint(root) != expected:
         return False
     if not native_matches(root, full=True):
+        return False
+    if not optional_models_match(root, full=True):
         return False
     spec = json.loads((root / 'runtime-manifest.json').read_text(encoding='utf-8-sig'))['assets']['model']
     name = spec['name']
