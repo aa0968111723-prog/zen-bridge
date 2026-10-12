@@ -64,6 +64,16 @@ class DesktopTranslatorTests(unittest.TestCase):
             self.assertEqual(self.client.translate('Translate', 'hello', 'cloud')['route'], 'cloud')
             self.assertEqual(request.call_args.args[0], self.client.hermes)
 
+    def test_cloud_provider_rejecting_tool_choice_without_tools_can_translate(self):
+        def strict_provider(base,path,payload):
+            if 'tool_choice' in payload and not payload.get('tools'):
+                raise ValueError('HTTP 400: tool_choice requires tools')
+            return {'choices':[{'message':{'content':'Bring your attention back to your breathing.'},'finish_reason':'stop'}]}
+        with patch.object(self.client,'_request',side_effect=strict_provider):
+            result=self.client.translate('Translate Chinese into English.','請將注意力帶回呼吸。','cloud')
+        self.assertEqual(result['route'],'cloud')
+        self.assertIn('breathing',result['text'])
+
     def test_only_hybrid_permits_fallback(self):
         result = {'choices': [{'message': {'content': 'translated'}, 'finish_reason': 'stop'}]}
         with patch.object(self.client, '_request', side_effect=[OSError, result]):

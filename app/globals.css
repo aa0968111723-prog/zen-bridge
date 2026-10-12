@@ -666,3 +666,7 @@ button:focus-visible,a:focus-visible,summary:focus-visible {outline:3px solid va
 }
 
 .preview-source{color:#697582!important;opacity:.85}.preview-label{display:block;color:#697582;font-size:.85rem;margin-bottom:.4rem}
+.agent-console .agent-setting-row{grid-template-columns:minmax(0,1fr) auto;align-items:center}
+.agent-console .agent-setting-row select{min-height:44px;max-width:100%;padding:8px 12px;border:1px solid var(--page-line);border-radius:8px;font:inherit;background:var(--page-paper,#fff)}
+.agent-console .agent-setting-row input[type=checkbox]{width:22px;height:22px;margin:11px}
+@media(max-width:600px){.agent-console .agent-setting-row{grid-template-columns:1fr}.agent-console .agent-setting-row select,.agent-console .agent-setting-row input{justify-self:start}}

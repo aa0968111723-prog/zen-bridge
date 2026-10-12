@@ -86,7 +86,9 @@ class DesktopTranslator:
                     text=response.get('message',{}).get('content','');model=self.local_model
                     if response.get('done_reason')=='length':raise ValueError('Incomplete translation')
                 else:
-                    response=self._request(self.hermes,'/v1/chat/completions',{'model':self.cloud_model,'messages':messages,'stream':False,'tool_choice':'none'})
+                    # Subscription proxy forwards to xAI. A tool_choice without
+                    # tools is rejected with HTTP 400; this request has no tools.
+                    response=self._request(self.hermes,'/v1/chat/completions',{'model':self.cloud_model,'messages':messages,'stream':False})
                     choice=response.get('choices',[{}])[0];text=choice.get('message',{}).get('content','');model=self.cloud_model
                     if choice.get('finish_reason') not in (None,'stop'):raise ValueError('Incomplete translation')
                 if not isinstance(text,str) or not text.strip() or len(text)>16000:raise ValueError('Invalid model text')
