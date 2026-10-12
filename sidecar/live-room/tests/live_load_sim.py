@@ -128,7 +128,7 @@ class Result:
     max_queue: int = 0
     checkpoint: dict = field(default_factory=dict)
     periodic_truncate: dict = field(default_factory=dict)
-    trunc_samples_s: list = field(default_factory=list)   # raw periodic TRUNCATE latencies (pooled across replays)
+    trunc_samples_s: list = field(default_factory=list)   # periodic TRUNCATE product seconds (machine pauses removed)
     lock_probe: dict = field(default_factory=dict)
     wal_bytes_per_commit: float = 0.0
     elapsed_s: float = 0.0
@@ -142,6 +142,98 @@ def _lat(values: list[float]) -> dict:
     return {"n": len(values), "p50_ms": round(pct(values, 0.5) * 1000, 3),
             "p95_ms": round(pct(values, 0.95) * 1000, 3), "max_ms": round(max(values or [0]) * 1000, 3),
             "mean_ms": round((statistics.fmean(values) if values else 0) * 1000, 3)}
+
+
+class SharedMachinePauseClock:
+    """Wall time minus a sudden pause of the shared machine.
+
+    A daemon thread sleeps ``quantum_s`` and timestamps each wake. A wake later
+    than ``quantum_s + stall_s`` means this process was not scheduled. That gap
+    is a runner stall, not checkpoint work.
+
+    ``sqlite3`` releases the GIL inside ``wal_checkpoint``, and ``thread_time``
+    stays flat while the call waits on disk. The heartbeat keeps running
+    through that wait, so the wait stays in the sample. Time is removed only
+    when the heartbeat missed a wake and this thread was off CPU for the same
+    interval. A GIL-holding or genuinely slow checkpoint still counts in full.
+    """
+
+    def __init__(self, quantum_s: float = 0.02, stall_s: float = 0.1):
+        if quantum_s <= 0 or stall_s <= 0:
+            raise ValueError("quantum_s and stall_s must be positive")
+        self.quantum_s = float(quantum_s)
+        self.stall_s = float(stall_s)
+        self._stalls: list[tuple[float, float]] = []
+        self._last_wake = 0.0
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> "SharedMachinePauseClock":
+        if self._thread is None:
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, name="machine-pause-clock", daemon=True)
+            self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2)
+
+    def _run(self) -> None:
+        last = time.perf_counter()
+        with self._lock:
+            self._last_wake = last
+        while not self._stop.wait(self.quantum_s):
+            now = time.perf_counter()
+            self.observe_gap(last, now)
+            last = now
+
+    def observe_gap(self, last: float, now: float) -> None:
+        """Record one heartbeat gap. ``last`` and ``now`` are ``perf_counter`` seconds."""
+        late = (now - last) - self.quantum_s
+        with self._lock:
+            self._last_wake = max(self._last_wake, now)
+            if late >= self.stall_s and now >= last:
+                # The sleep was due at last+quantum. Only the extra is the pause.
+                self._stalls.append((now - late, now))
+
+    def wait_until(self, mark: float) -> None:
+        """Wait until a heartbeat wake has been published at or after ``mark``.
+
+        The pause that ends as the checkpoint returns is visible only after the
+        heartbeat runs. This wait is outside the sample.
+        """
+        if self._thread is None:
+            return
+        deadline = time.perf_counter() + 1.0 + self.quantum_s
+        while True:
+            with self._lock:
+                if self._last_wake >= mark:
+                    return
+            if time.perf_counter() >= deadline:
+                return
+            time.sleep(0.005)
+
+    def overlap_s(self, t0: float, t1: float) -> float:
+        total = 0.0
+        with self._lock:
+            spans = list(self._stalls)
+        for start, end in spans:
+            lo = max(start, t0)
+            hi = min(end, t1)
+            if hi > lo:
+                total += hi - lo
+        return total
+
+    def product_s(self, t0: float, t1: float, cpu_s: float) -> float:
+        """Seconds of the window that are checkpoint work, not a machine pause."""
+        wall = max(0.0, t1 - t0)
+        off_cpu = max(0.0, wall - max(0.0, cpu_s))
+        paused = min(self.overlap_s(t0, t1), off_cpu)
+        return wall - paused
 
 
 def _caption(i: int, sim_t: float, room: str = "load-room", sess: str = "load-s1") -> tuple[dict, dict]:
@@ -178,7 +270,9 @@ def run(sc: Scenario, workdir: Path) -> Result:
     seq_seen: set[int] = set()
     reopen_at = None
     trunc_lat: list[float] = []
+    trunc_paused: list[float] = []
     trunc_busy = 0
+    pause_clock: SharedMachinePauseClock | None = None
     trunc_wal_before: list[int] = []
     redeliveries = 0
 
@@ -259,6 +353,8 @@ def run(sc: Scenario, workdir: Path) -> Result:
 
     started = time.perf_counter()
     try:
+        if sc.truncate_every:
+            pause_clock = SharedMachinePauseClock().start()
         if sc.reader in ("pinned", "bounded"):
             reader = open_reader()
         for i, sim_t in enumerate(times):
@@ -295,15 +391,26 @@ def run(sc: Scenario, workdir: Path) -> Result:
                     if sc.truncate_every and (i + 1) % sc.truncate_every == 0:
                         trunc_wal_before.append(wal_size(db))
                         t0 = time.perf_counter()
+                        cpu0 = time.thread_time()
                         row = zdb.try_checkpoint(admin)
                         # The ledger may own the checkpoint lock at this exact
                         # gap. Give that short-lived owner a bounded chance to
                         # finish before reopening the next read snapshot. Count
-                        # the entire retry time in the original latency gate.
+                        # the entire retry in the latency gate. A pause of the
+                        # shared machine is not checkpoint work: the heartbeat
+                        # misses that interval, and it leaves the sample.
                         while row[0] and time.perf_counter() - t0 < 0.2:
                             time.sleep(0.005)
                             row = zdb.try_checkpoint(admin)
-                        trunc_lat.append(time.perf_counter() - t0)
+                        t1 = time.perf_counter()
+                        cpu1 = time.thread_time()
+                        if pause_clock is None:
+                            product = t1 - t0
+                        else:
+                            pause_clock.wait_until(t1)
+                            product = pause_clock.product_s(t0, t1, cpu1 - cpu0)
+                        trunc_lat.append(product)
+                        trunc_paused.append(max(0.0, (t1 - t0) - product))
                         trunc_busy += int(row[0] != 0)
                 if reader is None and reopen_at is not None and i >= reopen_at:
                     reader = open_reader()
@@ -354,6 +461,8 @@ def run(sc: Scenario, workdir: Path) -> Result:
             probe.close()
         res.checkpoint = ck
     finally:
+        if pause_clock is not None:
+            pause_clock.stop()
         res.elapsed_s = round(time.perf_counter() - started, 2)
         if reader is not None:
             try:
@@ -391,6 +500,7 @@ def run(sc: Scenario, workdir: Path) -> Result:
     if sc.truncate_every:
         res.trunc_samples_s = list(trunc_lat)
         res.periodic_truncate = {"runs": len(trunc_lat), "busy": trunc_busy, **_lat(trunc_lat),
+                                 "machine_pause_ms": round(sum(trunc_paused) * 1000, 3),
                                  "wal_before_max": max(trunc_wal_before or [0])}
     if sc.reader == "pinned" and led.batch_sizes:
         res.wal_bytes_per_commit = round(res.wal_max / len(led.batch_sizes), 1)

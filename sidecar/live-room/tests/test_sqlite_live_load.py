@@ -29,6 +29,7 @@ import os
 import platform
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -158,6 +159,44 @@ def test_gapped_reader_and_admin_lock(results, workdir):
 TRUNCATE_REPLAYS = 3       # same scenario replayed; 3 x 8 = 24 pooled TRUNCATE samples for the p95
 
 
+def test_pause_clock_excludes_shared_machine_stalls_only():
+    """A runner stall leaves the sample. Real checkpoint time, including a slow one, stays."""
+    assert ADMIN_P95_BOUND_S == 1.0
+    assert sim.Scenario("always_on_truncate").segments == 2400
+    clock = sim.SharedMachinePauseClock(quantum_s=0.02, stall_s=0.1)
+    # Due at 10.02, woke at 11.02: one second the process was not scheduled.
+    clock.observe_gap(last=10.0, now=11.02)
+    # 0.82 s of the 1.20 s window sits in that stall, and 0.05 s was on CPU.
+    assert clock.product_s(10.2, 11.4, cpu_s=0.05) == pytest.approx(0.38, abs=0.001)
+    # The stall started before the window. Only the overlap is removed.
+    assert clock.product_s(10.0, 10.5, cpu_s=0.0) == pytest.approx(0.02, abs=0.001)
+    # Heartbeat starvation during on-CPU work is the checkpoint, not a machine pause.
+    assert clock.product_s(10.2, 11.4, cpu_s=1.2) == pytest.approx(1.2, abs=0.001)
+    # Outside the stall, nothing is removed.
+    assert clock.product_s(0.0, 0.5, cpu_s=0.0) == pytest.approx(0.5, abs=0.001)
+    quiet = sim.SharedMachinePauseClock(quantum_s=0.02, stall_s=0.1)
+    quiet.observe_gap(last=0.0, now=0.05)   # timer slack, under the stall threshold
+    slow = quiet.product_s(0.0, 1.2, cpu_s=0.02)
+    assert slow == pytest.approx(1.2, abs=0.001)
+    assert slow >= ADMIN_P95_BOUND_S
+
+
+def test_pause_clock_keeps_off_cpu_wait_as_product_time():
+    """Disk wait releases the GIL. The heartbeat runs, so the wait stays in the sample."""
+    clock = sim.SharedMachinePauseClock().start()
+    try:
+        t0 = time.perf_counter()
+        cpu0 = time.thread_time()
+        time.sleep(0.3)
+        t1 = time.perf_counter()
+        cpu1 = time.thread_time()
+        clock.wait_until(t1)
+        product = clock.product_s(t0, t1, cpu1 - cpu0)
+    finally:
+        clock.stop()
+    assert product >= 0.25, (product, t1 - t0, cpu1 - cpu0)
+
+
 def test_always_on_reader_with_periodic_truncate(results, workdir):
     pinned = _run(results, workdir, sim.Scenario("pinned", reader="pinned"))
     # A reader that is (almost) always open starves auto-checkpoint (see the opt-in starvation
@@ -170,15 +209,16 @@ def test_always_on_reader_with_periodic_truncate(results, workdir):
         _assert_no_loss(r)
         pt = r["periodic_truncate"]
         assert pt["runs"] == 2400 // 300, pt
-        # Per replay: the typical TRUNCATE stays under the bound, so one replay that is slow overall
-        # cannot be diluted by the other two in the pooled p95 below.
+        # Per replay: the typical product-time TRUNCATE stays under the bound, so one replay that
+        # is slow overall cannot be diluted by the other two in the pooled p95 below.
         assert pt["p50_ms"] / 1000 < ADMIN_P95_BOUND_S, (name, pt)
         assert r["wal_max"] < pinned["wal_max"] / 2, (r["wal_max"], pinned["wal_max"])
         _assert_checkpoint_shrinks(r)
         samples += r["trunc_samples_s"]
-    # One lecture yields only 8 TRUNCATEs, and the 95th percentile of 8 is their max, so a single
-    # runner stall (Windows CI: p50 176 ms, one 9.9 s sample) failed the bound. Pooling identical
-    # replays gives 24 samples, so p95 is a real percentile again; the bound itself is unchanged.
+    # Product time is wall time minus a shared-machine pause (heartbeat gap while this thread
+    # was off CPU). ADMIN_P95_BOUND_S is still 1.0 and each lecture is still 2400 segments.
+    # Pooling does not absorb a real regression: a checkpoint that is slow on every replay
+    # keeps the heartbeat running, so p50 above and this p95 both still fail.
     pooled = sim._lat(samples)
     assert pooled["n"] == TRUNCATE_REPLAYS * (2400 // 300), pooled
     assert pooled["p95_ms"] / 1000 < ADMIN_P95_BOUND_S, pooled
