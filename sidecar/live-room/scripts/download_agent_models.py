@@ -33,6 +33,9 @@ def main():
     parser.add_argument('model',choices=MODELS)
     args=parser.parse_args()
     os.environ['HF_HUB_DISABLE_TELEMETRY']='1'
+    # Bounded-memory HTTP streaming avoids large Xet reconstruction buffers on Windows.
+    if os.name=='nt':
+        os.environ.setdefault('HF_HUB_DISABLE_XET','1')
     from huggingface_hub import HfApi,get_token,snapshot_download
     if not get_token():
         print(json.dumps({'status':'hf_login_required','model':args.model}))

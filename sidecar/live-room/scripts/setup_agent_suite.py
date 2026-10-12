@@ -14,7 +14,7 @@ PROFILES = {
     'speech': ['sherpa-onnx==1.13.8', 'opencc-python-reimplemented==0.1.7',
                'langgraph==1.2.14', 'numpy==2.3.5', 'onnxruntime==1.31.0', 'requests==2.34.2'],
     'evaluation': ['unbabel-comet==2.2.7'],
-    'diarization': ['pyannote.audio==4.0.7', 'torchcodec==0.7.0'],
+    'diarization': ['pyannote.audio==4.0.7', 'torchcodec==0.7.0', 'soundfile==0.14.0', 'huggingface_hub==2.2.0'],
 }
 CPU_TORCH = ['torch==2.8.0+cpu', 'torchaudio==2.8.0+cpu']
 

@@ -7,6 +7,12 @@ import subprocess
 ROOT=Path(__file__).resolve().parents[1]
 OPERATIONS={'translate':('speech',61),'enhance':('speech',120),
             'diarize':('diarization',900),'evaluate':('evaluation',900)}
+MIN_FREE_GB={'diarize':2,'evaluate':6}
+
+
+def available_memory_gb():
+    import psutil
+    return psutil.virtual_memory().available/(1024**3)
 
 
 def suite_root():
@@ -41,6 +47,9 @@ def call_worker(operation,payload,runner=subprocess.run):
     py=suite_root()/profile/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
     if not py.is_file():
         raise RuntimeError('Optional agent profile is not installed')
+    minimum=MIN_FREE_GB.get(operation,0)
+    if minimum and available_memory_gb()<minimum:
+        raise RuntimeError(f'可用記憶體不足：此工作需要至少 {minimum} GB，請稍後再試。')
     raw=json.dumps(payload,ensure_ascii=False).encode('utf-8')
     if len(raw)>256000:
         raise ValueError('Agent request exceeds limit')

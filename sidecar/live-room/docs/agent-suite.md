@@ -10,7 +10,7 @@ Zen Bridge 是主要介面。進階工具安裝在 `%LOCALAPPDATA%\ZenBridge\age
 - evaluation：CPU PyTorch、COMET。
 - diarization：CPU PyTorch、pyannote Community-1 執行套件。
 
-安裝套件不代表模型已下載。本人先接受 Hugging Face 模型頁條款，再執行 `agent-suite\diarization\Scripts\hf.exe auth login`。不要把密碼或 token 放進設定檔、聊天或 GitHub。
+安裝套件不代表模型已下載。本人先接受 Hugging Face 模型頁條款，再用 `agent-suite\diarization\Scripts\python.exe` 執行 `scripts/login_agent_models.py`，在官方頁面完成裝置授權。此登入只要求讀取已獲准的公開模型；不要把密碼或 token 放進設定檔、聊天或 GitHub。
 
 接受條款與登入後，用對應環境的 Python 執行 `scripts/download_agent_models.py community1` 或 `cometkiwi`。下載固定到當次查得的模型 commit，完成後才寫就緒標記。下載器不會代替你接受條款。
 
