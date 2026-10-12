@@ -72,3 +72,18 @@ export function meterPct(dbfs) {
 
 export const SOURCE_ZH = {club: "社團用語", glossary: "詞表", dharma: "開示常用句", mixed: "中英夾雜", custom: "自訂"};
 export const STATUS_ZH = {unverified: "未校對", needs_review: "需人工處理", approved: "已核准", rejected: "已退回"};
+
+// 課後審核的鍵盤對應（純函式，tests/training_logic.test.mjs 測）。editing = 正在改文字。
+export function reviewKey(key, {editing = false, ctrl = false} = {}) {
+  if (ctrl) return null;
+  if (editing) return key === "Escape" ? "cancel" : key === "Enter" ? "save" : null;
+  return ({j: "next", J: "next", ArrowDown: "next", k: "prev", K: "prev", ArrowUp: "prev", " ": "play",
+    a: "approve", A: "approve", Enter: "approve", e: "edit", E: "edit", x: "exclude", X: "exclude",
+    i: "include", I: "include", r: "reject", R: "reject"})[key] || null;
+}
+
+export const FLAG_ZH = {low_speaker: "聲紋不太像", speaker_unknown: "太短無法比對聲紋", clipping: "破音", noisy: "雜音大",
+  mostly_silence: "大多靜音", too_quiet: "太小聲", short_text: "字太少", odd_rate: "語速異常", repeat: "重複字（疑似幻覺）",
+  draft_disagree: "草稿和定稿差很多", near_question: "接近提問時段", question: "提問中"};
+
+export function fmtHours(s) { return (s / 3600).toFixed(2) + " 小時"; }

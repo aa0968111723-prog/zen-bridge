@@ -19,3 +19,17 @@
 .tr-card .meta{color:#6b5a3e;font-size:.9rem}
 .tr-log{max-height:12rem;overflow:auto}
 blockquote#consent-text{background:#f4ead8;padding:.8rem 1rem;border-left:4px solid #c9a978}
+.tr-rec{color:#c0392b;font-weight:700}
+.tr-batch{list-style:none;padding:0;max-height:62vh;overflow:auto;border:1px solid #d8c7a4;border-radius:.6rem}
+.tr-row{display:grid;grid-template-columns:5.5rem 6rem 1fr;gap:.2rem .6rem;padding:.45rem .7rem;border-bottom:1px solid #eee3cc;cursor:pointer}
+.tr-row .meta{grid-column:3;color:#6b5a3e;font-size:.85rem}
+.tr-row.cur{background:#fff1c9;outline:2px solid #c9a978}
+.tr-row.ex .tr-x{color:#8a7a62;text-decoration:line-through}
+.tr-x{font-size:1.1rem}
+.tr-edit{font-size:1.1rem;width:100%}
+.tr-keys kbd,.hint kbd{border:1px solid #c9a978;border-radius:.25rem;padding:0 .3rem;background:#fffaf0}
+.tr-hours td{padding:.15rem .5rem}
+.tr-hours td:nth-child(2){width:60%}
+.tr-hours .bar{height:.55rem;border-radius:.3rem;margin:.1rem 0}
+.tr-hours .bar.c{background:#9cc3a8}
+.tr-hours .bar.a{background:#2f6b45}

@@ -13,16 +13,19 @@
   <h2>訓練資料（只存在這台電腦）</h2>
   <p class="hint">錄音與逐字稿只存在 <code id="root">%LOCALAPPDATA%\ZenBridge\training</code>，不會上傳。只有在名冊裡「有同意」的講者才能錄音或被收錄；撤回同意會刪除他所有的錄音和含他的匯出。</p>
   <nav class="tr-tabs" role="tablist" aria-label="分頁">
-    <button role="tab" data-tab="speakers" aria-selected="true">講者與同意</button>
-    <button role="tab" data-tab="studio">錄音室</button>
-    <button role="tab" data-tab="harvest">社課收錄</button>
-    <button role="tab" data-tab="review">審核佇列 <span id="q-count"></span></button>
+    <button role="tab" data-tab="harvest" aria-selected="true">社課收錄</button>
+    <button role="tab" data-tab="classreview">課後審核 <span id="cq-count"></span></button>
+    <button role="tab" data-tab="hours">時數統計</button>
+    <button role="tab" data-tab="speakers">講者與同意</button>
+    <button role="tab" data-tab="studio">錄音室（選用）</button>
+    <button role="tab" data-tab="review">全部片段 <span id="q-count"></span></button>
     <button role="tab" data-tab="recordings">錄音與逐字稿</button>
     <button role="tab" data-tab="import">匯入既有錄音</button>
     <button role="tab" data-tab="export">匯出資料集</button>
+    <button role="tab" data-tab="settings">保留與磁碟</button>
   </nav>
 
-  <section id="tab-speakers" class="tr-pane">
+  <section id="tab-speakers" class="tr-pane" hidden>
     <h3>講者名冊</h3>
     <table id="spk-table" aria-label="講者"><thead><tr><th>暱稱</th><th>ID</th><th>同意</th><th>已錄</th><th>操作</th></tr></thead><tbody></tbody></table>
     <form id="spk-add" class="tr-form"><label>暱稱（不要填學號、電話）<input name="label" maxlength="24" required></label>
@@ -70,15 +73,69 @@
     <div id="studio-done" hidden></div>
   </section>
 
-  <section id="tab-harvest" class="tr-pane" hidden>
-    <h3>社課現場收錄（主持人逐場開啟）</h3>
-    <p class="hint">只對「允許現場收錄」的講者有效。開啟後，這個房間的下一場（或指定場次）每段 Breeze 定稿字幕會連同音檔存成「未校對」，並同步寫入逐字稿。4 分鐘沒有辨識結果會提醒，5 分鐘自動停止並產生完整逐字稿。</p>
-    <form id="harvest-form" class="tr-form"><label>房間代碼 <input name="room_id" required maxlength="64"></label>
-      <label>場次 ID（可空 = 下一場）<input name="session_id" maxlength="64"></label>
-      <label>講者 <select name="speaker_id" id="harvest-spk"></select></label>
-      <label>最長（小時）<input name="hours" type="number" min="0.25" max="12" step="0.25" value="4"></label>
-      <button type="submit">本場開始收錄</button></form>
-    <table id="harvest-table" aria-label="收錄紀錄"><thead><tr><th>房間</th><th>場次</th><th>講者</th><th>狀態</th><th>操作</th></tr></thead><tbody></tbody></table>
+  <section id="tab-harvest" class="tr-pane">
+    <h3>上課時收錄（主要做法）</h3>
+    <ol class="hint">
+      <li>第一次：在下面「快速登記」主講者並記錄同意（約 1 分鐘，只要一次）。</li>
+      <li>上課：主持頁（字幕那頁）右下角選主講者、打開「收錄訓練資料」。之後同一個房間會記住，不用再設定。</li>
+      <li>收錄中主持頁會顯示紅色「● 收錄中」。學員提問時按 <kbd>Q</kbd>（或「提問中」按鈕），那段預設排除。</li>
+      <li>下課按「停止」：自動產生完整逐字稿；所有收錄都停 1 分鐘後在背景切片段、比對聲紋。</li>
+      <li>到「課後審核」：只看不確定的段落，其餘一鍵核准。</li>
+    </ol>
+    <section class="tr-card" id="quick-box">
+      <h4>快速登記主講者＋同意</h4>
+      <blockquote id="quick-consent-text"></blockquote>
+      <form id="quick-form" class="tr-form">
+        <label>暱稱（不要填學號、電話、真名）<input name="label" maxlength="24" required placeholder="例：法師、學長A"></label>
+        <label>紀錄人（你的暱稱）<input name="recorded_by" maxlength="40" required></label>
+        <label><input type="checkbox" name="scope_asr" checked> 語音辨識訓練</label>
+        <label><input type="checkbox" name="scope_mt" checked> 翻譯訓練</label>
+        <label><input type="checkbox" name="harvest_live" checked> 允許上課時收錄</label>
+        <label><input type="checkbox" name="confirm_text" required> 本人已聽過／讀過上面的說明並同意</label>
+        <button type="submit">登記並記錄同意</button></form>
+    </section>
+    <h4>房間設定（主持頁的開關也會改這裡）</h4>
+    <form id="room-form" class="tr-form"><label>房間代碼 <input name="room_id" required maxlength="64" value="class"></label>
+      <label>主講者 <select name="speaker_id" id="harvest-spk"></select></label>
+      <label><input type="checkbox" name="collect"> 收錄訓練資料</label>
+      <button type="submit">儲存</button></form>
+    <table id="room-table" aria-label="房間設定"><thead><tr><th>房間</th><th>主講者</th><th>收錄</th><th>更新</th></tr></thead><tbody></tbody></table>
+    <h4>每堂課的收錄</h4>
+    <table id="harvest-table" aria-label="收錄紀錄"><thead><tr><th>開始</th><th>房間</th><th>主講者</th><th>長度</th><th>狀態</th><th>片段</th><th>操作</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="tab-classreview" class="tr-pane" hidden>
+    <h3>課後審核（一堂課一批）</h3>
+    <form id="cr-form" class="tr-form">
+      <label>哪一堂 <select name="rid" id="cr-rid"></select></label>
+      <label>排序 <select name="sort"><option value="confidence">不確定的先</option><option value="time">時間順序</option><option value="speaker">聲紋最不像的先</option></select></label>
+      <label>顯示 <select name="show"><option value="todo">待審（主講者）</option><option value="excluded">已排除（他人／提問）</option><option value="done">已處理</option><option value="all">全部</option></select></label>
+      <label>一鍵核准門檻 <input name="min_conf" type="number" min="0.5" max="1" step="0.05" value="0.85"></label>
+      <button type="submit">載入</button>
+      <button type="button" id="cr-approve-all">核准門檻以上全部</button>
+      <button type="button" id="cr-derive" class="secondary">重新整理（切段＋聲紋）</button>
+    </form>
+    <p id="cr-summary" class="hint" aria-live="polite"></p>
+    <p class="hint tr-keys">鍵盤：<kbd>J</kbd>/<kbd>↓</kbd> 下一段　<kbd>K</kbd>/<kbd>↑</kbd> 上一段　<kbd>空白</kbd> 播放　<kbd>A</kbd>/<kbd>Enter</kbd> 核准並下一段　<kbd>E</kbd> 修改文字（Enter 存並核准，Esc 取消）　<kbd>X</kbd> 排除（不是主講者）　<kbd>I</kbd> 收回（是主講者）　<kbd>R</kbd> 退回（刪音檔）</p>
+    <audio id="cr-audio" hidden></audio>
+    <ol id="cr-list" class="tr-batch" aria-label="這堂課的段落"></ol>
+  </section>
+
+  <section id="tab-hours" class="tr-pane" hidden>
+    <h3>每位講者累積時數</h3>
+    <p class="hint">收錄＝上課時存下的整堂音檔時數；核准＝已審核、可以拿去訓練的時數。</p>
+    <div id="hours-box"></div>
+  </section>
+
+  <section id="tab-settings" class="tr-pane" hidden>
+    <h3>保留期限與磁碟</h3>
+    <p class="hint" id="disk-note"></p>
+    <form id="settings-form" class="tr-form">
+      <label>整堂原始音檔保留（天，0＝整理完就刪）<input name="raw_retention_days" type="number" min="0" max="365" step="1"></label>
+      <label>排除段落（他人聲音）的音檔保留（天）<input name="excluded_audio_days" type="number" min="0" max="90" step="1"></label>
+      <label>一鍵核准預設門檻 <input name="auto_approve_min" type="number" min="0.5" max="1" step="0.05"></label>
+      <button type="submit">儲存</button> <button type="button" id="cleanup-now" class="secondary">現在清理</button></form>
+    <table id="disk-table" aria-label="磁碟用量"><tbody></tbody></table>
   </section>
 
   <section id="tab-review" class="tr-pane" hidden>
