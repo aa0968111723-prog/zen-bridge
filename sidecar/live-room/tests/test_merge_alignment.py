@@ -47,6 +47,9 @@ async def test_merged_translation_event_names_merged_seqs(monkeypatch):
 
 def test_ledger_marks_merged_and_correction_waits_for_review(tmp_path):
     path = tmp_path / "zen.sqlite3"
+    # Create the schema up front (what the writer thread's first open would otherwise do), so the
+    # wait_idle bound below times only the two caption writes, not the cold schema creation + migrations.
+    db.ensure_migrated(path)
     led = Ledger(path)
     led.submit(cap(seq=3, zh="乙句", status="ready", en="EN 甲句，乙句", translate_status="ok", en_merged_from=[2]))
     led.submit(cap(seq=4, zh="丙句", status="ready", en="EN 丙句", translate_status="ok"))
