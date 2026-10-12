@@ -7,7 +7,7 @@ import subprocess
 ROOT=Path(__file__).resolve().parents[1]
 OPERATIONS={'translate':('speech',61),'enhance':('speech',120),
             'diarize':('diarization',900),'evaluate':('evaluation',900)}
-MIN_FREE_GB={'diarize':2,'evaluate':6}
+MIN_FREE_GB={'diarize':2,'evaluate':4}
 
 
 def available_memory_gb():
@@ -30,7 +30,7 @@ def suite_status():
             model=Path(os.getenv('LOCALAPPDATA',Path.home()/'AppData'/'Local'))/'ZenBridge/models'/(
                 'diarization/community1' if profile=='diarization' else 'evaluation/cometkiwi')
             required=('config.yaml','embedding/pytorch_model.bin','segmentation/pytorch_model.bin',
-                      'plda/plda.npz','plda/xvec_transform.npz') if profile=='diarization' else ('checkpoints/model.ckpt','hparams.yaml')
+                      'plda/plda.npz','plda/xvec_transform.npz') if profile=='diarization' else ('checkpoints/model.ckpt','hparams.yaml','encoder-origin.json')
             try:
                 record=json.loads((model/'zen-model-origin.json').read_text(encoding='utf-8'))
                 ready=isinstance(record,dict) and record.get('status')=='verified' and all((model/name).is_file() for name in required)
