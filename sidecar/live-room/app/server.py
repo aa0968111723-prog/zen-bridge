@@ -1334,6 +1334,8 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
                     store.submit_save({'id': caption_id, 'room_id': room, 'session_id': session, 'seq': seq,
                                        'zh': text, 'zh_raw': text, 'en': '', 'status': 'final',
                                        't0_ms': 0, 't1_ms': int(request.get('duration_ms') or 0)})
+                    from app.ledger import agent_caption_event
+                    ledger.submit(agent_caption_event(caption_id, room, session, seq, text, int(request.get('duration_ms') or 0)))
                 if corrector is not None and text:
                     corrector.submit(room, session, seq, wav_bytes, text)
             tasks.append(asyncio.create_task(run_agent(asr, remember_line)))
@@ -1483,6 +1485,7 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "queue": pipeline.stats(),
             "listeners": _seated_listeners(book.rooms.values()),
             "storage": store.enabled,
+            "ledger_enabled": ledger.enabled,
             "draft_available": drafts_available,
             "endpoint_final": drafts_available and endpoint_final_on,
             "fast_final": (fast_engine.kind if fast_engine is not None and endpoint_final_on else None),

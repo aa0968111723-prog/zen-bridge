@@ -56,3 +56,18 @@ def test_agent_transcribe_uses_fast_route_and_saves_chinese(tmp_path):
     assert response["ok"] is True and response["source"] == "快稿"
     assert breeze.calls == 0
     assert saved and saved[0][0] == "快稿" and saved[0][1].startswith("11111111")
+
+
+def test_agent_caption_lands_in_admin_ledger(tmp_path):
+    from app.admin import db
+    from app.ledger import Ledger, agent_caption_event
+    from tests.local_fakes import migrated_db
+
+    path = migrated_db(tmp_path)
+    ledger = Ledger(path)
+    ledger.submit(agent_caption_event("host:desktop:1", "host", "desktop", 1, "快稿", 1200))
+    assert ledger.wait_idle(5)
+    ledger.close()
+    with db.connect(path) as conn:
+        row = conn.execute("SELECT text FROM transcripts WHERE segment_id=?", ("host:desktop:1",)).fetchone()
+    assert row is not None and row[0] == "快稿"
