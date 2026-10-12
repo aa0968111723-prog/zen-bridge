@@ -6,9 +6,9 @@ import pytest
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 from app.admin.server import API  # noqa: E402
-from app.training import harvest  # noqa: E402
+from app.training import capture  # noqa: E402
 from tests.test_admin_api import BEARER, browser_login, env, writes  # noqa: E402,F401
-from tests.training_fakes import speechy, wav_bytes  # noqa: E402
+from tests.training_fakes import class_clip, speechy, wav_bytes  # noqa: E402
 
 T = f"{API}/training"
 
@@ -17,8 +17,9 @@ T = f"{API}/training"
 def troot(env, tmp_path, monkeypatch):  # noqa: F811
     root = tmp_path / "training"
     monkeypatch.setenv("ZEN_TRAINING_DIR", str(root))
-    harvest._cache.update(at=0.0, active=False)
-    return root
+    capture._reset_for_tests(root)
+    yield root
+    capture._reset_for_tests(None)
 
 
 def _speaker(cl, label="師兄", live=False):
@@ -84,13 +85,23 @@ def test_harvest_review_withdraw_export_over_http(env, troot, tmp_path):  # noqa
     cl = env["client"]
     sid = _speaker(cl, live=True)
     no_live = _speaker(cl, "只錄音室")
-    assert cl.post(f"{T}/harvest", json={"room_id": "room1", "speaker_id": no_live}, headers=BEARER).status_code == 403
-    o = cl.post(f"{T}/harvest", json={"room_id": "room1", "speaker_id": sid}, headers=BEARER)
-    assert o.status_code == 201, o.text
+    room = lambda s: cl.post(f"{T}/classes/room", json={"room_id": "room1", "speaker_id": s, "collect": True},  # noqa: E731
+                             headers=BEARER)
+    assert room(no_live).status_code == 403
+    assert room(sid).status_code == 200
+    ov = cl.get(T, headers=BEARER).json()
+    assert ov["rooms"][0]["collect"] == 1 and [x["id"] for x in ov["lecturers"]] == [sid]
+    assert ov["disk"]["estimate"]["raw_mb_per_class_hour"] == 115.2
     w = tmp_path / "seg.wav"
     w.write_bytes(wav_bytes(speechy(3)))
-    cid = harvest.capture(room_id="room1", session_id="s1", seq=1, wav_path=w, zh_raw="今天講因緣", zh="今天講因緣",
-                          tgt_lang="en")
+    from app.training import db as tdb
+    c = tdb.connect(troot)
+    cid = class_clip(c, troot, room_id="room1", session_id="s1", seq=1, wav_path=w, zh_raw="今天講因緣", zh="今天講因緣",
+                     tgt_lang="en", speaker_id=sid)
+    rid = c.execute("SELECT recording_id FROM class_sessions").fetchone()[0]
+    c.close()
+    b = cl.get(f"{T}/classes/{rid}/batch", headers=BEARER).json()
+    assert [x["id"] for x in b["items"]] == [cid] and b["counts"]["above_threshold"] == 1 and b["min_conf"] == 0.85
     q = cl.get(f"{T}/review", headers=BEARER).json()["items"]
     assert [x["id"] for x in q] == [cid]
     r = cl.post(f"{T}/review/{cid}", headers=BEARER, json={"action": "approve", "text": "今天講因緣",
@@ -100,8 +111,15 @@ def test_harvest_review_withdraw_export_over_http(env, troot, tmp_path):  # noqa
     assert "staging_id" in r.json()["staging"]           # corrected translation went to the TM staging queue
     lst = cl.get(f"{API}/staging", headers=BEARER).json()
     assert any(i["src_text"] == "今天講因緣" for i in lst["items"])
-    h = cl.get(f"{T}/harvest", headers=BEARER).json()
-    assert h["optins"][0]["recording_id"] and h["stop_idle_s"] == 300
+    h = cl.get(f"{T}/classes", headers=BEARER).json()
+    assert h["classes"][0]["recording_id"] == rid and h["classes"][0]["clips"]["approved"] == 1
+    hrs = cl.get(f"{T}/stats/hours", headers=BEARER).json()["speakers"]
+    assert hrs[sid]["approved_total_h"] > 0
+    assert cl.post(f"{T}/settings", json={"raw_retention_days": 7}, headers=BEARER).json()["raw_retention_days"] == 7
+    assert cl.post(f"{T}/settings", json={"raw_retention_days": -3}, headers=BEARER).status_code == 422
+    assert cl.get(f"{T}/recordings/{rid}/bundle.zip", headers=BEARER).headers["content-type"] == "application/zip"
+    q = cl.post(f"{T}/speakers/quick", headers=BEARER, json={"label": "快速", "recorded_by": "社長", "confirm_text": True})
+    assert q.status_code == 201 and q.json()["consent"]["harvest_live"] == 1
     e = cl.post(f"{T}/exports", headers=BEARER, json={"options": {}})
     assert e.status_code == 201, e.text
     out = e.json()["dir"]

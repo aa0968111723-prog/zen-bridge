@@ -14,7 +14,7 @@ import pytest
 
 from app.training import dataset, harvest, registry, review
 from app.training import db as tdb
-from tests.training_fakes import speechy, wav_bytes
+from tests.training_fakes import class_clip, speechy, wav_bytes
 
 REPO = Path(__file__).resolve().parents[3]
 SCRIPTS = REPO / "training" / "scripts"
@@ -31,7 +31,6 @@ def _py():
 @pytest.fixture(scope="module")
 def export(tmp_path_factory):
     root = tmp_path_factory.mktemp("tr")
-    harvest._cache.update(at=0.0, active=False, swept=time.monotonic())
     c = tdb.connect(root)
     try:
         for i in range(3):
@@ -39,13 +38,12 @@ def export(tmp_path_factory):
             registry.record_consent(c, s, scope_asr=True, scope_mt=True, harvest_live=True, recorded_by="社長",
                                     confirm_text=True)
             for sess in range(3):
-                harvest.enable(c, room_id=f"room{i}", speaker_id=s, enabled_by="host")
                 for seq in range(2):
                     w = root / f"{i}{sess}{seq}.wav"
                     w.write_bytes(wav_bytes(speechy(1.6, seed=i * 9 + sess * 3 + seq)))
                     t = f"第{i}位第{sess}場第{seq}句禪修"
-                    cid = harvest.capture(room_id=f"room{i}", session_id=f"s{sess}", seq=seq, wav_path=w, zh_raw=t, zh=t,
-                                          tgt_lang="en", root=root)
+                    cid = class_clip(c, root, room_id=f"room{i}", session_id=f"s{sess}", seq=seq, wav_path=w, zh_raw=t,
+                                     zh=t, tgt_lang="en", speaker_id=s)
                     review.decide(c, root, cid, action="approve", actor="t", mt_text=f"Zen line {i}-{sess}-{seq}")
         ex = dataset.build(c, root)
     finally:

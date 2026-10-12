@@ -10,19 +10,24 @@ import pytest
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-from app.training import audioq, dataset, harvest, importer, prompts, recordings, registry, review, studio  # noqa: E402
+from app.training import audioq, capture, dataset, harvest, importer, prompts, recordings, registry, review, studio  # noqa: E402
 from app.training import db as tdb  # noqa: E402
-from tests.training_fakes import speechy, wav_bytes  # noqa: E402
+from tests.training_fakes import HarvestShim, speechy, wav_bytes  # noqa: E402
 
 
 @pytest.fixture
 def tr(tmp_path, monkeypatch):
     root = tmp_path / "training"
     monkeypatch.setenv("ZEN_TRAINING_DIR", str(root))
-    harvest._cache.update(at=0.0, active=False, swept=time.monotonic())
+    capture._reset_for_tests(root)
     c = tdb.connect(root)
+    global H
+    H = HarvestShim(c, root)
     yield c, root
+    capture._reset_for_tests(None)
     c.close()
+
+H = None
 
 
 def consented(c, label="師兄", **kw):
@@ -50,7 +55,7 @@ def studio_takes(c, root, sid, n=3, seed=1):
 def test_schema_tables_and_constraints(tr):
     c, root = tr
     names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert {"speakers", "consents", "recordings", "clips", "prompts", "mt_pairs", "harvest_optins", "exports",
+    assert {"speakers", "consents", "recordings", "clips", "prompts", "mt_pairs", "class_sessions", "exports",
             "audit"} <= names
     assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "1"
     sid = consented(c)
@@ -144,68 +149,14 @@ def _seg_wav(tmp, name, seconds=3.0, seed=3):
     return p
 
 
-def test_harvest_only_with_host_optin_and_live_consent(tr, tmp_path):
-    c, root = tr
-    sid = consented(c)
-    nolive = consented(c, "只錄音室", harvest_live=False)
-    w = _seg_wav(tmp_path, "a.wav")
-    assert harvest.capture(room_id="r1", session_id="s1", seq=1, wav_path=w, zh_raw="今天講因緣", zh="今天講因緣") is None
-    with pytest.raises(registry.RegistryError):
-        harvest.enable(c, room_id="r1", speaker_id=nolive, enabled_by="host")
-    o = harvest.enable(c, room_id="r1", speaker_id=sid, enabled_by="host")
-    cid = harvest.capture(room_id="r1", session_id="s1", seq=1, wav_path=w, zh_raw="今天講音緣", zh="今天講因緣",
-                          t0_ms=0, t1_ms=3000, tgt_lang="en")
-    assert cid
-    k = recordings.clip(c, cid)
-    assert k["status"] == "unverified" and k["asr_text"] == "今天講音緣" and k["segment_id"] == "r1:s1:1"
-    # retry of the same segment replaces; other rooms are ignored
-    harvest.capture(room_id="r1", session_id="s1", seq=1, wav_path=w, zh_raw="今天講因緣", zh="今天講因緣")
-    assert c.execute("SELECT COUNT(*) FROM clips").fetchone()[0] == 1
-    assert harvest.capture(room_id="r2", session_id="x", seq=1, wav_path=w, zh_raw="a", zh="a") is None
-    rec_id = harvest.optin(c, o["id"])["recording_id"]
-    assert (root / recordings.get(c, rec_id)["dir"] / "live.jsonl").exists()
-    # a new session in the same room ends the per-session opt-in and writes the full transcript
-    assert harvest.capture(room_id="r1", session_id="s2", seq=1, wav_path=w, zh_raw="b", zh="b") is None
-    assert harvest.optin(c, o["id"])["stopped_at"] is not None
-    rec = recordings.get(c, rec_id)
-    assert rec["status"] == "ended" and (root / rec["dir"] / "transcript.srt").exists()
-
-
-def test_harvest_idle_warns_at_4_and_stops_at_5_minutes(tr, tmp_path):
-    c, root = tr
-    sid = consented(c)
-    o = harvest.enable(c, room_id="r9", speaker_id=sid, enabled_by="host")
-    harvest.capture(room_id="r9", session_id="s1", seq=1, wav_path=_seg_wav(tmp_path, "b.wav"), zh_raw="x", zh="x")
-    now = time.time()
-    o = harvest.optin(c, o["id"])
-    assert harvest.idle_state(c, o, now + 100)["warn"] is False
-    assert harvest.idle_state(c, o, now + 245)["warn"] is True
-    assert harvest.sweep(c, root, now + 200) == []
-    assert harvest.sweep(c, root, now + 301) == [o["id"]]
-    rec = recordings.get(c, harvest.optin(c, o["id"])["recording_id"])
-    assert rec["status"] == "ended" and (root / rec["dir"] / "transcript.json").exists()
-
-
-def test_pipeline_hook_is_noop_without_training_db(tmp_path, monkeypatch):
-    import asyncio
-    from app import pipeline
-    monkeypatch.setenv("ZEN_TRAINING_DIR", str(tmp_path / "none"))
-    harvest._cache.update(at=0.0, active=False)
-
-    class S:
-        room_id, session_id, seq, zh_raw, zh, t0_ms, t1_ms, tgt_lang = "r", "s", 1, "a", "a", 0, 1, "en"
-    asyncio.run(pipeline._training_harvest(S(), tmp_path / "x.wav"))
-    assert not (tmp_path / "none").exists()
-
-
 # ------------------------------------------------------------------ review + MT pairs
 def test_review_approve_creates_mt_pair_and_reject_deletes_audio(tr, tmp_path):
     c, root = tr
     sid = consented(c)
-    harvest.enable(c, room_id="r1", speaker_id=sid, enabled_by="host")
-    a = harvest.capture(room_id="r1", session_id="s1", seq=1, wav_path=_seg_wav(tmp_path, "1.wav"), zh_raw="諸行無嘗",
+    H.enable(c, room_id="r1", speaker_id=sid, enabled_by="host")
+    a = H.capture(room_id="r1", session_id="s1", seq=1, wav_path=_seg_wav(tmp_path, "1.wav"), zh_raw="諸行無嘗",
                         zh="諸行無嘗", tgt_lang="en")
-    b = harvest.capture(room_id="r1", session_id="s1", seq=2, wav_path=_seg_wav(tmp_path, "2.wav", seed=5),
+    b = H.capture(room_id="r1", session_id="s1", seq=2, wav_path=_seg_wav(tmp_path, "2.wav", seed=5),
                         zh_raw="旁人講話", zh="旁人講話")
     out = review.decide(c, root, a, action="approve", actor="t", text="諸行無常", mt_text="All conditioned things are impermanent.")
     assert out["status"] == "approved" and out["text"] == "諸行無常" and out["mt_pair"]["tgt_lang"] == "en"
@@ -222,8 +173,8 @@ def test_withdraw_deletes_audio_pairs_recordings_and_exports(tr, tmp_path):
     gone = consented(c, "要撤回的")
     studio_takes(c, root, keep, n=3, seed=1)
     rec, clips = studio_takes(c, root, gone, n=3, seed=7)
-    harvest.enable(c, room_id="r1", speaker_id=gone, enabled_by="host")
-    h = harvest.capture(room_id="r1", session_id="s1", seq=1, wav_path=_seg_wav(tmp_path, "w.wav"), zh_raw="放下", zh="放下")
+    H.enable(c, room_id="r1", speaker_id=gone, enabled_by="host")
+    h = H.capture(room_id="r1", session_id="s1", seq=1, wav_path=_seg_wav(tmp_path, "w.wav"), zh_raw="放下", zh="放下")
     review.decide(c, root, h, action="approve", actor="t", mt_text="Let go.")
     ext = tmp_path / "outside-export"
     ex = dataset.build(c, root, out_dir=ext)
@@ -251,7 +202,7 @@ def test_withdraw_deletes_audio_pairs_recordings_and_exports(tr, tmp_path):
         studio.start(c, root, gone)
     with pytest.raises(registry.RegistryError):
         registry.record_consent(c, gone, scope_asr=True, scope_mt=True, recorded_by="x", confirm_text=True)
-    assert harvest.capture(room_id="r1", session_id="s1", seq=9, wav_path=_seg_wav(tmp_path, "z.wav"), zh_raw="a", zh="a") is None
+    assert H.capture(room_id="r1", session_id="s1", seq=9, wav_path=_seg_wav(tmp_path, "z.wav"), zh_raw="a", zh="a") is None
     assert registry.withdraw(c, root, gone)["clips_deleted"] == 0          # idempotent
 
 
@@ -261,14 +212,14 @@ def _many(c, root, tmp_path):
     for i, sid in enumerate(spk):
         for sess in range(3):
             room = f"room{i}"
-            harvest.enable(c, room_id=room, speaker_id=sid, enabled_by="host")
+            H.enable(c, room_id=room, speaker_id=sid, enabled_by="host")
             for seq in range(4):
                 w = _seg_wav(tmp_path, f"{i}{sess}{seq}.wav", 2.0 + seq * 0.2, seed=i * 31 + sess * 7 + seq)
                 text = "諸行無常" if seq == 0 else f"第{i}位第{sess}場第{seq}句"
-                cid = harvest.capture(room_id=room, session_id=f"s{sess}", seq=seq, wav_path=w, zh_raw=text, zh=text,
+                cid = H.capture(room_id=room, session_id=f"s{sess}", seq=seq, wav_path=w, zh_raw=text, zh=text,
                                       tgt_lang="en")
                 review.decide(c, root, cid, action="approve", actor="t", mt_text=f"line {i}-{sess}-{seq}")
-            harvest.stop(c, root, c.execute("SELECT MAX(id) FROM harvest_optins").fetchone()[0])
+            H.stop()
     return spk
 
 
@@ -309,14 +260,14 @@ def test_export_format_audiofolder_jsonl_and_card(tr, tmp_path):
     _many(c, root, tmp_path)
     # a bad pair (Breeze output far from the text) and a too-short clip are filtered
     sid = consented(c, "濾掉")
-    harvest.enable(c, room_id="rx", speaker_id=sid, enabled_by="host")
-    bad = harvest.capture(room_id="rx", session_id="s", seq=1, wav_path=_seg_wav(tmp_path, "bad.wav"),
+    H.enable(c, room_id="rx", speaker_id=sid, enabled_by="host")
+    bad = H.capture(room_id="rx", session_id="s", seq=1, wav_path=_seg_wav(tmp_path, "bad.wav"),
                           zh_raw="完全不同的一句話", zh="完全不同的一句話")
     review.decide(c, root, bad, action="approve", actor="t", text="今天天氣很好我們去散步")
-    short = harvest.capture(room_id="rx", session_id="s", seq=2, wav_path=_seg_wav(tmp_path, "s.wav", 0.6),
+    short = H.capture(room_id="rx", session_id="s", seq=2, wav_path=_seg_wav(tmp_path, "s.wav", 0.6),
                             zh_raw="短", zh="短")
     review.decide(c, root, short, action="approve", actor="t")
-    unv = harvest.capture(room_id="rx", session_id="s", seq=3, wav_path=_seg_wav(tmp_path, "u.wav"), zh_raw="未審", zh="未審")
+    unv = H.capture(room_id="rx", session_id="s", seq=3, wav_path=_seg_wav(tmp_path, "u.wav"), zh_raw="未審", zh="未審")
     ex = dataset.build(c, root)
     out = Path(ex["dir"])
     d = ex["asr"]["dropped"]
@@ -362,9 +313,9 @@ def test_export_term_coverage_uses_glossary_read_only(tr, tmp_path):
 def test_rename_and_map_speaker_labels(tr, tmp_path):
     c, root = tr
     sid = consented(c)
-    harvest.enable(c, room_id="r1", speaker_id=sid, enabled_by="host")
-    a = harvest.capture(room_id="r1", session_id="s1", seq=1, wav_path=_seg_wav(tmp_path, "1.wav"), zh_raw="法師", zh="法師")
-    b = harvest.capture(room_id="r1", session_id="s1", seq=2, wav_path=_seg_wav(tmp_path, "2.wav"), zh_raw="提問", zh="提問")
+    H.enable(c, room_id="r1", speaker_id=sid, enabled_by="host")
+    a = H.capture(room_id="r1", session_id="s1", seq=1, wav_path=_seg_wav(tmp_path, "1.wav"), zh_raw="法師", zh="法師")
+    b = H.capture(room_id="r1", session_id="s1", seq=2, wav_path=_seg_wav(tmp_path, "2.wav"), zh_raw="提問", zh="提問")
     rid = recordings.clip(c, a)["recording_id"]
     recordings.set_clip_tag(c, root, b, "Speaker 1")
     recordings.rename_tag(c, root, rid, "Speaker 0", "法師")
@@ -377,7 +328,7 @@ def test_rename_and_map_speaker_labels(tr, tmp_path):
     import zipfile, io
     z = zipfile.ZipFile(io.BytesIO(recordings.bundle(c, root, rid)))
     names = {Path(n).name for n in z.namelist()}
-    assert {"transcript.txt", "transcript.srt", "transcript.vtt", "transcript.json", "recording.wav"} <= names
+    assert {"transcript.txt", "transcript.srt", "transcript.vtt", "transcript.json", "live.jsonl"} <= names
 
 
 def test_import_parsers():
