@@ -1475,7 +1475,8 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
 
     @app.get("/api/health")
     async def health() -> Response:
-        asr_ready = await asyncio.to_thread(asr.health) if isinstance(asr, ResidentAsr) else (whisper.is_file() and model.is_file() if isinstance(asr, CliAsr) else True)
+        health_asr = asr.primary if isinstance(asr, fast_final_mod.FastFinalAsr) else asr
+        asr_ready = await asyncio.to_thread(health_asr.health) if isinstance(health_asr, ResidentAsr) else (whisper.is_file() and model.is_file() if isinstance(health_asr, CliAsr) else True)
         ready = asr_ready and (decoder is not None or ffmpeg_bin(ROOT) is not None)
         error = getattr(asr, "last_error", "") or resident_error
         return JSONResponse({"service": "breeze-live-room", "ready": ready, "asr_ready": asr_ready, "error": error, "instance_id": os.getenv("BREEZE_DESKTOP_INSTANCE", "")}, status_code=200 if ready else 503, headers={"Cache-Control": "no-store"})

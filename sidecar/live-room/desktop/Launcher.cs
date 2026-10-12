@@ -23,7 +23,8 @@ internal sealed class BreezeWindow : Form {
     readonly WebView2 browser = new WebView2 { Dock = DockStyle.Fill, Visible = false };
     readonly MenuStrip menu = new MenuStrip();
     readonly ToolStripMenuItem gpuMenu = new ToolStripMenuItem("GPU 加速（實驗，下次啟動生效）");
-    readonly ToolStripMenuItem fastMenu = new ToolStripMenuItem("快速字幕（實驗，下次啟動生效）");
+    readonly ToolStripMenuItem fastMenu = new ToolStripMenuItem("本機快速字幕（實驗，下次啟動生效）");
+    readonly ToolStripMenuItem finalMenu = new ToolStripMenuItem("本機快速定稿＋Breeze 校正（實驗）");
     readonly ToolStripMenuItem graphMenu = new ToolStripMenuItem("AI 翻譯檢查（下次啟動生效）");
     Process service, adminService;
     IntPtr job;
@@ -51,6 +52,7 @@ internal sealed class BreezeWindow : Form {
         menu.Items.Add("檢查更新", null, async delegate { await CheckUpdates(); });
         menu.Items.Add("本機設定", null, delegate { Process.Start("explorer.exe", "\"" + root + "\""); });
         menu.Items.Add("本機後台", null, delegate { StartAdmin(); });
+        menu.Items.Add("本機字幕測試頁", null, delegate { if (ready && !closing) OpenWeb(url); });
         gpuMenu.Enabled = File.Exists(Path.Combine(root,"tools","whisper-vulkan","build-manifest.json"));
         gpuMenu.Checked = GpuEnabled();
         gpuMenu.Click += (s,e) => {
@@ -67,6 +69,14 @@ internal sealed class BreezeWindow : Form {
             MessageBox.Show("已保存。下次啟動套用快速字幕；草稿只供即時參考，正式字幕仍由中文辨識確認。","快速字幕");
         };
         menu.Items.Add(fastMenu);
+        finalMenu.Enabled=FastFinalModelDirectory()!=null && fastMenu.Enabled;
+        finalMenu.Checked=PreferenceEnabled("fast_final");
+        finalMenu.Click+=(s,e)=>{
+            finalMenu.Checked=!finalMenu.Checked; SavePreference("fast_final",finalMenu.Checked);
+            if (finalMenu.Checked) { fastMenu.Checked=true; SavePreference("fast_captions",true); }
+            MessageBox.Show("已保存，下次啟動生效。適用本機字幕測試頁：先顯示快速辨識，再由 Breeze 校正。快速辨識可能出錯，請確認字幕內容。","快速定稿");
+        };
+        menu.Items.Add(finalMenu);
         string speech=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZenBridge","agent-suite","speech");
         graphMenu.Enabled=File.Exists(Path.Combine(speech,"Scripts","python.exe")) && File.Exists(Path.Combine(speech,"installation.json"));
         graphMenu.Checked=PreferenceEnabled("agent_graph");
@@ -143,6 +153,12 @@ internal sealed class BreezeWindow : Form {
                 info.EnvironmentVariables["BREEZE_DRAFT_THREADS"]="1";
                 info.EnvironmentVariables["BREEZE_ENDPOINT_FINAL"]="1";
             }
+            if (finalMenu.Checked && finalMenu.Enabled && fastMenu.Checked) {
+                info.EnvironmentVariables["BREEZE_FAST_FINAL"]="sense_voice";
+                info.EnvironmentVariables["BREEZE_FAST_FINAL_MODEL_DIR"]=FastFinalModelDirectory();
+                info.EnvironmentVariables["BREEZE_FAST_FINAL_THREADS"]="4";
+                info.EnvironmentVariables["BREEZE_FAST_FINAL_CORRECT"]="1";
+            } else if (ReadPreferences().ContainsKey("fast_final")) info.EnvironmentVariables["BREEZE_FAST_FINAL"]="off";
             if (graphMenu.Checked && graphMenu.Enabled) info.EnvironmentVariables["ZEN_AGENT_SUITE_GRAPH"]="1";
             else if (ReadPreferences().ContainsKey("agent_graph")) info.EnvironmentVariables["ZEN_AGENT_SUITE_GRAPH"]="0";
             if (!fastMenu.Checked && ReadPreferences().ContainsKey("fast_captions")) {
@@ -277,6 +293,14 @@ internal sealed class BreezeWindow : Form {
             foreach (string name in new [] {"encoder.int8.onnx","decoder.onnx","joiner.int8.onnx","tokens.txt"})
                 if (!File.Exists(Path.Combine(folder,name))) complete=false;
             if (complete) return folder;
+        }
+        return null;
+    }
+    string FastFinalModelDirectory() {
+        const string model="sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17";
+        foreach(string folder in new [] {Path.Combine(root,"models","fast-final",model),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZenBridge","models","fast-final",model)}) {
+            if(File.Exists(Path.Combine(folder,"model.int8.onnx")) && File.Exists(Path.Combine(folder,"tokens.txt"))) return folder;
         }
         return null;
     }

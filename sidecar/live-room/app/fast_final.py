@@ -210,7 +210,7 @@ def fast_final_from_env(env: dict | None = None) -> SherpaOfflineFinal | None:
     if kind in ("", "off", "0"):
         return None
     try:
-        threads = max(1, int(env.get("BREEZE_FAST_FINAL_THREADS") or 4))
+        threads = max(1, min(4, int(env.get("BREEZE_FAST_FINAL_THREADS") or 4)))
     except ValueError:
         threads = 4
     try:

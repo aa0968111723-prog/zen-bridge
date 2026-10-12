@@ -92,6 +92,23 @@ def test_desktop_language_argument_reaches_primary_asr(tmp_path):
     assert fast_final.FastFinalAsr(DesktopAsr(), _fast()).transcribe(_wav(tmp_path), '', 'en').text == 'English speech'
 
 
+@pytest.mark.anyio
+async def test_fast_wrapper_does_not_hide_failed_primary_health(monkeypatch):
+    from app.asr import ResidentAsr
+    class FailedPrimary(ResidentAsr):
+        def __init__(self):pass
+        def health(self):return False
+        def close(self):pass
+    monkeypatch.setenv('BREEZE_ENDPOINT_FINAL','1')
+    monkeypatch.setattr(fast_final,'fast_final_from_env',lambda env=None:_fast())
+    app=_app(FailedPrimary(),English())
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app),base_url='http://127.0.0.1:8780') as client:
+            response=await client.get('/api/health')
+            assert response.status_code==503 and not response.json()['asr_ready']
+    finally:await stop(app)
+
+
 def test_env_off_by_default_and_fails_soft(tmp_path):
     assert fast_final.fast_final_from_env({}) is None
     assert fast_final.fast_final_from_env({"BREEZE_FAST_FINAL": "sense_voice",
