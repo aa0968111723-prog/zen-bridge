@@ -170,7 +170,9 @@ def withdraw(c: sqlite3.Connection, root: Path, sid: str, *, actor: str = "admin
     c.execute("BEGIN IMMEDIATE")
     try:
         c.execute("UPDATE consents SET revoked_at=? WHERE speaker_id=? AND revoked_at IS NULL", (now, sid))
-        c.execute("UPDATE harvest_optins SET stopped_at=? WHERE speaker_id=? AND stopped_at IS NULL", (now, sid))
+        c.execute("UPDATE class_sessions SET stopped_at=?, stop_reason='withdrawn' WHERE speaker_id=? AND stopped_at IS NULL", (now, sid))
+        c.execute("UPDATE room_collect SET collect=0, speaker_id=NULL WHERE speaker_id=?", (sid,))
+        c.execute("DELETE FROM speaker_profiles WHERE speaker_id=?", (sid,))
         clip_rows = c.execute("SELECT id, audio_path, recording_id FROM clips WHERE speaker_id=?", (sid,)).fetchall()
         recs = {r["recording_id"] for r in clip_rows}
         recs |= {r[0] for r in c.execute("SELECT id FROM recordings WHERE speaker_id=?", (sid,)).fetchall()}

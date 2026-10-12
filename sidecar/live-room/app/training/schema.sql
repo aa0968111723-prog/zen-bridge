@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS speakers (
   label         TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 24),
   accent_note   TEXT CHECK (accent_note IS NULL OR length(accent_note) <= 40),   -- 例：「台語腔」，不得寫個資
   created_at    REAL NOT NULL,
+  collect_default INTEGER NOT NULL DEFAULT 0 CHECK (collect_default IN (0,1)), -- 主持人開過一次「收錄訓練資料」→ 之後選他預設開
   withdrawn_at  REAL                                                          -- 撤回後 label 改成「已撤回」
 );
 
@@ -76,6 +77,11 @@ CREATE TABLE IF NOT EXISTS clips (
   status        TEXT NOT NULL DEFAULT 'unverified'
                 CHECK (status IN ('unverified','approved','rejected','needs_review')),
   align         TEXT NOT NULL DEFAULT 'native' CHECK (align IN ('native','file','forced','none')),
+  confidence    REAL,                              -- 社課：0–1，越高越不需要人看（見 derive.py）
+  spk_score     REAL,                              -- 社課：和主講者聲紋的相似度（cosine）
+  flags         TEXT,                              -- JSON 陣列：low_speaker、question、fast_speech…
+  excluded      INTEGER NOT NULL DEFAULT 0 CHECK (excluded IN (0,1)),  -- 1 = 不是主講者（預設排除）
+  excluded_reason TEXT,
   reviewed_by   TEXT,
   reviewed_at   REAL,
   created_at    REAL NOT NULL
@@ -111,18 +117,53 @@ CREATE TABLE IF NOT EXISTS mt_pairs (
   UNIQUE (src_text, tgt_lang, tgt_text)
 );
 
-CREATE TABLE IF NOT EXISTS harvest_optins (
-  id          INTEGER PRIMARY KEY,
-  room_id     TEXT NOT NULL,
-  session_id  TEXT,                                -- NULL = 綁定這個房間下一個出現的場次
-  speaker_id  TEXT NOT NULL REFERENCES speakers(id) ON DELETE CASCADE,
-  recording_id TEXT REFERENCES recordings(id) ON DELETE SET NULL,
-  enabled_by  TEXT NOT NULL,
-  enabled_at  REAL NOT NULL,
-  expires_at  REAL NOT NULL,
-  stopped_at  REAL
+-- 每個房間記住「主講者＋要不要收錄」（主持頁一個開關；下次上課同一個房間自動沿用）
+CREATE TABLE IF NOT EXISTS room_collect (
+  room_id     TEXT PRIMARY KEY CHECK (length(room_id) BETWEEN 1 AND 64),
+  speaker_id  TEXT REFERENCES speakers(id) ON DELETE SET NULL,
+  collect     INTEGER NOT NULL DEFAULT 0 CHECK (collect IN (0,1)),
+  updated_by  TEXT,
+  updated_at  REAL NOT NULL
 );
-CREATE INDEX IF NOT EXISTS harvest_optins_room ON harvest_optins(room_id, stopped_at);
+
+-- 一堂課的收錄（一個 live 場次）：整堂音檔分段寫在 recordings.dir/audio/，字幕事件在 live.jsonl
+CREATE TABLE IF NOT EXISTS class_sessions (
+  id           INTEGER PRIMARY KEY,
+  room_id      TEXT NOT NULL,
+  session_id   TEXT NOT NULL,
+  speaker_id   TEXT REFERENCES speakers(id) ON DELETE CASCADE,
+  recording_id TEXT REFERENCES recordings(id) ON DELETE SET NULL,
+  started_at   REAL NOT NULL,
+  last_audio_at REAL,
+  last_final_at REAL,
+  stopped_at   REAL,
+  stop_reason  TEXT,
+  audio_s      REAL NOT NULL DEFAULT 0,             -- 寫進磁碟的音訊秒數
+  bytes        INTEGER NOT NULL DEFAULT 0,
+  finals       INTEGER NOT NULL DEFAULT 0,
+  dropped      INTEGER NOT NULL DEFAULT 0,           -- 寫入佇列滿而丟掉的音訊片（不影響字幕）
+  derived_at   REAL,                                 -- 課後整理（切片段、聲紋檢查）完成時間
+  derive_note  TEXT,
+  raw_deleted_at REAL,                               -- 整堂原始音檔已依保留設定刪除
+  UNIQUE (room_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS class_sessions_open ON class_sessions(stopped_at);
+
+-- 主講者聲紋（只存有同意的講者；其他人的聲紋不保存）
+CREATE TABLE IF NOT EXISTS speaker_profiles (
+  speaker_id  TEXT NOT NULL REFERENCES speakers(id) ON DELETE CASCADE,
+  backend     TEXT NOT NULL,
+  dim         INTEGER NOT NULL,
+  emb         BLOB NOT NULL,                        -- float32 平均向量
+  n           INTEGER NOT NULL,
+  updated_at  REAL NOT NULL,
+  PRIMARY KEY (speaker_id, backend)
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS exports (
   id          TEXT PRIMARY KEY,

@@ -85,15 +85,29 @@ def quality(pcm: array.array, *, min_s: float = 1.0, max_s: float = 30.0) -> Qua
     dur = n / RATE
     if n == 0:
         return Quality(0.0, -120.0, -120.0, 0.0, 1.0, 0.0, ["empty"])
-    peak = max(abs(min(pcm)), abs(max(pcm)))
-    clipped = sum(1 for x in pcm if x >= CLIP_LEVEL or x <= -CLIP_LEVEL)
-    total_sq = 0.0
-    frames = []
-    for i in range(0, n, FRAME):
-        seg = pcm[i:i + FRAME]
-        sq = sum(x * x for x in seg)
-        total_sq += sq
-        frames.append(math.sqrt(sq / len(seg)))
+    try:
+        import numpy as np
+        x = np.frombuffer(pcm.tobytes(), dtype=np.int16).astype(np.float64)
+        peak = int(np.abs(x).max())
+        clipped = int(np.count_nonzero(np.abs(x) >= CLIP_LEVEL))
+        k = (n + FRAME - 1) // FRAME
+        padded = np.zeros(k * FRAME)
+        padded[:n] = x * x
+        sums = padded.reshape(k, FRAME).sum(1)
+        lens = np.full(k, FRAME, dtype=np.float64)
+        lens[-1] = n - (k - 1) * FRAME
+        frames = list(np.sqrt(sums / lens))
+        total_sq = float(sums.sum())
+    except ImportError:
+        peak = max(abs(min(pcm)), abs(max(pcm)))
+        clipped = sum(1 for x in pcm if x >= CLIP_LEVEL or x <= -CLIP_LEVEL)
+        total_sq = 0.0
+        frames = []
+        for i in range(0, n, FRAME):
+            seg = pcm[i:i + FRAME]
+            sq = sum(x * x for x in seg)
+            total_sq += sq
+            frames.append(math.sqrt(sq / len(seg)))
     rms = math.sqrt(total_sq / n)
     silent = sum(1 for f in frames if _db(f) < SILENCE_DBFS)
     fs = sorted(frames)

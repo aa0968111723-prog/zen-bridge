@@ -9,6 +9,11 @@
   import --scan                    匯入 training\\import\\inbox 中同檔名的音檔＋逐字稿
   build [--out DIR] [--zen-db PATH] [--include-unverified] [--max-cer 0.5] [--min-snr 10]
   exports                          列出匯出
+  quick-speaker 暱稱 --by 主持人 --confirm   一次完成登記＋同意（ASR、MT、社課收錄）
+  classes                          列出社課收錄
+  derive [REC_ID ...]              課後整理（切片段、聲紋檢查）；不給 ID = 所有還沒整理的
+  cleanup                          依保留設定刪除原始整堂音檔／排除段落音檔
+  settings [--raw-days N] [--excluded-days N] [--auto-approve 0.85]
 資料位置：%LOCALAPPDATA%\\ZenBridge\\training（ZEN_TRAINING_DIR 可覆寫）。全部只在本機。
 """
 from __future__ import annotations
@@ -18,7 +23,7 @@ import json
 import sys
 from pathlib import Path
 
-from app.training import dataset, importer, prompts, registry
+from app.training import dataset, derive, harvest, importer, prompts, registry
 from app.training import db as tdb
 
 
@@ -49,6 +54,13 @@ def main(argv=None) -> int:
     a.add_argument("--min-snr", type=float, default=10.0); a.add_argument("--seed", default="zen-ft-v1")
     a.add_argument("--no-tm", action="store_true")
     sub.add_parser("exports")
+    a = sub.add_parser("quick-speaker"); a.add_argument("label"); a.add_argument("--by", required=True)
+    a.add_argument("--confirm", action="store_true"); a.add_argument("--no-mt", action="store_true")
+    sub.add_parser("classes")
+    a = sub.add_parser("derive"); a.add_argument("ids", nargs="*")
+    sub.add_parser("cleanup")
+    a = sub.add_parser("settings"); a.add_argument("--raw-days", type=float); a.add_argument("--excluded-days", type=float)
+    a.add_argument("--auto-approve", type=float)
     args = ap.parse_args(argv)
     root = Path(args.root) if args.root else tdb.training_dir()
     c = tdb.connect(root)
@@ -85,6 +97,20 @@ def main(argv=None) -> int:
                 "seed": args.seed, "include_tm": not args.no_tm, "zen_db": str(_zen_db(args.zen_db) or "") or None})
         elif args.cmd == "exports":
             out = [dict(r) for r in c.execute("SELECT * FROM exports ORDER BY created_at DESC")]
+        elif args.cmd == "quick-speaker":
+            sp = registry.new_speaker(c, args.label, actor="cli")
+            registry.record_consent(c, sp["id"], scope_asr=True, scope_mt=not args.no_mt, harvest_live=True,
+                                    recorded_by=args.by, confirm_text=args.confirm)
+            out = registry.get_speaker(c, sp["id"])
+        elif args.cmd == "classes":
+            out = harvest.sessions(c)
+        elif args.cmd == "derive":
+            out = [derive.derive_recording(c, root, rid) for rid in (args.ids or derive.pending(c))]
+        elif args.cmd == "cleanup":
+            out = derive.cleanup(c, root)
+        elif args.cmd == "settings":
+            out = derive.set_settings(c, raw_retention_days=args.raw_days, excluded_audio_days=args.excluded_days,
+                                      auto_approve_min=args.auto_approve)
     except registry.RegistryError as exc:
         print(f"錯誤：{exc.detail}", file=sys.stderr)
         return 1

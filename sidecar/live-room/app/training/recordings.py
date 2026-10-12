@@ -55,7 +55,8 @@ def append_event(root: Path, rec: dict, event: dict) -> None:
 
 def add_clip(c: sqlite3.Connection, root: Path, rec: dict, pcm, *, speaker_id: str | None, origin: str,
              text=None, asr_text=None, prompt_id=None, segment_id=None, t0_ms=None, t1_ms=None, tgt_lang=None,
-             mt_text=None, status="unverified", align="native", speaker_tag=None, draft_text=None) -> dict:
+             mt_text=None, status="unverified", align="native", speaker_tag=None, draft_text=None,
+             log_event: bool = True, extra: dict | None = None) -> dict:
     cid = new_id("c")
     speaker_tag = speaker_tag or DEFAULT_TAG
     rel = f"{rec['dir']}/clips/{cid}.wav"
@@ -74,6 +75,11 @@ def add_clip(c: sqlite3.Connection, root: Path, rec: dict, pcm, *, speaker_id: s
               (cid, rec["id"], speaker_id, speaker_tag, origin, prompt_id, segment_id, ord_, t0_ms, t1_ms, rel, sha,
                q.duration_s, q.rms_dbfs, q.peak_dbfs, q.clip_ratio, q.silence_ratio, q.snr_db, draft_text, asr_text,
                text, tgt_lang, mt_text, status, align, time.time()))
+    if extra:
+        cols = ", ".join(f"{k}=?" for k in extra)
+        c.execute(f"UPDATE clips SET {cols} WHERE id=?", (*extra.values(), cid))
+    if not log_event:
+        return clip(c, cid)
     append_event(root, rec, {"type": "final", "clip_id": cid, "speaker": speaker_tag, "t0_ms": t0_ms, "t1_ms": t1_ms,
                              "asr_text": asr_text, "text": text, "tgt_lang": tgt_lang, "mt_text": mt_text})
     return clip(c, cid)
@@ -108,7 +114,17 @@ def write_transcript(c: sqlite3.Connection, root: Path, rid: str) -> dict | None
     d.mkdir(parents=True, exist_ok=True)
     rows = [dict(r) for r in c.execute("SELECT * FROM clips WHERE recording_id=? ORDER BY ord, t0_ms", (rid,))]
     segs = []
-    if rec["kind"] == "import":
+    if rec["kind"] == "harvest":
+        # 社課：時間軸 = 直播時間軸，音檔 = audio/chunk_*.wav（整堂課）。課後整理前用 live.jsonl 的定稿。
+        audio_name = "audio/" if (d / "audio").exists() and any((d / "audio").glob("chunk_*.wav")) else None
+        by_seg = {r["segment_id"]: r for r in rows if r.get("segment_id")}
+        merged = []
+        for f in class_finals(d):          # every final line; derived clips (with review state) replace theirs
+            merged.append(by_seg.pop(f"{rec['room_id']}:{rec['session_id']}:{f['seq']}", f))
+        rows = sorted(merged + list(by_seg.values()), key=lambda r: r["t0_ms"] or 0)
+        for r in rows:
+            segs.append((r, r["t0_ms"] or 0, r["t1_ms"] or 0))
+    elif rec["kind"] == "import":
         audio_name = rec["source_audio"] and Path(rec["source_audio"]).name
         for r in rows:
             segs.append((r, r["t0_ms"] or 0, r["t1_ms"] or 0))
@@ -131,15 +147,18 @@ def write_transcript(c: sqlite3.Connection, root: Path, rid: str) -> dict | None
                       "speaker_tag": r["speaker_tag"], "text": r["text"] or r["asr_text"] or "",
                       "asr_text": r["asr_text"], "draft_text": r["draft_text"], "status": r["status"],
                       "align": r["align"], "tgt_lang": r["tgt_lang"], "mt_text": r["mt_text"],
-                      "audio_file": r["audio_path"] and Path(r["audio_path"]).relative_to(rec["dir"]).as_posix()})
+                      "excluded": bool(r.get("excluded")), "confidence": r.get("confidence"),
+                      "audio_file": r.get("audio_path") and Path(r["audio_path"]).relative_to(rec["dir"]).as_posix()})
     doc = {"recording_id": rid, "kind": rec["kind"], "speaker_id": rec["speaker_id"], "room_id": rec["room_id"],
            "session_id": rec["session_id"], "title": rec["title"], "audio": audio_name,
            "started_at": rec["started_at"], "ended_at": rec["ended_at"], "segments": items,
-           "note": "時間軸對齊 audio（recording.wav 或匯入原始檔）；status=unverified 代表尚未人工校對"}
+           "note": "時間軸對齊 audio（recording.wav、匯入原始檔，或社課 audio/chunk_*.wav 每 5 分鐘一檔）；"
+                   "status=unverified 代表尚未人工校對；excluded=true 是非主講者（不進資料集）"}
     _atomic(d / "transcript.json", json.dumps(doc, ensure_ascii=False, indent=1))
     srt, vtt, txt = [], ["WEBVTT", ""], []
     for it in items:
-        mark = "" if it["status"] == "approved" else "【未校對】" if it["status"] == "unverified" else f"【{it['status']}】"
+        mark = ("【排除】" if it["excluded"] else "" if it["status"] == "approved" else "【未校對】"
+                if it["status"] == "unverified" else f"【{it['status']}】")
         tag = it["speaker_tag"] or DEFAULT_TAG
         srt += [str(it["index"]), f"{_ts(it['start_ms'], ',')} --> {_ts(it['end_ms'], ',')}", f"{tag}: {it['text']}", ""]
         vtt += [f"{_ts(it['start_ms'], '.')} --> {_ts(it['end_ms'], '.')}", f"<v {tag}>{it['text']}", ""]
@@ -151,13 +170,58 @@ def write_transcript(c: sqlite3.Connection, root: Path, rid: str) -> dict | None
     return doc
 
 
+def class_finals(d: Path) -> list[dict]:
+    """Final captions from a class live.jsonl (last version of each seq wins), in timeline order."""
+    p = Path(d) / "live.jsonl"
+    if not p.exists():
+        return []
+    by_seq: dict = {}
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue                                   # a line cut by a crash
+        if ev.get("type") == "final" and (ev.get("text") or ev.get("asr_text")):
+            by_seq[ev.get("seq", len(by_seq))] = ev
+    out = []
+    for i, ev in enumerate(sorted(by_seq.values(), key=lambda e: (e.get("t0_ms") or 0))):
+        out.append({"id": None, "seq": ev.get("seq"), "t0_ms": ev.get("t0_ms") or 0, "t1_ms": ev.get("t1_ms") or 0,
+                    "speaker_id": None, "speaker_tag": DEFAULT_TAG, "text": ev.get("text"), "asr_text": ev.get("asr_text"),
+                    "draft_text": None, "status": "unverified", "align": "native", "tgt_lang": ev.get("tgt_lang"),
+                    "mt_text": None, "excluded": 0, "confidence": None, "audio_path": None})
+    return out
+
+
+def class_marks(d: Path) -> list[tuple[int, int]]:
+    """Host 'question in progress' intervals (ms on the class timeline)."""
+    p = Path(d) / "live.jsonl"
+    spans, start = [], None
+    if not p.exists():
+        return spans
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if ev.get("type") == "question":
+            if ev.get("on") and start is None:
+                start = int(ev.get("t_ms") or 0)
+            elif not ev.get("on") and start is not None:
+                spans.append((start, int(ev.get("t_ms") or start)))
+                start = None
+    if start is not None:
+        spans.append((start, 10 ** 12))
+    return spans
+
+
 def finish(c: sqlite3.Connection, root: Path, rid: str) -> dict | None:
     rec = get(c, rid)
     if not rec:
         return None
     if rec["status"] != "ended":
         c.execute("UPDATE recordings SET status='ended', ended_at=? WHERE id=?", (time.time(), rid))
-        append_event(root, rec, {"type": "end"})
+        if rec["kind"] != "harvest":                  # 社課的 end 事件由收錄執行緒寫
+            append_event(root, rec, {"type": "end"})
     write_transcript(c, root, rid)
     return get(c, rid)
 
@@ -206,8 +270,8 @@ def map_tag(c: sqlite3.Connection, root: Path, rid: str, tag: str, speaker_id: s
                 p = tdb.absolute(root, r["audio_path"])
                 if p.exists():
                     p.unlink()
-        c.execute("UPDATE clips SET speaker_id=NULL, audio_path=NULL, status='needs_review' WHERE recording_id=? "
-                  "AND speaker_tag=?", (rid, tag))
+        c.execute("UPDATE clips SET speaker_id=NULL, audio_path=NULL, status='needs_review', excluded=1, "
+                  "excluded_reason='reviewer' WHERE recording_id=? AND speaker_tag=?", (rid, tag))
     else:
         if not registry.has_consent(c, speaker_id, "asr"):
             raise registry.RegistryError("這位講者沒有有效的 ASR 同意", code="no_consent", status=403)
@@ -217,8 +281,11 @@ def map_tag(c: sqlite3.Connection, root: Path, rid: str, tag: str, speaker_id: s
     return {"recording_id": rid, "tag": tag, "speaker_id": speaker_id, "clips": len(rows)}
 
 
-def bundle(c: sqlite3.Connection, root: Path, rid: str) -> bytes:
-    """One-click export: transcript.{txt,srt,vtt,json} + recording.wav (+ live.jsonl) as a zip."""
+def bundle(c: sqlite3.Connection, root: Path, rid: str, out_path: Path | None = None):
+    """One-click export: transcript.{txt,srt,vtt,json} + audio (+ live.jsonl) as a zip.
+
+    Class recordings include the whole-class chunks (audio/chunk_*.wav) while they are retained.
+    With ``out_path`` the zip is written to disk (large classes) and the path is returned."""
     import io
     import zipfile
     rec = get(c, rid)
@@ -226,14 +293,21 @@ def bundle(c: sqlite3.Connection, root: Path, rid: str) -> bytes:
         raise FileNotFoundError(rid)
     write_transcript(c, root, rid)
     d = Path(root) / rec["dir"]
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+    target = open(out_path, "wb") if out_path else io.BytesIO()
+    with target as fh, zipfile.ZipFile(fh, "w", zipfile.ZIP_DEFLATED) as z:
         for name in TRANSCRIPT_FILES + ("live.jsonl",):
             if (d / name).exists():
                 z.write(d / name, f"{rid}/{name}")
-        audio = d / "recording.wav"
+        audio = [d / "recording.wav"]
         if rec["kind"] == "import" and rec["source_audio"]:
-            audio = Path(root) / rec["source_audio"]
-        if audio.exists():
-            z.write(audio, f"{rid}/{audio.name}", compress_type=zipfile.ZIP_STORED)
-    return buf.getvalue()
+            audio = [Path(root) / rec["source_audio"]]
+        if rec["kind"] == "harvest":
+            audio = sorted((d / "audio").glob("chunk_*.wav"))
+        for a in audio:
+            if a.exists():
+                arc = f"{rid}/audio/{a.name}" if a.parent.name == "audio" else f"{rid}/{a.name}"
+                z.write(a, arc, compress_type=zipfile.ZIP_STORED)
+        if not out_path:
+            z.close()
+            return fh.getvalue()
+    return Path(out_path)
