@@ -103,7 +103,7 @@ Source: "{#PayloadDir}\desktop\update-runtime.json"; DestName: "ZenUpdateRuntime
 #else
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pyc,__pycache__\*,.env,data\*,logs\*,tmp\*,.venv\*,.updates\*,models\*"
 ; Quantized weights hardly compress; copy them directly to keep builds fast.
-Source: "{#PayloadDir}\models\*"; DestDir: "{app}\models"; Flags: ignoreversion nocompression
+Source: "{#PayloadDir}\models\*"; DestDir: "{app}\models"; Flags: ignoreversion nocompression recursesubdirs createallsubdirs
 #endif
 Source: "{#PayloadDir}\.env.example"; DestDir: "{app}"; DestName: ".env"; Flags: onlyifdoesntexist uninsneveruninstall
 
