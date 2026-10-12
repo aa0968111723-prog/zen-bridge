@@ -14,7 +14,7 @@ front.listen(0,'127.0.0.1');await once(front,'listening');
 const base='127.0.0.1:'+front.address().port;
 let agent,audience;
 try {
- for(const path of ['/api/workspace','/api/%77orkspace','/api/export','/api/reference','/api/recording','/api/hermes','/api/audio','/mcp','/mcp/']){
+ for(const path of ['/api/workspace','/api/connection','/api/%77orkspace','/api/export','/api/reference','/api/recording','/api/hermes','/api/audio','/mcp','/mcp/']){
   assert.equal((await fetch('http://'+base+path)).status,403);
   assert.equal((await fetch('http://'+base+path,{headers:{'x-zen-host':'bad'}})).status,403);
  }
