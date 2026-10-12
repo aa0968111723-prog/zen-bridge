@@ -17,11 +17,15 @@ async def run_agent(asr):
         raise ValueError('Invalid Zen Bridge pairing configuration')
     root=Path(__file__).resolve().parents[1];(root/'tmp').mkdir(exist_ok=True)
     requests=AgentRequests(asr,root);tls=ssl.create_default_context(cafile=certifi.where())
+    if requests.preview.available():
+        try:await requests._run_blocking(requests.preview.warmup)
+        except Exception:requests.preview.failed=True  # final ASR still connects normally
     while True:
         try:
             if not asr.health():await asyncio.sleep(2);continue
             async with connect(url,additional_headers={'Authorization':'Bearer '+token},proxy=None,ssl=tls,max_size=12_000_000,ping_interval=20,ping_timeout=30,open_timeout=20) as socket:
-                await socket.send(json.dumps({'type':'ready','protocol':1,'engine':'breeze-native','capabilities':['asr','translate','metrics']}))
+                capabilities=['asr','translate','metrics']+(['preview'] if requests.preview.available() else [])
+                await socket.send(json.dumps({'type':'ready','protocol':1,'engine':'breeze-native','capabilities':capabilities}))
                 jobs=set();send_lock=asyncio.Lock()
                 async def heartbeat():
                     while True:
@@ -41,7 +45,7 @@ async def run_agent(asr):
                 try:
                     async for raw in socket:
                         request=json.loads(raw)
-                        if request.get('type') not in ('transcribe','translate','status') or not isinstance(request.get('id'),str):continue
+                        if request.get('type') not in ('transcribe','translate','status','preview') or not isinstance(request.get('id'),str):continue
                         if len(jobs)>=4:
                             async with send_lock:await socket.send(json.dumps({'type':'control_result' if request['type']!='transcribe' else 'result','id':request['id'],'ok':False,'error':'Desktop queue full'}))
                             continue

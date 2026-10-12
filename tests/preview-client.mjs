@@ -1,0 +1,14 @@
+import fs from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+import ts from 'typescript';
+const source=ts.transpileModule(fs.readFileSync(new URL('../lib/preview-client.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+const sandbox={exports:{},AbortController};vm.createContext(sandbox);vm.runInContext(source,sandbox);
+let resolve,calls=0;const shown=[];
+const client=sandbox.exports.createPreviewClient(()=>{calls++;return new Promise(r=>resolve=r);},text=>shown.push(text));
+const first=client.send(new Blob());await client.send(new Blob());assert.equal(calls,1,'busy previews are dropped, not queued');
+client.reset();resolve('late private text');await first;assert.ok(!shown.includes('late private text'));
+const second=client.send(new Blob());resolve('current draft');await second;assert.equal(shown.at(-1),'current draft');
+const third=client.send(new Blob());client.close();resolve('after stop');await third;assert.equal(shown.at(-1),'');
+await client.send(new Blob());assert.equal(calls,3);
+console.log('Preview rejects stale responses and clears on stop/reset');

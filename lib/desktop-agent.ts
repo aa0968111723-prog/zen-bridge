@@ -1,8 +1,8 @@
 import {getEnv} from './env';
-export async function desktopAgent(path:string,body?:unknown){
+export async function desktopAgent(path:string,body?:unknown,timeoutMs?:number){
  const env=getEnv();if(!env.BREEZE_ASR_URL||!env.BREEZE_AGENT_TOKEN)throw Error('桌面代理尚未配對。');
  const url=new URL(env.BREEZE_ASR_URL);url.pathname=path;
- const r=await fetch(url,{method:body===undefined?'GET':'POST',headers:{Authorization:'Bearer '+env.BREEZE_AGENT_TOKEN,...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(body===undefined?5000:65000),redirect:'error'});
+ const r=await fetch(url,{method:body===undefined?'GET':'POST',headers:{Authorization:'Bearer '+env.BREEZE_AGENT_TOKEN,...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(timeoutMs??(body===undefined?5000:65000)),redirect:'error'});
  if(!r.ok)throw Error('桌面代理目前未就緒，請檢查主持 App 與模型連線。');return r.json();
 }
 export async function desktopTranslation(instructions:string,input:string,mode:'local'|'cloud'|'hybrid'){

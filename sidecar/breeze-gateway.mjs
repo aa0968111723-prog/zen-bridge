@@ -19,14 +19,15 @@ export function createBreezeGateway({ token, timeoutMs = 120000, maxWaiting = 1 
   if (!token || token.length < 32 || /[\r\n]/.test(token)) throw new Error('Breeze agent token is required');
   let agent = null, ready = false, active = null, receiving = 0;
   const waiting = [];
-  const controls=new Map();let metadata={}, controlReceiving=0;
+  const controls=new Map(),previews=new Map();let metadata={}, controlReceiving=0,previewReceiving=0;
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 12_000_000 });
-  const state = () => ({ connected: ready && agent?.readyState === WebSocket.OPEN, busy: !!active, waiting: waiting.length,control_pending:controls.size,agent:metadata });
+  const state = () => ({ connected: ready && agent?.readyState === WebSocket.OPEN, busy: !!active, waiting: waiting.length,control_pending:controls.size,preview_pending:previews.size,agent:metadata });
   const failAll = () => {
     ready = false;
     if (active) { clearTimeout(active.timer); json(active.res, 503, { error: '主持電腦已離線，請重新開啟 Zen Bridge App。' }); active = null; }
     for (const job of waiting.splice(0)) json(job.res, 503, { error: '主持電腦已離線。' });
     for(const job of controls.values()){clearTimeout(job.timer);json(job.res,503,{error:'主持電腦已離線。'});}controls.clear();
+    for(const job of previews.values()){clearTimeout(job.timer);json(job.res,503,{error:'主持電腦已離線。'});}previews.clear();
   };
   const pump = () => {
     if (active || !state().connected) return;
@@ -47,6 +48,23 @@ export function createBreezeGateway({ token, timeoutMs = 120000, maxWaiting = 1 
     }
     const pathname = new URL(req.url, 'http://localhost').pathname;
     if (req.method === 'GET' && pathname === '/health') { json(res, 200, state()); return; }
+    if(req.method==='POST'&&pathname==='/preview'){
+      if(!state().connected){req.resume();json(res,503,{error:'主持電腦未連線。'});return;}
+      if(!metadata.capabilities?.includes('preview')){req.resume();json(res,409,{error:'請更新主持 App 以使用字幕預覽。'});return;}
+      if(previews.size+previewReceiving>=1){req.resume();json(res,429,{error:'字幕預覽忙碌。'});return;}
+      previewReceiving++;
+      try{
+        const parts=[];let size=0;for await(const part of req){size+=part.length;if(size>300000)throw Error();parts.push(part);}
+        const body=JSON.parse(Buffer.concat(parts).toString());
+        if(!body||typeof body.audio!=='string'||body.audio.length<60||body.audio.length>294000||!['zh','en'].includes(body.language))throw Error();
+        if(!state().connected){json(res,503,{error:'主持電腦已離線。'});return;}
+        const id=randomUUID();
+        const timer=setTimeout(()=>{previews.delete(id);json(res,504,{error:'字幕預覽逾時。'});},6500);
+        previews.set(id,{res,timer});
+        res.once('close',()=>{const job=previews.get(id);if(job){clearTimeout(job.timer);previews.delete(id);}});
+        agent.send(JSON.stringify({type:'preview',id,audio:body.audio,language:body.language}));
+      }catch{json(res,400,{error:'字幕預覽格式不正確。'});}finally{previewReceiving--;}return;
+    }
     if(req.method==='POST'&&['/translate','/agent/status'].includes(pathname)){
       if(!state().connected){req.resume();json(res,503,{error:'主持電腦未連線。'});return;}
       if(!metadata.capabilities?.includes('translate')){req.resume();json(res,409,{error:'請先更新主持 App，啟用桌面翻譯代理。'});return;}
@@ -95,8 +113,13 @@ export function createBreezeGateway({ token, timeoutMs = 120000, maxWaiting = 1 
       ws.on('message', bytes => {
         try {
           const message = JSON.parse(bytes.toString());
-          if (message.type === 'ready' && message.protocol === 1) { clearTimeout(helloTimer); ready = true;metadata={capabilities:Array.isArray(message.capabilities)?message.capabilities.filter(v=>['asr','translate','metrics'].includes(v)):['asr']};pump(); return; }
+          if (message.type === 'ready' && message.protocol === 1) { clearTimeout(helloTimer); ready = true;metadata={capabilities:Array.isArray(message.capabilities)?message.capabilities.filter(v=>['asr','translate','metrics','preview'].includes(v)):['asr']};pump(); return; }
           if(message.type==='telemetry'&&message.metrics&&JSON.stringify(message.metrics).length<=30000){metadata.metrics=message.metrics;return;}
+          if(message.type==='control_result'&&previews.has(message.id)){
+            const job=previews.get(message.id);previews.delete(message.id);clearTimeout(job.timer);
+            if(message.ok===true&&message.result?.ephemeral===true&&typeof message.result.source==='string'&&message.result.source.length<=8000)json(job.res,200,{source:message.result.source,ephemeral:true});
+            else json(job.res,503,{error:'字幕預覽失敗。'});return;
+          }
           if(message.type==='control_result'&&controls.has(message.id)){
             const job=controls.get(message.id);controls.delete(message.id);clearTimeout(job.timer);
             if(message.ok===true&&message.result&&JSON.stringify(message.result).length<=50000)json(job.res,200,message.result);

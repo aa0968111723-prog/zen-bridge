@@ -61,10 +61,12 @@ class SherpaOfflineFinal:
     """Offline sherpa-onnx recognizer + OpenCC s2twp. ``transcribe(wav) -> str``."""
 
     def __init__(self, kind: str, model_dir: str | Path | None, *, threads: int = 4,
-                 recognizer=None, convert: Callable[[str], str] | None = None):
+                 recognizer=None, convert: Callable[[str], str] | None = None, language: str = 'zh'):
         if kind not in KINDS:
             raise ValueError(f"BREEZE_FAST_FINAL 只能是 off、{'、'.join(KINDS)}")
         self.kind = kind
+        if language not in ('zh','en','auto'):
+            raise ValueError('Invalid fast ASR language')
         self._lock = threading.Lock()          # one OfflineRecognizer, decoded one line at a time
         if convert is None:
             from app.draft_asr import DraftAsrUnavailable, opencc_s2twp
@@ -87,7 +89,7 @@ class SherpaOfflineFinal:
             R = sherpa_onnx.OfflineRecognizer
             if kind == "sense_voice":
                 recognizer = R.from_sense_voice(model=str(model), tokens=str(d / "tokens.txt"),
-                                                num_threads=threads, use_itn=True, language="zh")
+                                                num_threads=threads, use_itn=True, language=language)
             else:
                 recognizer = R.from_paraformer(paraformer=str(model), tokens=str(d / "tokens.txt"),
                                                num_threads=threads)
