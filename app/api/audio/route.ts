@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     const parts = await provider.transcribe({ audio, filename: file.name, mime: file.type, direction,
       phrases: terms.phrases, topic: session.topic, speakerNote: person?.notes ?? '', auto,
       speakerKey: person?.id ?? null, knownSpeakerIds: JSON.parse(session.speaker_ids),
-      mode:speechMode,streamKey:sessionId+':'+direction });
+      mode:speechMode,streamKey:sessionId+':'+direction,sessionId });
     if (provider.name === 'breeze' && !parts.some(part => part.source.trim() || part.translation.trim())) return Response.json({ids:[],provider:provider.name});
     if (!stable) return Response.json({ids:[],provider:provider.name,draft:parts.map(part=>part.source).join(' ').trim()});
     const audioKey = await putAudio('recordings/' + sessionId + '/' + id(), audio, file.type || 'audio/wav');

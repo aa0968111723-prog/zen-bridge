@@ -34,6 +34,7 @@ from app.visual_routes import VisualHub, build_visual_router
 from app.mt_backend import TargetLangError, validate_tgt_lang
 from app import hw_tune
 from app.asr_gpu import GpuWithCpuFallback, build_asr as build_gpu_or_cpu_asr, gpu_status as asr_gpu_status
+from app.asr_report import asr_mode_label, reported_asr
 from app.auth import audience_origin_allowed, host_is_allowed, new_host_token, origin_is_allowed, require_host, require_local_host, same_secret
 from app.dispatch import ListenerSlot, RoomBus, for_listener
 from app.glossary_ja import validate_terms_ja   # round4 #7: ja/reading (glossary.py untouched)
@@ -1313,7 +1314,29 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
     async def lifespan(app: FastAPI):
         if os.getenv('ZEN_BRIDGE_AGENT_URL'):
             from app.zen_agent import run_agent
-            tasks.append(asyncio.create_task(run_agent(asr)))
+            def remember_line(wav_bytes, text, request):
+                room, session = 'host', 'desktop'
+                try:
+                    if isinstance(request.get('room_id'), str):
+                        room = validate_room_id(request['room_id'])
+                    if isinstance(request.get('session_id'), str):
+                        session = validate_session_id(request['session_id'])
+                except RoomIdError:
+                    room, session = 'host', 'desktop'
+                try:
+                    seq = int(request.get('seq') or 0)
+                except (TypeError, ValueError):
+                    seq = 0
+                if not 0 <= seq <= 1_000_000:
+                    seq = 0
+                caption_id = request.get('id') if isinstance(request.get('id'), str) else ''
+                if caption_id:
+                    store.submit_save({'id': caption_id, 'room_id': room, 'session_id': session, 'seq': seq,
+                                       'zh': text, 'zh_raw': text, 'en': '', 'status': 'final',
+                                       't0_ms': 0, 't1_ms': int(request.get('duration_ms') or 0)})
+                if corrector is not None and text:
+                    corrector.submit(room, session, seq, wav_bytes, text)
+            tasks.append(asyncio.create_task(run_agent(asr, remember_line)))
         pipeline.ensure_workers()
         tasks.append(asyncio.create_task(sweep_loop()))
         # After create_app returns the bus is still empty (tests depend on that).
@@ -1432,9 +1455,10 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         host_view = _host_authorized(request)
         url = share_for(room_id, include_key=host_view)
-        gpu_wrapped = isinstance(asr, GpuWithCpuFallback)
-        resident_ready = (isinstance(asr, ResidentAsr) or gpu_wrapped) and await asyncio.to_thread(asr.health)
-        asr_ready = resident_ready if (isinstance(asr, ResidentAsr) or gpu_wrapped) else (whisper.is_file() and model.is_file() if isinstance(asr, CliAsr) else True)
+        reported = reported_asr(asr)
+        gpu_wrapped = isinstance(reported, GpuWithCpuFallback)
+        resident_ready = (isinstance(reported, ResidentAsr) or gpu_wrapped) and await asyncio.to_thread(reported.health)
+        asr_ready = resident_ready if (isinstance(reported, ResidentAsr) or gpu_wrapped) else (whisper.is_file() and model.is_file() if isinstance(reported, CliAsr) else True)
         payload = {
             "room": room_id,
             "listen_url": url,
@@ -1449,12 +1473,12 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "translate_configured": _translate_configured(translator) and settings.translate,
             "translate_verified": False,
             "translate_label": translator.status_label(),
-            "asr_mode": ("native-gpu" if asr.on_gpu else "native") if gpu_wrapped else ("native" if isinstance(asr, NativeResidentAsr) else ("resident" if isinstance(asr, ResidentAsr) else "cli")),
+            "asr_mode": asr_mode_label(asr),
             "asr_ready": asr_ready,
-            **(asr.restart_status() if isinstance(asr, (NativeResidentAsr, GpuWithCpuFallback)) else {"asr_degraded": False}),
+            **(reported.restart_status() if isinstance(reported, (NativeResidentAsr, GpuWithCpuFallback)) else {"asr_degraded": False}),
             "asr_gpu": asr_gpu_status(),
-            "model_reloads_each_segment": isinstance(asr, CliAsr),
-            "resident_error": getattr(asr, "last_error", "") or resident_error,
+            "model_reloads_each_segment": isinstance(reported, CliAsr),
+            "resident_error": getattr(reported, "last_error", "") or resident_error,
             "host_token": None,
             "queue": pipeline.stats(),
             "listeners": _seated_listeners(book.rooms.values()),

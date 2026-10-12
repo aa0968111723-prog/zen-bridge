@@ -12,6 +12,7 @@ export type SpeechInput = {
   knownSpeakerIds?: string[];
   mode?: 'stream' | 'chunk';
   streamKey?: string;
+  sessionId?: string;
 };
 export type SpeechPart = {
   source: string;

@@ -21,6 +21,7 @@ export function breezeProvider(env: AppEnv): SpeechProvider {
       body.set('task', 'transcribe');
       body.set('initial_prompt', prompt);
       body.set('hotwords', words.join('、'));
+      if (input.sessionId && /^[A-Za-z0-9_-]{1,64}$/.test(input.sessionId)) body.set('session_id', input.sessionId);
       let response: Response;
       try {
         response = await fetch(env.BREEZE_ASR_URL, { method: 'POST', body, headers: env.BREEZE_AGENT_TOKEN ? { Authorization: 'Bearer ' + env.BREEZE_AGENT_TOKEN } : undefined, signal: AbortSignal.timeout(120000) });

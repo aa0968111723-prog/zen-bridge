@@ -9,14 +9,14 @@ from urllib.parse import urlsplit
 from websockets.asyncio.client import connect
 from app.agent_requests import AgentRequests
 
-async def run_agent(asr):
+async def run_agent(asr,on_line=None):
     url=os.getenv('ZEN_BRIDGE_AGENT_URL','');token=os.getenv('ZEN_BRIDGE_AGENT_TOKEN','')
     if not url or not token:return
     parsed=urlsplit(url)
     if parsed.scheme!='wss' or parsed.username or parsed.password or parsed.query or parsed.fragment or len(token)<32 or '\n' in token or '\r' in token:
         raise ValueError('Invalid Zen Bridge pairing configuration')
     root=Path(__file__).resolve().parents[1];(root/'tmp').mkdir(exist_ok=True)
-    requests=AgentRequests(asr,root);tls=ssl.create_default_context(cafile=certifi.where())
+    requests=AgentRequests(asr,root,on_line=on_line);tls=ssl.create_default_context(cafile=certifi.where())
     if requests.preview.available():
         try:await requests._run_blocking(requests.preview.warmup)
         except Exception:requests.preview.failed=True  # final ASR still connects normally

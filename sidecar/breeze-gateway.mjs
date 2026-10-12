@@ -39,7 +39,7 @@ export function createBreezeGateway({ token, timeoutMs = 120000, maxWaiting = 1 
       json(job.res, 504, { error: '本機辨識逾時，請檢查主持電腦。' });
       agent?.close(1011, 'Inference timeout'); failAll();
     }, timeoutMs);
-    agent.send(JSON.stringify({ type: 'transcribe', id: job.id, audio: job.audio, prompt: job.prompt, language: job.language }));
+    agent.send(JSON.stringify({ type: 'transcribe', id: job.id, audio: job.audio, prompt: job.prompt, language: job.language, ...(job.session_id ? { session_id: job.session_id } : {}), ...(job.room_id ? { room_id: job.room_id } : {}) }));
   };
   const server = http.createServer(async (req, res) => {
     const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
@@ -96,7 +96,10 @@ export function createBreezeGateway({ token, timeoutMs = 120000, maxWaiting = 1 
       if (!(audio instanceof Blob) || !audio.size || audio.size > MAX_AUDIO) throw new Error('Invalid audio');
       const language = String(form.get('language') || 'zh');
       if (!['zh', 'en'].includes(language)) throw new Error('Invalid language');
-      const job = { id: randomUUID(), res, audio: Buffer.from(await audio.arrayBuffer()).toString('base64'), prompt: String(form.get('initial_prompt') || '').slice(0, 2000), language };
+      const idOk = /^[A-Za-z0-9_-]{1,64}$/;
+      const sessionId = String(form.get('session_id') || '');
+      const roomId = String(form.get('room_id') || '');
+      const job = { id: randomUUID(), res, audio: Buffer.from(await audio.arrayBuffer()).toString('base64'), prompt: String(form.get('initial_prompt') || '').slice(0, 2000), language, session_id: idOk.test(sessionId) ? sessionId : '', room_id: idOk.test(roomId) ? roomId : '' };
       if (!state().connected) { json(res, 503, { error: '主持電腦已離線。' }); return; }
       waiting.push(job); pump();
     } catch { json(res, 400, { error: '錄音格式不正確，請使用 PCM WAV。' }); }
