@@ -84,6 +84,14 @@ def test_fast_failure_falls_back_to_breeze(tmp_path):
         fast_final.ROUTE.reset(tok)
 
 
+def test_desktop_language_argument_reaches_primary_asr(tmp_path):
+    class DesktopAsr:
+        def transcribe(self, wav, prompt, language):
+            assert language == 'en'
+            return AsrResult(ok=True, text='English speech')
+    assert fast_final.FastFinalAsr(DesktopAsr(), _fast()).transcribe(_wav(tmp_path), '', 'en').text == 'English speech'
+
+
 def test_env_off_by_default_and_fails_soft(tmp_path):
     assert fast_final.fast_final_from_env({}) is None
     assert fast_final.fast_final_from_env({"BREEZE_FAST_FINAL": "sense_voice",

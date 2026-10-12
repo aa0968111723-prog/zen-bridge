@@ -114,14 +114,14 @@ class FastFinalAsr:
         self.primary = primary
         self.fast = fast
 
-    def transcribe(self, wav: Path, prompt: str):
+    def transcribe(self, wav: Path, prompt: str, *args, **kwargs):
         if ROUTE.get() == "fast":
             try:
                 text = self.fast.transcribe(Path(wav))
                 return AsrResult(ok=True, text=text, blank=not text)
             except Exception:
                 log.exception("fast final failed; Breeze takes this line")
-        return self.primary.transcribe(wav, prompt)
+        return self.primary.transcribe(wav, prompt, *args, **kwargs)
 
     def __getattr__(self, name):
         return getattr(self.primary, name)
