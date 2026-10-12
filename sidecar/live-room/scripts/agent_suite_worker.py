@@ -123,6 +123,8 @@ def evaluate(request):
     checkpoint=Path(request['checkpoint'])
     if not checkpoint.is_file():
         raise ValueError('COMET checkpoint not downloaded')
+    from scripts.download_agent_models import verify_file
+    verify_file(checkpoint,2260734705,'4f357aa38b0737dcd502f166238c99711ff3419d7b5c8cdf9cde08525a8e7858')
     os.environ['HF_HUB_CACHE']=str(checkpoint.parents[1]/'encoder-cache')
     os.environ['HF_HUB_OFFLINE']='1'
     import torch
@@ -132,7 +134,20 @@ def evaluate(request):
             any(not isinstance(r.get(k),str) or len(r[k])>8000 for k in ('src','mt')) for r in rows):
         raise ValueError('Invalid evaluation batch')
     torch.set_num_threads(2)
-    model=load_from_checkpoint(str(checkpoint),local_files_only=True)
+    # Lightning opens a file handle before torch.load. Map only this verified
+    # checkpoint by filename to avoid a second 2.26 GB heap copy, preserving FP32.
+    original_load=torch.load
+    def mapped_load(source,*args,**kwargs):
+        name=getattr(source,'name',source)
+        if isinstance(name,(str,Path)) and Path(name).resolve()==checkpoint.resolve():
+            source=str(checkpoint)
+            kwargs['mmap']=True
+        return original_load(source,*args,**kwargs)
+    torch.load=mapped_load
+    try:
+        model=load_from_checkpoint(str(checkpoint),local_files_only=True)
+    finally:
+        torch.load=original_load
     result=model.predict(rows,batch_size=4,gpus=0,num_workers=0)
     return {'scores':list(result.scores),'system_score':float(result.system_score)}
 

@@ -7,7 +7,7 @@ import subprocess
 ROOT=Path(__file__).resolve().parents[1]
 OPERATIONS={'translate':('speech',61),'enhance':('speech',120),
             'diarize':('diarization',900),'evaluate':('evaluation',900)}
-MIN_FREE_GB={'diarize':2,'evaluate':6}
+MIN_FREE_GB={'diarize':2,'evaluate':4}
 
 
 def available_memory_gb():
