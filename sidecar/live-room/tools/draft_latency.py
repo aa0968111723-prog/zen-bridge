@@ -120,9 +120,10 @@ def write_tmp(data: bytes) -> Path:
 class Worker(threading.Thread):
     """One Breeze worker, FIFO, like the pipeline's ASR worker."""
 
-    def __init__(self, asr, t_start: float):
+    def __init__(self, asr, t_start: float, on_done=None):
         super().__init__(daemon=True)
         self.asr, self.t_start, self.q, self.done = asr, t_start, queue.Queue(), []
+        self.on_done = on_done
 
     def run(self):
         while True:
@@ -137,17 +138,113 @@ class Worker(threading.Thread):
                               "queued_s": round(queued - self.t_start, 3), "asr_s": round(end - t, 3),
                               "done_s": round(end - self.t_start, 3),
                               "text": getattr(res, "text", ""), "ok": getattr(res, "ok", False)})
+            if self.on_done:
+                self.on_done(self.done[-1], wav)
 
 
-def run_two_pass(pcm: bytes, factory, asr, cfg: EndpointConfig, pace: float = 1.0) -> dict:
+class FastAsr:
+    """BREEZE_FAST_FINAL engine behind the pipeline's ``transcribe(wav, prompt)`` shape."""
+
+    def __init__(self, kind: str, model_dir: Path, threads: int):
+        from app.fast_final import SherpaOfflineFinal
+        self.engine = SherpaOfflineFinal(kind, model_dir, threads=threads)
+
+    def transcribe(self, wav, prompt):
+        from app.asr import AsrResult
+        text = self.engine.transcribe(Path(wav))
+        return AsrResult(ok=True, text=text)
+
+
+class Corrections(threading.Thread):
+    """Breeze re-hears fast finals one at a time; backlog > max_pending drops the oldest (app rule)."""
+
+    def __init__(self, asr, t_start: float, on_fix, max_pending: int = 3):
+        super().__init__(daemon=True)
+        self.asr, self.t_start, self.on_fix, self.max_pending = asr, t_start, on_fix, max_pending
+        self.pending: list = []
+        self.cv = threading.Condition()
+        self.closed = False
+        self.done: list[dict] = []
+        self.skipped = 0
+
+    def submit(self, rec: dict, wav: bytes):
+        with self.cv:
+            self.pending.append((rec, wav))
+            while len(self.pending) > self.max_pending:
+                self.pending.pop(0)
+                self.skipped += 1
+            self.cv.notify()
+
+    def close(self):
+        with self.cv:
+            self.closed = True
+            self.cv.notify()
+
+    def run(self):
+        from app.fast_final import _norm as same
+        while True:
+            with self.cv:
+                while not self.pending and not self.closed:
+                    self.cv.wait()
+                if not self.pending:
+                    return
+                rec, wav = self.pending.pop(0)
+            t = time.monotonic()
+            res = self.asr.transcribe(write_tmp(wav), PROMPT)
+            end = time.monotonic()
+            text = getattr(res, "text", "") or ""
+            changed = bool(text.strip()) and same(text) != same(rec["text"])
+            row = {"tag": rec["tag"], "t0_s": rec["t0_s"], "t1_s": rec["t1_s"], "asr_s": round(end - t, 3),
+                   "done_s": round(end - self.t_start, 3), "text": text if changed else rec["text"],
+                   "changed": changed}
+            self.done.append(row)
+            if changed:
+                self.on_fix(row)
+
+
+class Translations(threading.Thread):
+    """One local MT worker, FIFO (the pipeline's translate loop); a correction re-queues its line."""
+
+    def __init__(self, mt, lang: str, t_start: float):
+        super().__init__(daemon=True)
+        self.mt, self.lang, self.t_start, self.q, self.done = mt, lang, t_start, queue.Queue(), []
+
+    def run(self):
+        while True:
+            item = self.q.get()
+            if item is None:
+                return
+            t = time.monotonic()
+            res = self.mt.translate(item["text"], tgt_lang=self.lang)
+            end = time.monotonic()
+            self.done.append({"tag": item["tag"], "t1_s": item["t1_s"], "mt_s": round(end - t, 3),
+                              "done_s": round(end - self.t_start, 3), "status": res.status,
+                              "en": getattr(res, "text", ""),
+                              "zh": item["text"], "corrected": item.get("changed", False)})
+
+
+def run_two_pass(pcm: bytes, factory, asr, cfg: EndpointConfig, pace: float = 1.0, *,
+                 correct_asr=None, mt=None, mt_lang: str = "en") -> dict:
     drafts: list[dict] = []
     hub = DraftHub(factory, publish=lambda e: None)
     sess = hub.open("bench", "s1", endpointer=Endpointer(cfg))
     if sess is None:
         raise SystemExit("草稿模型無法載入（sherpa-onnx／OpenCC／模型資料夾）")
     t_start = time.monotonic()
-    worker = Worker(asr, t_start)
-    worker.start()
+    mtw = Translations(mt, mt_lang, t_start) if mt is not None else None
+    fixer = (Corrections(correct_asr, t_start, on_fix=lambda row: mtw and mtw.q.put(row))
+             if correct_asr is not None else None)
+
+    def finished(rec, wav):
+        if mtw and rec["text"].strip():
+            mtw.q.put(rec)
+        if fixer:
+            fixer.submit(rec, wav)
+
+    worker = Worker(asr, t_start, on_done=finished)
+    for th in (mtw, fixer, worker):
+        if th:
+            th.start()
     feed_s = 0.0
 
     def handle(event, rows):
@@ -168,9 +265,16 @@ def run_two_pass(pcm: bytes, factory, asr, cfg: EndpointConfig, pace: float = 1.
     handle(None, hub.flush(sess))
     worker.q.put(None)
     worker.join()
+    if fixer:
+        fixer.close()
+        fixer.join()
+    if mtw:
+        mtw.q.put(None)
+        mtw.join()
     audio_s = len(pcm) / 2 / 16000
     return {"drafts": drafts, "finals": worker.done, "draft_cpu_rtf": round(feed_s / audio_s, 3),
-            "audio_s": round(audio_s, 2)}
+            "audio_s": round(audio_s, 2), "corrections": fixer.done if fixer else None,
+            "corrections_skipped": fixer.skipped if fixer else None, "mt": mtw.done if mtw else None}
 
 
 def run_baseline(pcm: bytes, asr, slice_s: float = 6.0) -> list[dict]:
@@ -219,6 +323,13 @@ def main(argv=None) -> int:
     ap.add_argument("--port", type=int, default=8199)
     ap.add_argument("--baseline", action="store_true", help="also time fixed 6 s slices")
     ap.add_argument("--adaptive-ctx", action="store_true", help="per-request audio_ctx sized to each line")
+    ap.add_argument("--fast-final", choices=["sense_voice", "paraformer"],
+                    help="BREEZE_FAST_FINAL engine answers each cut; Breeze (--asr breeze) corrects it")
+    ap.add_argument("--fast-final-model", type=Path)
+    ap.add_argument("--fast-final-threads", type=int, default=4)
+    ap.add_argument("--no-correct", action="store_true", help="fast final without Breeze correction")
+    ap.add_argument("--mt-url", help="local llama-server /v1 base (Hy-MT2), translate every final")
+    ap.add_argument("--mt-lang", default="en", choices=["en", "ja"])
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
 
@@ -235,8 +346,19 @@ def main(argv=None) -> int:
     pcm = read_wav(args.wav)
     truth = json.loads(args.truth.read_text(encoding="utf-8"))
     asr = build_breeze(args) if args.asr == "breeze" else FakeAsr()
+    first_asr, correct_asr = asr, None
+    if args.fast_final:
+        first_asr = FastAsr(args.fast_final, args.fast_final_model, args.fast_final_threads)
+        first_asr.transcribe(write_tmp(pcm16_to_wav(b"\0\0" * 16000)), PROMPT)     # warm-up
+        correct_asr = None if (args.no_correct or args.asr != "breeze") else asr
+    mt = None
+    if args.mt_url:
+        from app.mt_backend import HyMtLlamaServer
+        mt = HyMtLlamaServer(base_url=args.mt_url)
+        mt.translate("今天天氣很好。", tgt_lang=args.mt_lang)                         # warm-up
     try:
-        two = run_two_pass(pcm, factory, asr, EndpointConfig())
+        two = run_two_pass(pcm, factory, first_asr, EndpointConfig(), correct_asr=correct_asr, mt=mt,
+                           mt_lang=args.mt_lang)
         rows = score(truth, two["drafts"], two["finals"])
         report = {"clip": str(args.wav.name), "audio_s": two["audio_s"], "lines": len(truth),
                   "draft_cpu_rtf": two["draft_cpu_rtf"], "endpoint": EndpointConfig().__dict__,
@@ -247,8 +369,28 @@ def main(argv=None) -> int:
                                "cuts": len(two["finals"]),
                                "cer": cer("".join(t.get("text", "") for t in truth),
                                           "".join(f["text"] for f in two["finals"]))},
-                  "adaptive_ctx": bool(args.adaptive_ctx),
+                  "adaptive_ctx": bool(args.adaptive_ctx), "fast_final": args.fast_final,
                   "per_line": rows, "finals": two["finals"], "drafts": two["drafts"][-200:]}
+        if two["corrections"] is not None:
+            fixed = {c["tag"]: c for c in two["corrections"]}
+            settled = [dict(f, **({"text": fixed[f["tag"]]["text"], "done_s": fixed[f["tag"]]["done_s"]}
+                                  if f["tag"] in fixed and fixed[f["tag"]]["changed"] else {}))
+                       for f in two["finals"]]
+            srows = score(truth, [], settled)
+            report["corrected"] = {
+                "settled_s": summary([r["final_s"] for r in srows]),
+                "breeze_asr_s": summary([c["asr_s"] for c in two["corrections"]]),
+                "changed": sum(1 for c in two["corrections"] if c["changed"]),
+                "skipped": two["corrections_skipped"],
+                "cer": cer("".join(t.get("text", "") for t in truth), "".join(f["text"] for f in settled)),
+                "rows": two["corrections"]}
+        if two["mt"] is not None:
+            first_mt = {}
+            for m in two["mt"]:
+                first_mt.setdefault(m["tag"], m)
+            report["mt"] = {"lang": args.mt_lang, "mt_s": summary([m["mt_s"] for m in two["mt"]]),
+                            "final_plus_mt_s": summary([round(m["done_s"] - m["t1_s"], 3) for m in first_mt.values()]),
+                            "rows": two["mt"]}
         if args.baseline and args.asr == "breeze":
             base = run_baseline(pcm, asr)
             brows = score(truth, [], base)
@@ -266,7 +408,15 @@ def main(argv=None) -> int:
     tp = report["two_pass"]
     print(f"draft  p50={tp['draft_s']['p50']}s p95={tp['draft_s']['p95']}s (onset -> first grey draft)")
     print(f"final  p50={tp['final_s']['p50']}s p95={tp['final_s']['p95']}s (speech end -> Breeze final) "
-          f"breeze p50={tp['breeze_asr_s']['p50']}s cer={tp['cer']}")
+          f"asr p50={tp['breeze_asr_s']['p50']}s cer={tp['cer']}{' (fast final)' if args.fast_final else ''}")
+    if "corrected" in report:
+        c = report["corrected"]
+        print(f"fixed  p50={c['settled_s']['p50']}s p95={c['settled_s']['p95']}s (speech end -> line settled "
+              f"after Breeze correction) changed={c['changed']} skipped={c['skipped']} cer={c['cer']}")
+    if "mt" in report:
+        m = report["mt"]
+        print(f"mt     {m['lang']} p50={m['mt_s']['p50']}s; speech end -> first translation "
+              f"p50={m['final_plus_mt_s']['p50']}s p95={m['final_plus_mt_s']['p95']}s")
     if "baseline_6s" in report:
         b = report["baseline_6s"]["final_s"]
         print(f"6s     p50={b['p50']}s p95={b['p95']}s (speech end -> final, fixed 6 s slices) "
