@@ -18,6 +18,7 @@ import {roles} from '@/lib/domain';
 import {capture,type Capture} from '@/lib/capture';
 import QRCode from 'qrcode';
 import {createPreviewClient} from '@/lib/preview-client';
+import {createConnectionWatcher} from '@/lib/connection-watch';
 
 function Picker({value,onChange,items,label,disabled=false}:{value:string;onChange:(s:string)=>void;items:{value:string;label:string}[];label:string;disabled?:boolean}){
  return <Select value={value} onValueChange={onChange} disabled={disabled}><SelectTrigger aria-label={label} className="picker"><SelectValue placeholder={label}/></SelectTrigger><SelectContent>{items.map(x=><SelectItem key={x.value} value={x.value}>{x.label}</SelectItem>)}</SelectContent></Select>;
@@ -90,6 +91,17 @@ export default function Workspace(){
  async function checkHermes(){setCheckingHermes(true);setHermesChecked(false);try{await response<{status:string;model:string}>(await fetch('/api/hermes',{cache:'no-store'}));setHermesChecked(true);toast.success('Hermes 文字 API 驗證成功。');}catch(e){toast.error(message(e,'Hermes 連線檢查失敗。'));}finally{setCheckingHermes(false);}}
  const load=useCallback(async(sid?:string)=>{const sequence=++loadSequence.current;try{const r=await fetch('/api/workspace'+(sid?'?session='+encodeURIComponent(sid):''));const body=await response<State>(r);if(!mounted.current||sequence!==loadSequence.current)return;if(!providerInitialized.current&&body.connection.provider){providerInitialized.current=true;setSpeechProvider(body.connection.provider as typeof speechProvider);setSpeechMode(body.connection.speechMode);}setData(body);setError('');setDatabaseProblem(null);setSessionId(body.sessionId??'');}catch(e){if(mounted.current&&sequence===loadSequence.current){setError(message(e,'無法載入資料。'));setDatabaseProblem(e instanceof ApiError&&e.code?{code:e.code,deployTarget:e.deployTarget??''}:null);}}finally{if(mounted.current&&sequence===loadSequence.current)setLoading(false);}},[]);
  useEffect(()=>{mounted.current=true;queueMicrotask(()=>{void load();if(mounted.current)setVoiceAvailable('speechSynthesis' in window);});return ()=>{mounted.current=false;testSequence.current++;testRecorder.current?.stop();if(testTimer.current)clearTimeout(testTimer.current);previewClient.current?.close();recorder.current?.stop();sampleCancelled.current=true;sampleRecorder.current?.stop();if(sampleTimer.current)clearInterval(sampleTimer.current);window.speechSynthesis?.cancel();};},[load]);
+ useEffect(()=>{
+  if(loading||error||speechProvider!=='breeze')return;
+  const watcher=createConnectionWatcher<State['connection']>(
+   async signal=>response<State['connection']>(await fetch('/api/connection',{cache:'no-store',signal:AbortSignal.any([signal,AbortSignal.timeout(6000)])})),
+   connection=>{if(mounted.current)setData(old=>({...old,connection:{...connection,qrUrl:old.connection.qrUrl}}));},
+   ()=>document.visibilityState!=='hidden',
+  );
+  const refresh=()=>{void watcher.refresh();};refresh();
+  window.addEventListener('online',refresh);window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
+  return()=>{watcher.close();window.removeEventListener('online',refresh);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);};
+ },[loading,error,speechProvider]);
  useEffect(()=>{queueMicrotask(()=>{try{if(localStorage.getItem('zen-bridge-theme')==='wood')setTheme('wood');const saved=localStorage.getItem('zen-bridge-microphone');if(saved)setInputDevice(saved);}catch{}});},[]);
  const refreshMicrophones=useCallback(async()=>{try{const devices=await navigator.mediaDevices?.enumerateDevices();if(mounted.current&&devices)setMicrophones(devices.filter(d=>d.kind==='audioinput'));}catch{}},[]);
  useEffect(()=>{queueMicrotask(()=>void refreshMicrophones());const devices=navigator.mediaDevices;devices?.addEventListener('devicechange',refreshMicrophones);return()=>devices?.removeEventListener('devicechange',refreshMicrophones);},[refreshMicrophones]);

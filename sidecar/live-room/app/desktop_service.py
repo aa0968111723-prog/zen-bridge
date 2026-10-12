@@ -25,6 +25,9 @@ def main():
     if (os.getenv('ZEN_DESKTOP_MAINT') or '1').strip() != '0':
         from app.desktop_maint import DesktopMaintenance
         maint = DesktopMaintenance.from_env().start()
+    from app.hermes_proxy_service import HermesProxyService
+    proxy = HermesProxyService()
+    proxy.start()
     server = uvicorn.Server(uvicorn.Config('app.server:app', host='0.0.0.0', port=settings.port, log_level='warning', proxy_headers=False))
     def control():
         sys.stdin.readline()
@@ -33,6 +36,7 @@ def main():
     try:
         server.run()
     finally:
+        proxy.stop()
         if maint is not None:
             maint.stop()
 
