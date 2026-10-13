@@ -37,7 +37,7 @@ def v2_db(path: Path) -> Path:
 
 def test_v2_upgrades_to_v3_with_snapshot_and_backfill(tmp_path):
     p = v2_db(tmp_path / "zen.sqlite3")
-    assert db.migrate(p) == db.SCHEMA_VERSION == 14      # 0003 + backend staging 0010–0014
+    assert db.migrate(p) == db.SCHEMA_VERSION == 15      # 0003 + backend staging 0010–0015
     snap = tmp_path / "pre-migrate-v2.sqlite3"
     assert snap.is_file()
     with sqlite3.connect(snap) as s:

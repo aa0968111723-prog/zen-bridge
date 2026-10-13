@@ -501,6 +501,47 @@ def test_diarize_job_stays_off_the_live_path(env, monkeypatch):
     assert calls == [("diarize", str(model))]
 
 
+def test_evaluate_job_scores_saved_pairs_only(env, monkeypatch):
+    import asyncio
+    import json
+    import sqlite3
+    from app.admin import info as zinfo
+    model = env["tmp"] / "cometkiwi"
+    for name in ("checkpoints/model.ckpt", "hparams.yaml", "encoder-origin.json"):
+        path = model / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+    (model / "zen-model-origin.json").write_text(json.dumps({"status": "verified"}), encoding="utf-8")
+    monkeypatch.setattr(zinfo, "evaluation_model", lambda: model)
+    calls = []
+
+    def fake(operation, payload):
+        calls.append((operation, len(payload["rows"])))
+        return {"scores": [0.81, 0.72], "system_score": 0.76}
+
+    monkeypatch.setattr("app.agent_suite.call_worker", fake)
+    queued = env["client"].post(f"{API}/jobs", json={"kind": "evaluate", "target": {"session_id": "s1"}}, headers=BEARER)
+    assert queued.status_code == 202
+    assert calls == []
+    assert asyncio.run(env["app"].state.worker.run_once()) is True
+    done = env["client"].get(queued.headers["location"], headers=BEARER).json()
+    assert done["state"] == "succeeded"
+    assert done["result"]["live_path"] is False and done["result"]["scored"] == 2
+    written = json.loads((env["path"].parent / "evaluate-out" / done["result"]["file"]).read_text(encoding="utf-8"))
+    assert written["scores"] == [{"seq": 1, "score": 0.81}, {"seq": 2, "score": 0.72}]
+    assert "因緣" not in json.dumps(written, ensure_ascii=False)
+    with sqlite3.connect(env["path"]) as conn:
+        assert [row[0] for row in conn.execute("SELECT qe_score FROM translations WHERE is_current=1 ORDER BY segment_id")] == [0.81, 0.72]
+    assert calls == [("evaluate", 2)]
+    (model / "zen-model-origin.json").unlink()
+    missing = env["client"].post(f"{API}/jobs", json={"kind": "evaluate", "target": {"session_id": "s1"}}, headers=BEARER)
+    assert missing.status_code == 202
+    assert asyncio.run(env["app"].state.worker.run_once()) is True
+    refused = env["client"].get(missing.headers["location"], headers=BEARER).json()
+    assert refused["state"] == "failed"
+    assert calls == [("evaluate", 2)]
+
+
 def test_job_cancel(env):
     r = env["client"].post(f"{API}/jobs", json={"kind": "backup", "params": {"n": 2}}, headers=BEARER)
     jid = r.json()["job"]["id"]

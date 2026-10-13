@@ -33,6 +33,7 @@ JA_GLOSSARY = "日文詞表"
 EXPORT_FORMATS = ("srt", "vtt", "md")       # python-docx is not installed in the venv -> no docx
 ROLES = ("admin", "editor", "host", "viewer")
 _WAV_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}\.wav\Z", re.I)
+_SESSION_ID = re.compile(r"[A-Za-z0-9_.:-]{1,64}\Z")
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 SECRET_KEY_RE = re.compile(r"(token|secret|password|passwd|key|auth|cookie|credential)", re.I)
 
@@ -56,6 +57,22 @@ def diarization_ready(model: Path | None = None) -> bool:
         "plda/plda.npz",
         "plda/xvec_transform.npz",
     )
+    try:
+        record = json.loads((folder / "zen-model-origin.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(record, dict) and record.get("status") == "verified" and all(
+        (folder / name).is_file() for name in required)
+
+
+def evaluation_model() -> Path:
+    local = os.getenv("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(local) / "ZenBridge" / "models" / "evaluation" / "cometkiwi"
+
+
+def evaluation_ready(model: Path | None = None) -> bool:
+    folder = model or evaluation_model()
+    required = ("checkpoints/model.ckpt", "hparams.yaml", "encoder-origin.json")
     try:
         record = json.loads((folder / "zen-model-origin.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -954,11 +971,62 @@ def register(app, ctx) -> int:
         output.write_text(json.dumps({"turns": turns}, ensure_ascii=False), encoding="utf-8")
         return {"input_name": name, "file": output.name, "model": "community1", "live_path": False, "turns": len(turns)}
 
+    def evaluate_handler(jctx):
+        target, _params = _job_fields(jctx)
+        sid = str(target.get("session_id") or "")
+        if not _SESSION_ID.fullmatch(sid):
+            raise ValueError("session_id 格式不對")
+        model = evaluation_model()
+        if not evaluation_ready(model):
+            raise ValueError("評分模型尚未就緒，不會呼叫模型")
+        with conn() as c:
+            if not c.execute("SELECT 1 FROM sessions WHERE id=?", (sid,)).fetchone():
+                raise ValueError("找不到這場")
+            rows = list(c.execute(
+                "SELECT g.seq, t.text, tr.text FROM segments g "
+                "JOIN transcripts t ON t.segment_id=g.id AND t.is_current=1 "
+                "JOIN translations tr ON tr.segment_id=g.id AND tr.tgt_lang='en' AND tr.is_current=1 "
+                "WHERE g.session_id=? AND g.status NOT IN ('silent','deleted') "
+                "AND length(t.text) BETWEEN 1 AND 8000 AND length(tr.text) BETWEEN 1 AND 8000 "
+                "ORDER BY g.seq LIMIT 65", (sid,)))
+        if not rows:
+            raise ValueError("這場還沒有可評分的中英對")
+        if len(rows) > 64:
+            raise ValueError("一場一次最多評分 64 段")
+        from app.agent_suite import call_worker
+        result = call_worker("evaluate", {
+            "rows": [{"src": row[1], "mt": row[2]} for row in rows],
+            "checkpoint": str(model / "checkpoints" / "model.ckpt"),
+        })
+        scores = result.get("scores") if isinstance(result, dict) else None
+        if not isinstance(scores, list) or len(scores) != len(rows) or any(not isinstance(item, (int, float)) for item in scores):
+            raise ValueError("評分沒有回傳每一段的分數")
+        with conn(write=True) as c:
+            for row, score in zip(rows, scores):
+                changed = c.execute(
+                    "UPDATE translations SET qe_score=? WHERE tgt_lang='en' AND is_current=1 AND segment_id="
+                    "(SELECT id FROM segments WHERE session_id=? AND seq=?)",
+                    (float(score), sid, row[0])).rowcount
+                if changed != 1:
+                    raise ValueError("評分沒有寫回這一場")
+        out_dir = Path(ctx.db_path).parent / "evaluate-out"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output = out_dir / f"{hashlib.sha256(sid.encode()).hexdigest()[:16]}-{int(clock())}.json"
+        if output.exists():
+            raise ValueError("輸出檔已存在")
+        output.write_text(json.dumps({
+            "session_id": sid,
+            "scores": [{"seq": row[0], "score": float(score)} for row, score in zip(rows, scores)],
+            "system_score": result.get("system_score"),
+        }, ensure_ascii=False), encoding="utf-8")
+        return {"session_id": sid, "file": output.name, "model": "cometkiwi", "live_path": False, "scored": len(scores)}
+
     ctx.handlers["summarize"] = summarize_handler
     ctx.handlers["glossary_import"] = glossary_import_handler
     ctx.handlers["retranslate_batch"] = retranslate_batch_handler
     ctx.handlers["enhance"] = enhance_handler
     ctx.handlers["diarize"] = diarize_handler
+    ctx.handlers["evaluate"] = evaluate_handler
 
     @app.post(f"{API}/sessions/{{sid}}/exports", status_code=202)
     async def create_export(sid: str, request: Request, user=Depends(need("editor"))):
