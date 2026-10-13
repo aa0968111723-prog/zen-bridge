@@ -120,6 +120,35 @@ class DesktopTranslatorTests(unittest.TestCase):
             self.assertFalse(self.client.status()['hermes_reachable'])
             self.assertFalse(self.client.status()['hermes_auth_configured'])
 
+    def test_missing_usage_is_not_reported_as_free(self):
+        with patch.object(self.client, '_request', return_value={'message': {'content': 'translated'}}):
+            result = self.client.translate('Translate', 'hello', 'local')
+        self.assertFalse(result['usage_known'])
+        self.assertEqual(result['cost_note'], '沒有上游用量，不能當成免費')
+        self.assertFalse(self.client.status()['cost']['known'])
+        self.assertIsNone(self.client.status()['cost']['prompt_tokens'])
+
+    def test_reported_usage_is_kept(self):
+        response = {'message': {'content': 'translated'}, 'prompt_eval_count': 4, 'eval_count': 2}
+        with patch.object(self.client, '_request', return_value=response):
+            result = self.client.translate('Translate', 'hello', 'local')
+        self.assertTrue(result['usage_known'])
+        self.assertEqual(result['prompt_tokens'], 4)
+        self.assertEqual(self.client.cost_status()['completion_tokens'], 2)
+
+
+def test_metrics_file_survives_a_new_instance(tmp_path):
+    from app.agent_metrics import AgentMetrics
+    path = tmp_path / "agent-metrics.jsonl"
+    first = AgentMetrics(path=path)
+    first.record("translate", 12, True, route="local", usage_known=False)
+    second = AgentMetrics(path=path)
+    snap = second.snapshot()
+    assert snap["persisted_completed"] == 1
+    assert snap["cost_known"] is False
+    assert "不能把 0 當成免費" in snap["note"]
+    assert "hello" not in path.read_text(encoding="utf-8")
+
 
 if __name__ == '__main__':
     unittest.main()

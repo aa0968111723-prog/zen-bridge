@@ -44,7 +44,18 @@ try {
   assert.equal(requests.at(-1)!.url, 'https://hermes.example/v1/models');
   const probe = await runWithEnv(bindings, () => checkConnection());
   assert.equal(probe.status, 200); assert.equal(probe.headers.get('Cache-Control'), 'no-store');
-  assert.ok(!JSON.stringify(await probe.json()).includes(secret));
+  const probeBody = await probe.json() as { available: boolean };
+  assert.equal(probeBody.available, true);
+  assert.ok(!JSON.stringify(probeBody).includes(secret));
+  failNetwork = true;
+  const down = await runWithEnv(bindings, () => checkConnection());
+  assert.equal(down.status, 200);
+  const downBody = await down.json() as { available: boolean; reason: string; status: string };
+  assert.equal(downBody.available, false);
+  assert.equal(downBody.status, 'unavailable');
+  assert.match(downBody.reason, /此平台無法連到 Hermes/);
+  assert.ok(!JSON.stringify(downBody).includes(secret));
+  failNetwork = false;
   assert.equal(await translateWithHermes('Translate only.', 'Source text', config), 'Be aware.');
   const request = requests.at(-1)!;
   assert.equal(request.url, 'https://hermes.example/v1/chat/completions');
@@ -91,7 +102,7 @@ try {
   assert.equal(state.connection.textTranslation, true);
   assert.equal(state.connection.translationProvider, 'hermes');
   assert.equal(state.connection.speech, false); // A text endpoint cannot enable recording.
-  assert.equal(state.connection.hermes, '已設定');
+  assert.equal(state.connection.hermes, '已填設定，尚未驗證');
   assert.ok(!JSON.stringify(state).includes(secret));
   await runWithEnv({ ...bindings, DB: db }, () => mutate({ action: 'segment', sessionId: sid, personId: null, role: '講者', direction: 'en-zh', en: 'Be aware.', translate: true }));
   assert.equal(saved.at(-1)![5], 'en-zh');

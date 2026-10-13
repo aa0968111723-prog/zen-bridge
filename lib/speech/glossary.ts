@@ -1,5 +1,6 @@
 import type { Memory, Direction } from '../domain';
 export function glossary(memories: Pick<Memory, 'status' | 'zh' | 'en'>[], direction: Direction, limit = 200) {
+  if (direction === 'zh-ja') return { phrases: Object.create(null), note: '沒有大型日文詞典，不套用中英熱詞' };
   const n = !Number.isFinite(limit) || limit < 1 ? 200 : Math.min(1000, Math.floor(limit));
   const phrases: Record<string, string> = Object.create(null);
   for (const memory of memories) {

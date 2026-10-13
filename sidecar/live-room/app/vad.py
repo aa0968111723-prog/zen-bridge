@@ -1,7 +1,10 @@
 """Silero VAD (ONNX, no torch) as an optional silence gate.
 
-BREEZE_VAD=silero turns it on (default off, so main behaviour is unchanged). When the model
-file or onnxruntime is missing, or a wav is not 16 kHz mono s16, the gate answers ``None``
+BREEZE_VAD=silero turns it on. The desktop and start entry points call
+enable_verified_silero() when the variable is unset and the vendored file
+matches SHA256. Explicit off stays on RMS. A missing or bad file stays on RMS.
+The gate does not download the model and does not open a microphone.
+When the model file or onnxruntime is missing, or a wav is not 16 kHz mono s16, the gate answers ``None``
 and the pipeline falls back to the legacy RMS check (BREEZE_SILENCE_RMS).
 
 Model: snakers4/silero-vad v6.2.3 ``silero_vad.onnx`` (MIT, 2,327,524 bytes). Fetch it with
@@ -44,6 +47,33 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: fh.read(1 << 20), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def enable_verified_silero(env: dict | None = None) -> str:
+    """Use the vendored model on the main path unless the operator chose off.
+
+    Does not download, does not open a microphone, and does not load ONNX.
+    A missing or mismatched file leaves the RMS path in place.
+    """
+    env = os.environ if env is None else env
+    mode = (env.get("BREEZE_VAD") or "").strip().lower()
+    if mode in ("off", "0", "rms"):
+        return "off"
+    if mode == "silero":
+        return "silero"
+    if mode:
+        return mode
+    path = Path((env.get("BREEZE_VAD_MODEL") or "").strip() or MODEL)
+    if not path.is_file():
+        return "off"
+    try:
+        digest = sha256_file(path)
+    except OSError:
+        return "off"
+    if digest != MODEL_SHA256:
+        return "off"
+    env["BREEZE_VAD"] = "silero"
+    return "silero"
 
 
 class SileroVad:

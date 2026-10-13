@@ -3,7 +3,7 @@ export type RoomEvent = {
   id: string;
   zh: string;
   en: string;
-  direction: 'zh-en' | 'en-zh';
+  direction: 'zh-en' | 'en-zh' | 'zh-ja';
   t: number;
 };
 

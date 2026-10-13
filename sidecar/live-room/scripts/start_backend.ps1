@@ -50,9 +50,8 @@ $env:BREEZE_TRANSLATE_PRIORITY = $TranslatePriority
 $env:ZEN_LEDGER = $(if ($Ledger) { '1' } else { '0' })
 $env:BREEZE_TM = $(if ($TM) { '1' } else { '0' })
 $env:BREEZE_VAD = $(if ($Vad) { 'silero' } else { 'off' })
-# QA hold: idle detection can misclassify an active classroom as offline.
-# Keep disabled until the reviewed incremental patch is accepted.
-$env:ZEN_EMBED = '0'
+# Embedding is on unless -NoEmbed. The admin job still waits for the idle gate.
+if ($NoEmbed) { $env:ZEN_EMBED = '0' } else { $env:ZEN_EMBED = '1' }
 $env:ZEN_ADMIN_PORT = "$AdminPort"
 
 if ($Admin) {

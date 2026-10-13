@@ -18,7 +18,7 @@ class DesktopTranslator:
         self.local_model=os.getenv('ZEN_LOCAL_LLM_MODEL','qwen3:1.7b')
         self.cloud_model=os.getenv('ZEN_HERMES_MODEL','grok-4.6')
         self.key=os.getenv('ZEN_HERMES_API_KEY','')
-        self.last={};self.calls=0
+        self.last={};self.calls=0;self.known_usage=0;self.unknown_usage=0;self.prompt_tokens=0;self.completion_tokens=0
         self._health_at=0.;self._hermes_health={'reachable':False,'authenticated':False}
         self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -93,7 +93,15 @@ class DesktopTranslator:
                     if choice.get('finish_reason') not in (None,'stop'):raise ValueError('Incomplete translation')
                 if not isinstance(text,str) or not text.strip() or len(text)>16000:raise ValueError('Invalid model text')
                 if text.strip()==instructions.strip():raise ValueError('Model echoed instructions')
-                self.calls+=1;self.last={'mode':mode,'route':route,'model':model,'elapsed_ms':round((time.monotonic()-started)*1000),'fallback':route!=routes[0]}
+                usage=self._usage(route,response)
+                self.calls+=1
+                if usage['usage_known']:
+                    self.known_usage+=1
+                    self.prompt_tokens+=usage['prompt_tokens']
+                    self.completion_tokens+=usage['completion_tokens']
+                else:
+                    self.unknown_usage+=1
+                self.last={'mode':mode,'route':route,'model':model,'elapsed_ms':round((time.monotonic()-started)*1000),'fallback':route!=routes[0],**usage}
                 return {'text':text.strip(),**self.last}
             except Exception:
                 if route==routes[-1]:raise RuntimeError('Selected desktop translation route is unavailable') from None
@@ -118,4 +126,20 @@ class DesktopTranslator:
         return {'local_model':self.local_model,'cloud_model':self.cloud_model,'reference_pack':pack_status(),
                 'hermes_auth_configured':self._hermes_health['authenticated'],
                 'hermes_reachable':self._hermes_health['reachable'],
-                'calls':self.calls,'last':self.last}
+                'calls':self.calls,'last':self.last,'cost':self.cost_status()}
+
+    def _usage(self,route,response):
+        if route=='local':
+            prompt,completion=response.get('prompt_eval_count'),response.get('eval_count')
+        else:
+            usage=response.get('usage') if isinstance(response.get('usage'),dict) else {}
+            prompt,completion=usage.get('prompt_tokens'),usage.get('completion_tokens')
+        known=isinstance(prompt,int) and isinstance(completion,int) and prompt>=0 and completion>=0
+        return {'usage_known':known,'prompt_tokens':prompt if known else None,'completion_tokens':completion if known else None,
+                'cost_note':None if known else '沒有上游用量，不能當成免費'}
+
+    def cost_status(self):
+        complete=self.unknown_usage==0 and self.known_usage>0
+        return {'known':complete,'prompt_tokens':self.prompt_tokens if complete else None,
+                'completion_tokens':self.completion_tokens if complete else None,
+                'note':'有用量，但沒有單價，不能換成金額' if complete else '沒有上游用量，不能把 0 當成免費'}

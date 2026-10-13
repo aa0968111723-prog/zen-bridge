@@ -174,6 +174,15 @@ def gate_from_env(probe, env=None) -> IdleGate:
     return IdleGate(probe=probe, idle_s=env_float("ZEN_EMBED_IDLE_S", 10.0, env))
 
 
+def build_embed_handler(live, connect, env=None):
+    """After-class embedding. The idle gate is checked again before every batch."""
+    embedder = embedder_from_env(env)
+    handler = backfill_handler(connect, embedder, gate_from_env(live.metrics, env),
+                               batch=env_int("ZEN_EMBED_BATCH", 16, env))
+    setattr(handler, "model", embedder.model)
+    return handler
+
+
 def pack(vec: list[float]) -> bytes:
     return struct.pack(f"<{len(vec)}f", *vec)
 

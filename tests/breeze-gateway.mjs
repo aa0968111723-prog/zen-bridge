@@ -54,7 +54,7 @@ try {
   assert.ok(!JSON.stringify(gateway.state()).includes('temporary draft'));
   const request=transcribe();
   const [data]=await once(agent,'message'); const job=JSON.parse(data);
-  assert.equal(job.language,'en');assert.equal(job.type,'transcribe');assert.ok(job.audio);
+  assert.equal(job.language,'en');assert.equal(job.type,'transcribe');assert.ok(job.audio);assert.equal(job.session_id,undefined);
   const queued=transcribe();
   for(let i=0;i<20&&gateway.state().waiting<1;i++)await new Promise(r=>setTimeout(r,5));
   assert.equal((await transcribe()).status,429);

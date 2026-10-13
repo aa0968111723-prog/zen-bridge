@@ -319,7 +319,7 @@ internal sealed class BreezeWindow : Form {
             info.EnvironmentVariables["ZEN_ADMIN_HOST"]="127.0.0.1";
             info.EnvironmentVariables["ZEN_ADMIN_PORT"]="8791";
             info.EnvironmentVariables["ZEN_ADMIN_OPEN_BROWSER"]="1";
-            info.EnvironmentVariables["ZEN_EMBED"]="0";
+            info.EnvironmentVariables["ZEN_EMBED"]="1";
             info.EnvironmentVariables["ZEN_LIVE_URL"]=url;
             info.EnvironmentVariables.Remove("SSLKEYLOGFILE");
             info.EnvironmentVariables.Remove("PYTHONPATH");

@@ -205,7 +205,7 @@ sequenceDiagram
 | live-room 主程序（FastAPI、WebSocket、SQLite ledger、VAD） | event loop＋executor；Silero VAD `intra_op=1`（`vad.py:60`） | 不設，浮動在 LP 8–11 與閒置核 | NORMAL | 不關（I/O 為主） | — | — |
 | 後台 admin 程序 | — | 不設 | BELOW_NORMAL〔推估〕 | 可開 | — | **`ZEN_ADMIN_PRIORITY`**（新增提議） |
 | 示意圖 LLM | 共用 Ollama | — | — | — | — | `BREEZE_VISUAL_LIVE`（新增提議，§3） |
-| Embedding | **關**（BRIEF 硬規則） | — | — | — | — | `ZEN_EMBED`=0 |
+| Embedding | 後台閒置或課後才跑；直播忙碌時延後 | — | — | — | — | `ZEN_EMBED`=1，`.env` 寫 0 可關 |
 
 說明：
 - 重執行緒合計 Breeze 4＋MT 2＝6＝實體核數（HW §4.1 原則）。草稿 1 執行緒在 box 平均只占 0.086 顆核（box 量測（Xeon，非 5600H），RTF×1 核），放在 SMT 兄弟上。

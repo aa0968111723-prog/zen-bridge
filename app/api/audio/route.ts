@@ -14,7 +14,7 @@ export async function POST(request: Request) {
   try {
     if (Number(request.headers.get('content-length') ?? 0) > 6_000_000) throw new Error('單段錄音請小於 5 MB。');
     const form = await request.formData(), file = form.get('audio');
-    const direction = z.enum(['zh-en', 'en-zh']).parse(form.get('direction') ?? 'zh-en');
+    const direction = z.enum(['zh-en', 'en-zh', 'zh-ja']).parse(form.get('direction') ?? 'zh-en');
     const sessionId = z.string().uuid().parse(form.get('sessionId'));
     const auto = form.get('auto') === 'true';
     const personId = z.string().uuid().nullable().parse(form.get('personId') || null);
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     const parts = await provider.transcribe({ audio, filename: file.name, mime: file.type, direction,
       phrases: terms.phrases, topic: session.topic, speakerNote: person?.notes ?? '', auto,
       speakerKey: person?.id ?? null, knownSpeakerIds: JSON.parse(session.speaker_ids),
-      mode:speechMode,streamKey:sessionId+':'+direction });
+      mode:speechMode,streamKey:sessionId+':'+direction,sessionId });
     if (provider.name === 'breeze' && !parts.some(part => part.source.trim() || part.translation.trim())) return Response.json({ids:[],provider:provider.name});
     if (!stable) return Response.json({ids:[],provider:provider.name,draft:parts.map(part=>part.source).join(' ').trim()});
     const audioKey = await putAudio('recordings/' + sessionId + '/' + id(), audio, file.type || 'audio/wav');
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
       }
       ids.push(await saveSegment({ sessionId, personId: detected?.id ?? null,
         label: detected?.name ?? (direction === 'en-zh' ? '英文發言者' : '待確認講者'), role: currentRole,
-        direction, zh: direction === 'zh-en' ? source : translation, en: direction === 'en-zh' ? source : translation,
+        direction, zh: direction === 'en-zh' ? translation : source, en: direction === 'en-zh' ? source : translation,
         note: notes.join('。'), source: auto ? 'automatic' : 'microphone', audioKey, offset: offset + part.offset }));
     }
     if (!ids.length) throw new Error('這一段沒有辨識出文字');

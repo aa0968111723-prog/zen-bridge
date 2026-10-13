@@ -13,16 +13,16 @@ def test_migrate_cli_upgrades_v2_once_and_keeps_pre_migrate_snapshot(tmp_path, c
     snapshot = tmp_path / "pre-migrate-v2.sqlite3"
 
     assert migrate.main(["--db", str(path)]) == 0
-    assert db.SCHEMA_VERSION == 12
+    assert db.SCHEMA_VERSION == 15
     with sqlite3.connect(path) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 12
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 15
     assert snapshot.is_file()
     with sqlite3.connect(snapshot) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
     assert migrate.main(["--db", str(path)]) == 0
     assert sorted(p.name for p in tmp_path.glob("pre-migrate-*")) == ["pre-migrate-v2.sqlite3"]
-    assert "schema v12 OK" in capsys.readouterr().out
+    assert "schema v15 OK" in capsys.readouterr().out
 
 
 def test_migrate_cli_reports_step_checksum_mismatch(tmp_path, capsys):

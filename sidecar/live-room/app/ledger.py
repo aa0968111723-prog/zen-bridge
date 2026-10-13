@@ -486,6 +486,15 @@ def _ratio(value) -> float | None:
         return None
 
 
+def agent_caption_event(caption_id: str, room: str, session: str, seq: int, text: str, duration_ms: int = 0) -> dict:
+    """Caption event the main UI path can hand to the admin ledger without going through the bus."""
+    t1 = max(0, int(duration_ms or 0))
+    return {
+        "type": "caption", "id": caption_id, "room_id": room, "session_id": session, "seq": int(seq),
+        "zh": text, "zh_raw": text, "en": "", "status": "ready", "version": 1, "t0_ms": 0, "t1_ms": t1,
+    }
+
+
 def segment_status(ev: dict) -> str:
     s = str(ev.get("status") or "")
     if s == "silent":

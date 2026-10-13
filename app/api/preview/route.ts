@@ -16,7 +16,7 @@ export async function POST(request:Request){
   const body=new Uint8Array(size);let cursor=0;for(const part of parts){body.set(part,cursor);cursor+=part.length;}
   const form=await new Response(body,{headers:{'Content-Type':request.headers.get('content-type')||''}}).formData();
   const sessionId=z.string().uuid().parse(form.get('sessionId'));
-  const direction=z.enum(['zh-en','en-zh']).parse(form.get('direction'));
+  const direction=z.enum(['zh-en','en-zh','zh-ja']).parse(form.get('direction'));
   const file=form.get('audio');if(!(file instanceof File)||file.size<44||file.size>220000)throw Error('預覽錄音格式不正確。');
   const session=await one<Session>('SELECT * FROM sessions WHERE id=?',sessionId);
   if(!session||session.status==='finished')return Response.json({error:'這場活動已結束或不存在。'},{status:409});

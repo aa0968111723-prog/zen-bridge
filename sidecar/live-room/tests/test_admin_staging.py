@@ -72,7 +72,7 @@ def test_migration_up_from_existing_v3_db(tmp_path):
     c.execute("INSERT INTO tm_units(src_text, src_norm, tgt_text, src_hash) VALUES ('佛法', '佛法', 'Dharma', ?)",
               (ztm.src_hash("佛法"),))
     c.close()
-    assert db.migrate(p) == db.SCHEMA_VERSION == 12
+    assert db.migrate(p) == db.SCHEMA_VERSION == 15
     assert (tmp_path / "pre-migrate-v3.sqlite3").is_file()     # data existed -> verified snapshot first
     c = db.connect(p)
     try:

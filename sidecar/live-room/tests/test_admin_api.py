@@ -396,8 +396,150 @@ def test_jobs_202_location_and_poll(env):
     assert asyncio.run(env["app"].state.worker.run_once()) is True
     done = env["client"].get(loc, headers=BEARER).json()
     assert done["state"] == "succeeded" and (env["tmp"] / "backups" / done["result"]["file"]).exists()
-    assert env["client"].post(f"{API}/jobs", json={"kind": "summarize"}, headers=BEARER).status_code == 422
+    summary = env["client"].post(f"{API}/jobs", json={"kind": "summarize", "target": {"session_id": "s1"}}, headers=BEARER)
+    assert summary.status_code == 202
+    assert env["client"].post(f"{API}/jobs", json={"kind": "embed_backfill"}, headers=BEARER).status_code == 422
     assert env["client"].post(f"{API}/jobs", json={"kind": "rm -rf"}, headers=BEARER).status_code == 422
+
+
+def test_listed_jobs_run_without_a_paid_model(env):
+    import asyncio
+    client, app = env["client"], env["app"]
+    summary = client.post(f"{API}/jobs", json={"kind": "summarize", "target": {"session_id": "s1"}}, headers=BEARER)
+    assert summary.status_code == 202
+    assert asyncio.run(app.state.worker.run_once()) is True
+    with db.connect(env["path"]) as c:
+        row = c.execute("SELECT kind, model, content_md FROM summaries WHERE session_id='s1'").fetchone()
+    assert row[0] == "minutes" and row[1] is None and "因緣具足" in row[2]
+
+    imported = client.post(f"{API}/jobs", json={"kind": "glossary_import", "params": {
+        "csv": "zh,target\n因緣,conditions\n"}}, headers=BEARER)
+    assert imported.status_code == 202
+    assert asyncio.run(app.state.worker.run_once()) is True
+    with db.connect(env["path"]) as c:
+        term = c.execute("SELECT en FROM glossary_terms WHERE zh='因緣'").fetchone()
+    assert term is not None and term[0] == "conditions"
+
+    batch = client.post(f"{API}/jobs", json={"kind": "retranslate_batch", "target": {"session_id": "s1"}}, headers=BEARER)
+    assert batch.status_code == 202
+    assert asyncio.run(app.state.worker.run_once()) is True
+    done = client.get(batch.headers["location"], headers=BEARER).json()
+    assert done["state"] == "succeeded" and done["result"]["done"] == 2
+
+
+def test_enhance_job_stays_off_the_live_path(env, monkeypatch):
+    import asyncio
+    from pathlib import Path
+    from app.admin import info as zinfo
+    model = env["tmp"] / "gtcrn_simple.onnx"
+    model.write_bytes(b"not-a-model")
+    monkeypatch.setattr(zinfo, "enhancement_model", lambda: model)
+    calls = []
+
+    def fake(operation, payload):
+        calls.append((operation, payload["model"]))
+        Path(payload["output_wav"]).write_bytes(b"RIFF")
+        return {"samples": 1, "sample_rate": 16000, "model": "gtcrn"}
+
+    monkeypatch.setattr("app.agent_suite.call_worker", fake)
+    inbox = env["path"].parent / "enhance-in"
+    inbox.mkdir()
+    (inbox / "class.wav").write_bytes(b"RIFF")
+    queued = env["client"].post(f"{API}/jobs", json={"kind": "enhance", "params": {"input_name": "class.wav"}}, headers=BEARER)
+    assert queued.status_code == 202
+    assert calls == []
+    assert asyncio.run(env["app"].state.worker.run_once()) is True
+    done = env["client"].get(queued.headers["location"], headers=BEARER).json()
+    assert done["state"] == "succeeded"
+    assert done["result"]["live_path"] is False and done["result"]["model"] == "gtcrn"
+    assert calls == [("enhance", str(model))]
+    missing = env["client"].post(f"{API}/jobs", json={"kind": "enhance", "params": {"input_name": "../secret.wav"}}, headers=BEARER)
+    assert missing.status_code == 202
+    assert asyncio.run(env["app"].state.worker.run_once()) is True
+    refused = env["client"].get(missing.headers["location"], headers=BEARER).json()
+    assert refused["state"] == "failed"
+    assert calls == [("enhance", str(model))]
+
+
+def test_diarize_job_stays_off_the_live_path(env, monkeypatch):
+    import asyncio
+    import json
+    from app.admin import info as zinfo
+    model = env["tmp"] / "community1"
+    for name in ("config.yaml", "embedding/pytorch_model.bin", "segmentation/pytorch_model.bin", "plda/plda.npz", "plda/xvec_transform.npz"):
+        path = model / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+    (model / "zen-model-origin.json").write_text(json.dumps({"status": "verified"}), encoding="utf-8")
+    monkeypatch.setattr(zinfo, "diarization_model", lambda: model)
+    calls = []
+
+    def fake(operation, payload):
+        calls.append((operation, payload["model_dir"]))
+        return {"turns": [{"start": 0.0, "end": 1.2, "speaker": "SPEAKER_00"}]}
+
+    monkeypatch.setattr("app.agent_suite.call_worker", fake)
+    inbox = env["path"].parent / "diarize-in"
+    inbox.mkdir()
+    (inbox / "class.wav").write_bytes(b"RIFF")
+    queued = env["client"].post(f"{API}/jobs", json={"kind": "diarize", "params": {"input_name": "class.wav"}}, headers=BEARER)
+    assert queued.status_code == 202
+    assert calls == []
+    assert asyncio.run(env["app"].state.worker.run_once()) is True
+    done = env["client"].get(queued.headers["location"], headers=BEARER).json()
+    assert done["state"] == "succeeded"
+    assert done["result"]["live_path"] is False and done["result"]["turns"] == 1
+    written = json.loads((env["path"].parent / "diarize-out" / done["result"]["file"]).read_text(encoding="utf-8"))
+    assert written["turns"][0]["speaker"] == "SPEAKER_00"
+    assert calls == [("diarize", str(model))]
+    (model / "zen-model-origin.json").unlink()
+    missing = env["client"].post(f"{API}/jobs", json={"kind": "diarize", "params": {"input_name": "class.wav"}}, headers=BEARER)
+    assert missing.status_code == 202
+    assert asyncio.run(env["app"].state.worker.run_once()) is True
+    refused = env["client"].get(missing.headers["location"], headers=BEARER).json()
+    assert refused["state"] == "failed"
+    assert calls == [("diarize", str(model))]
+
+
+def test_evaluate_job_scores_saved_pairs_only(env, monkeypatch):
+    import asyncio
+    import json
+    import sqlite3
+    from app.admin import info as zinfo
+    model = env["tmp"] / "cometkiwi"
+    for name in ("checkpoints/model.ckpt", "hparams.yaml", "encoder-origin.json"):
+        path = model / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+    (model / "zen-model-origin.json").write_text(json.dumps({"status": "verified"}), encoding="utf-8")
+    monkeypatch.setattr(zinfo, "evaluation_model", lambda: model)
+    calls = []
+
+    def fake(operation, payload):
+        calls.append((operation, len(payload["rows"])))
+        return {"scores": [0.81, 0.72], "system_score": 0.76}
+
+    monkeypatch.setattr("app.agent_suite.call_worker", fake)
+    queued = env["client"].post(f"{API}/jobs", json={"kind": "evaluate", "target": {"session_id": "s1"}}, headers=BEARER)
+    assert queued.status_code == 202
+    assert calls == []
+    assert asyncio.run(env["app"].state.worker.run_once()) is True
+    done = env["client"].get(queued.headers["location"], headers=BEARER).json()
+    assert done["state"] == "succeeded"
+    assert done["result"]["live_path"] is False and done["result"]["scored"] == 2
+    written = json.loads((env["path"].parent / "evaluate-out" / done["result"]["file"]).read_text(encoding="utf-8"))
+    assert written["scores"] == [{"seq": 1, "score": 0.81}, {"seq": 2, "score": 0.72}]
+    assert "因緣" not in json.dumps(written, ensure_ascii=False)
+    with sqlite3.connect(env["path"]) as conn:
+        assert [row[0] for row in conn.execute("SELECT qe_score FROM translations WHERE is_current=1 ORDER BY segment_id")] == [0.81, 0.72]
+    assert calls == [("evaluate", 2)]
+    (model / "zen-model-origin.json").unlink()
+    missing = env["client"].post(f"{API}/jobs", json={"kind": "evaluate", "target": {"session_id": "s1"}}, headers=BEARER)
+    assert missing.status_code == 202
+    assert asyncio.run(env["app"].state.worker.run_once()) is True
+    refused = env["client"].get(missing.headers["location"], headers=BEARER).json()
+    assert refused["state"] == "failed"
+    assert calls == [("evaluate", 2)]
 
 
 def test_job_cancel(env):

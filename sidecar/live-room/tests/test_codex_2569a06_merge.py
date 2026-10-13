@@ -6,32 +6,61 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_embed_on_is_refused_before_binding_the_port(monkeypatch):
-    from app.admin import run
-    monkeypatch.setenv("ZEN_EMBED", "1")
-    called = []
-    monkeypatch.setattr(run, "bind_socket", lambda *a: called.append(a))
-    with pytest.raises(SystemExit) as e:
-        run.main([])
-    assert "Embedding" in str(e.value)
-    assert called == []
+def test_embed_handler_defers_while_busy_without_calling_the_model(monkeypatch):
+    from app.admin.jobs import JobDeferred
+    from app.embed import build_embed_handler
+
+    class Gate:
+        def confirm(self):
+            return False, "asr_or_translate_busy"
+
+    class Embedder:
+        model = "qwen3-embedding:0.6b"
+        def embed(self, texts):
+            raise AssertionError("embedding was called while busy")
+
+    class Live:
+        def metrics(self):
+            return {"pending": 1}
+
+    monkeypatch.setattr("app.embed.embedder_from_env", lambda *args, **kwargs: Embedder())
+    monkeypatch.setattr("app.embed.gate_from_env", lambda probe, env=None: Gate())
+    handler = build_embed_handler(Live(), lambda: None)
+    assert getattr(handler, "model") == "qwen3-embedding:0.6b"
+
+    class Ctx:
+        job = {"target": {}}
+        def progress(self, *args, **kwargs):
+            pass
+
+    with pytest.raises(JobDeferred):
+        handler(Ctx())
 
 
-def test_admin_run_never_builds_an_embed_handler_but_keeps_backup_and_retention():
+def test_admin_run_wires_embed_only_when_requested_and_keeps_backup():
     src = (ROOT / "app/admin/run.py").read_text(encoding="utf-8")
-    assert "embed_handler=None, embed_scan_s=0.0" in src
-    assert "backfill_handler" not in src
+    assert "Embedding 暫停" not in src
+    assert "build_embed_handler" in src
+    assert "embed_scan_s = 60.0" in src
     assert "backup_every_s=" in src and "retention_every_s=" in src
     assert 'install_file_log("admin")' in src
     assert "live_url_from_env()" in src
 
 
-def test_start_backend_keeps_login_url_visible_and_embed_off():
+def test_start_backend_keeps_login_url_visible_and_can_turn_embed_off():
     src = (ROOT / "scripts/start_backend.ps1").read_text(encoding="utf-8-sig")
     assert "$env:ZEN_EMBED = '0'" in src
+    assert "$env:ZEN_EMBED = '1'" in src
     assert "$style = 'Normal'" in src
     assert "-WindowStyle Hidden" not in src            # D-005
     assert "-WindowStyle $style" in src
+
+
+def test_desktop_admin_lifts_the_launcher_hold_unless_env_file_says_off():
+    from app.desktop_admin import embed_from_file
+    assert embed_from_file({}) == "1"
+    assert embed_from_file({"ZEN_EMBED": "1"}) == "1"
+    assert embed_from_file({"ZEN_EMBED": "0"}) == "0"
 
 
 def test_setup_runs_pinned_runtime_and_resolves_ollama():

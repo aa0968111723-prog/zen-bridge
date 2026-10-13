@@ -32,8 +32,53 @@ TGT_LANGS = ("en", "ja")
 JA_GLOSSARY = "日文詞表"
 EXPORT_FORMATS = ("srt", "vtt", "md")       # python-docx is not installed in the venv -> no docx
 ROLES = ("admin", "editor", "host", "viewer")
+_WAV_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}\.wav\Z", re.I)
+_SESSION_ID = re.compile(r"[A-Za-z0-9_.:-]{1,64}\Z")
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 SECRET_KEY_RE = re.compile(r"(token|secret|password|passwd|key|auth|cookie|credential)", re.I)
+
+
+def enhancement_model() -> Path:
+    local = os.getenv("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(local) / "ZenBridge" / "models" / "enhancement" / "gtcrn_simple.onnx"
+
+
+def diarization_model() -> Path:
+    local = os.getenv("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(local) / "ZenBridge" / "models" / "diarization" / "community1"
+
+
+def diarization_ready(model: Path | None = None) -> bool:
+    folder = model or diarization_model()
+    required = (
+        "config.yaml",
+        "embedding/pytorch_model.bin",
+        "segmentation/pytorch_model.bin",
+        "plda/plda.npz",
+        "plda/xvec_transform.npz",
+    )
+    try:
+        record = json.loads((folder / "zen-model-origin.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(record, dict) and record.get("status") == "verified" and all(
+        (folder / name).is_file() for name in required)
+
+
+def evaluation_model() -> Path:
+    local = os.getenv("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(local) / "ZenBridge" / "models" / "evaluation" / "cometkiwi"
+
+
+def evaluation_ready(model: Path | None = None) -> bool:
+    folder = model or evaluation_model()
+    required = ("checkpoints/model.ckpt", "hparams.yaml", "encoder-origin.json")
+    try:
+        record = json.loads((folder / "zen-model-origin.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(record, dict) and record.get("status") == "verified" and all(
+        (folder / name).is_file() for name in required)
 EXT_SQL = """
 CREATE TABLE IF NOT EXISTS admin_glossary_lang (
   glossary_id INTEGER PRIMARY KEY REFERENCES glossaries(id) ON DELETE CASCADE,
@@ -628,19 +673,13 @@ def register(app, ctx) -> int:
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="glossary-{lang}.csv"'})
 
-    @app.post(f"{API}/glossary/import")
-    async def import_csv(request: Request, user=Depends(need("editor"))):
-        body, _ = await read_json(request)          # {"csv": "...", "tgt_lang": "en", "dry_run": true}
-        lang = lang_of(body.get("tgt_lang"))
-        text = body.get("csv")
-        if not isinstance(text, str) or not text.strip():
-            raise Problem(422, "invalid", "需要 csv 文字")
+    def apply_glossary_csv(text: str, lang: str, dry_run: bool, user) -> dict:
         rows = list(csv.DictReader(io.StringIO(text)))
         if len(rows) > 5000:
             raise Problem(422, "too_many", "一次最多 5000 列")
         add, update, errors = [], [], []
-        with conn(write=not body.get("dry_run")) as c:
-            gid = glossary_for(c, lang) if not body.get("dry_run") else None
+        with conn(write=not dry_run) as c:
+            gid = glossary_for(c, lang) if not dry_run else None
             for i, r in enumerate(rows, 2):
                 try:
                     zh = clean(r.get("zh"), "zh", 1, 20)
@@ -661,7 +700,7 @@ def register(app, ctx) -> int:
                     errors.append({"line": i, "detail": f"{zh} 已鎖定，略過"})
                     continue
                 (update if ex else add).append({"zh": zh, "target": tg, "aliases": al})
-                if not body.get("dry_run"):
+                if not dry_run:
                     if ex:
                         c.execute("UPDATE glossary_terms SET en=?, aliases=?, rev=rev+1 WHERE id=?",
                                   (tg, json.dumps(al, ensure_ascii=False), ex[0]))
@@ -673,10 +712,19 @@ def register(app, ctx) -> int:
                         tid = ex[0] if ex else c.execute("SELECT last_insert_rowid()").fetchone()[0]
                         c.execute("INSERT INTO admin_term_meta(term_id, reading) VALUES (?,?) ON CONFLICT(term_id) DO UPDATE SET reading=excluded.reading",
                                   (tid, rd[:80]))
-            if not body.get("dry_run"):
+            if not dry_run:
                 audit(c, user, "glossary.import", tgt_lang=lang, added=len(add), updated=len(update))
-        return {"dry_run": bool(body.get("dry_run")), "add": add[:200], "update": update[:200], "errors": errors[:200],
+        return {"dry_run": bool(dry_run), "add": add[:200], "update": update[:200], "errors": errors[:200],
                 "counts": {"add": len(add), "update": len(update), "errors": len(errors)}}
+
+    @app.post(f"{API}/glossary/import")
+    async def import_csv(request: Request, user=Depends(need("editor"))):
+        body, _ = await read_json(request)          # {"csv": "...", "tgt_lang": "en", "dry_run": true}
+        lang = lang_of(body.get("tgt_lang"))
+        text = body.get("csv")
+        if not isinstance(text, str) or not text.strip():
+            raise Problem(422, "invalid", "需要 csv 文字")
+        return apply_glossary_csv(text, lang, bool(body.get("dry_run")), user)
 
     # ============================================================ translation memory
     def tm_row(c, tid):
@@ -814,6 +862,171 @@ def register(app, ctx) -> int:
 
     ctx.handlers["export"] = export_handler
     app.state.run_export = run_export
+
+    def _job_fields(jctx):
+        job = jctx.job if isinstance(getattr(jctx, "job", None), dict) else {}
+        return job.get("target") or {}, job.get("params") or {}
+
+    def summarize_handler(jctx):
+        target, params = _job_fields(jctx)
+        sid = str(target.get("session_id") or "")
+        kind = str(params.get("kind") or "minutes")
+        if kind not in ("minutes", "summary_zh", "outline"):
+            raise ValueError("kind 只能是 minutes、summary_zh、outline")
+        with conn() as c:
+            if not c.execute("SELECT 1 FROM sessions WHERE id=?", (sid,)).fetchone():
+                raise ValueError("找不到這場")
+            rows = list(c.execute(
+                "SELECT g.seq, t.text FROM segments g "
+                "LEFT JOIN transcripts t ON t.segment_id=g.id AND t.is_current=1 "
+                "WHERE g.session_id=? AND g.status NOT IN ('silent','deleted') ORDER BY g.seq", (sid,)))
+        lines = [f"{r[0]}. {r[1]}" for r in rows if r[1]]
+        body = "\n".join(f"- {line}" if kind == "outline" else line for line in lines) or "（這場還沒有中文逐字稿）"
+        with conn(write=True) as c:
+            c.execute("INSERT INTO summaries(session_id, kind, content_md, model) VALUES (?,?,?,NULL)",
+                      (sid, kind, body))
+        return {"session_id": sid, "kind": kind, "lines": len(lines), "model": None}
+
+    def glossary_import_handler(jctx):
+        _target, params = _job_fields(jctx)
+        text = params.get("csv")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("需要 params.csv")
+        if len(text) > 200_000:
+            raise ValueError("csv 太大")
+        return apply_glossary_csv(text, lang_of(params.get("tgt_lang")), False, {"via": "job", "user_id": None})
+
+    def retranslate_batch_handler(jctx):
+        target, _params = _job_fields(jctx)
+        sid = str(target.get("session_id") or "")
+        with conn() as c:
+            rows = list(c.execute(
+                "SELECT id, room_id, session_id, seq FROM segments "
+                "WHERE session_id=? AND status NOT IN ('silent','deleted') ORDER BY seq LIMIT 41", (sid,)))
+        if len(rows) > 40:
+            raise ValueError("一場一次最多重翻 40 段")
+        done, failed = 0, []
+        for i, row in enumerate(rows, 1):
+            jctx.progress(done=i, total=len(rows), stage="retranslate")
+            status, data = ctx.live.retranslate(row[1], row[2], row[3])
+            if status == 200:
+                done += 1
+            else:
+                failed.append({"seq": row[3], "status": status})
+        if rows and done == 0:
+            raise ConnectionError("直播服務沒有完成任何一段重翻")
+        return {"session_id": sid, "done": done, "failed": failed}
+
+    def enhance_handler(jctx):
+        _target, params = _job_fields(jctx)
+        name = str(params.get("input_name") or "")
+        if not _WAV_NAME.fullmatch(name) or ".." in name:
+            raise ValueError("input_name 只能是 wav 檔名")
+        inbox = Path(ctx.db_path).parent / "enhance-in"
+        incoming = (inbox / name).resolve()
+        if incoming.parent != inbox.resolve() or not incoming.is_file():
+            raise ValueError("找不到這段課後音檔")
+        if incoming.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError("音檔太大，降噪只接受 120 秒以內")
+        model = enhancement_model()
+        if not model.is_file():
+            raise ValueError("降噪模型尚未下載，不會呼叫模型")
+        out_dir = Path(ctx.db_path).parent / "enhance-out"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output = out_dir / f"{incoming.stem}-{int(clock())}.wav"
+        if output.exists():
+            raise ValueError("輸出檔已存在")
+        from app.agent_suite import call_worker
+        result = call_worker("enhance", {
+            "input_wav": str(incoming),
+            "output_wav": str(output),
+            "model": str(model),
+        })
+        return {"input_name": name, "file": output.name, "model": "gtcrn", "live_path": False, "result": result}
+
+    def diarize_handler(jctx):
+        _target, params = _job_fields(jctx)
+        name = str(params.get("input_name") or "")
+        if not _WAV_NAME.fullmatch(name) or ".." in name:
+            raise ValueError("input_name 只能是 wav 檔名")
+        inbox = Path(ctx.db_path).parent / "diarize-in"
+        incoming = (inbox / name).resolve()
+        if incoming.parent != inbox.resolve() or not incoming.is_file():
+            raise ValueError("找不到這段課後音檔")
+        if incoming.stat().st_size > 700 * 1024 * 1024:
+            raise ValueError("音檔太大，講者分離只接受 1 小時以內")
+        model = diarization_model()
+        if not diarization_ready(model):
+            raise ValueError("講者分離模型尚未就緒，不會呼叫模型")
+        out_dir = Path(ctx.db_path).parent / "diarize-out"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output = out_dir / f"{incoming.stem}-{int(clock())}.json"
+        if output.exists():
+            raise ValueError("輸出檔已存在")
+        from app.agent_suite import call_worker
+        result = call_worker("diarize", {"input_wav": str(incoming), "model_dir": str(model)})
+        turns = result.get("turns") if isinstance(result, dict) else None
+        if not isinstance(turns, list):
+            raise ValueError("講者分離沒有回傳段落")
+        output.write_text(json.dumps({"turns": turns}, ensure_ascii=False), encoding="utf-8")
+        return {"input_name": name, "file": output.name, "model": "community1", "live_path": False, "turns": len(turns)}
+
+    def evaluate_handler(jctx):
+        target, _params = _job_fields(jctx)
+        sid = str(target.get("session_id") or "")
+        if not _SESSION_ID.fullmatch(sid):
+            raise ValueError("session_id 格式不對")
+        model = evaluation_model()
+        if not evaluation_ready(model):
+            raise ValueError("評分模型尚未就緒，不會呼叫模型")
+        with conn() as c:
+            if not c.execute("SELECT 1 FROM sessions WHERE id=?", (sid,)).fetchone():
+                raise ValueError("找不到這場")
+            rows = list(c.execute(
+                "SELECT g.seq, t.text, tr.text FROM segments g "
+                "JOIN transcripts t ON t.segment_id=g.id AND t.is_current=1 "
+                "JOIN translations tr ON tr.segment_id=g.id AND tr.tgt_lang='en' AND tr.is_current=1 "
+                "WHERE g.session_id=? AND g.status NOT IN ('silent','deleted') "
+                "AND length(t.text) BETWEEN 1 AND 8000 AND length(tr.text) BETWEEN 1 AND 8000 "
+                "ORDER BY g.seq LIMIT 65", (sid,)))
+        if not rows:
+            raise ValueError("這場還沒有可評分的中英對")
+        if len(rows) > 64:
+            raise ValueError("一場一次最多評分 64 段")
+        from app.agent_suite import call_worker
+        result = call_worker("evaluate", {
+            "rows": [{"src": row[1], "mt": row[2]} for row in rows],
+            "checkpoint": str(model / "checkpoints" / "model.ckpt"),
+        })
+        scores = result.get("scores") if isinstance(result, dict) else None
+        if not isinstance(scores, list) or len(scores) != len(rows) or any(not isinstance(item, (int, float)) for item in scores):
+            raise ValueError("評分沒有回傳每一段的分數")
+        with conn(write=True) as c:
+            for row, score in zip(rows, scores):
+                changed = c.execute(
+                    "UPDATE translations SET qe_score=? WHERE tgt_lang='en' AND is_current=1 AND segment_id="
+                    "(SELECT id FROM segments WHERE session_id=? AND seq=?)",
+                    (float(score), sid, row[0])).rowcount
+                if changed != 1:
+                    raise ValueError("評分沒有寫回這一場")
+        out_dir = Path(ctx.db_path).parent / "evaluate-out"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output = out_dir / f"{hashlib.sha256(sid.encode()).hexdigest()[:16]}-{int(clock())}.json"
+        if output.exists():
+            raise ValueError("輸出檔已存在")
+        output.write_text(json.dumps({
+            "session_id": sid,
+            "scores": [{"seq": row[0], "score": float(score)} for row, score in zip(rows, scores)],
+            "system_score": result.get("system_score"),
+        }, ensure_ascii=False), encoding="utf-8")
+        return {"session_id": sid, "file": output.name, "model": "cometkiwi", "live_path": False, "scored": len(scores)}
+
+    ctx.handlers["summarize"] = summarize_handler
+    ctx.handlers["glossary_import"] = glossary_import_handler
+    ctx.handlers["retranslate_batch"] = retranslate_batch_handler
+    ctx.handlers["enhance"] = enhance_handler
+    ctx.handlers["diarize"] = diarize_handler
+    ctx.handlers["evaluate"] = evaluate_handler
 
     @app.post(f"{API}/sessions/{{sid}}/exports", status_code=202)
     async def create_export(sid: str, request: Request, user=Depends(need("editor"))):

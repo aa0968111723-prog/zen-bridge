@@ -711,15 +711,21 @@ def test_run_does_not_trust_proxy_headers(monkeypatch):
     monkeypatch.setenv("BREEZE_OPEN_BROWSER", "0")
     captured = {}
 
-    def fake_run(*args, **kwargs):
-        captured["args"] = args
-        captured["kwargs"] = kwargs
+    class Server:
+        def __init__(self, config):
+            captured["config"] = config
 
-    monkeypatch.setattr(run_mod.uvicorn, "run", fake_run)
+        def run(self, sockets=None):
+            captured["sockets"] = sockets
+
+    monkeypatch.setattr(run_mod.uvicorn, "Server", Server)
+    monkeypatch.setattr("app.listen_bind.open_listen_sockets", lambda port, hosts: [])
+    monkeypatch.setattr("app.listen_bind.audience_hosts", lambda share_host="": ["127.0.0.1", "203.0.113.10"])
     run_mod.main()
-    assert captured["args"] == ("app.server:app",)
-    assert captured["kwargs"]["host"] == "0.0.0.0"
-    assert captured["kwargs"]["proxy_headers"] is False
+    captured["config"].load()
+    assert captured["config"].proxy_headers is False
+    assert captured["config"].host == "127.0.0.1"
+    assert captured["sockets"] == []
 
 
 def _wire_bytes(rows) -> int:

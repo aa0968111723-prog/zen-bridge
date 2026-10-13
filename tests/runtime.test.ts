@@ -39,6 +39,8 @@ const examples = [
 assert.deepEqual({ ...glossary(examples, 'zh-en').phrases }, { 覺察: 'awareness', 靜坐: 'meditation' });
 assert.equal(glossary(examples, 'zh-en', 1).note, '熱詞 1 條，不是模型微調');
 assert.equal(glossary([examples[4]], 'en-zh', 1).phrases['awareness'], '覺察');
+assert.deepEqual({ ...glossary(examples, 'zh-ja').phrases }, {});
+assert.match(glossary(examples, 'zh-ja').note, /沒有大型日文詞典/);
 assert.equal(postgresSql("SELECT '?' AS value, \"offset\" FROM memories WHERE zh=? AND person_id IS ?"), "SELECT '?' AS value, \"offset\" FROM memories WHERE zh=$1 AND person_id IS NOT DISTINCT FROM $2");
 assert.ok(qwenEndpoint().includes('dashscope-intl.aliyuncs.com'));
 assert.ok(qwenEndpoint('cn').includes('https://dashscope.aliyuncs.com/'));
