@@ -16,8 +16,9 @@ def main():
     root = Path(__file__).resolve().parents[1]
     os.chdir(root)
     fill_process_environ(root / '.env')
-    from app.vad import enable_verified_silero
+    from app.vad import cache_startup_gate, enable_verified_silero, vad_from_env
     if enable_verified_silero() == "silero":
+        cache_startup_gate(vad_from_env())
         print("語音活動偵測：已接上 Silero。沒有開麥克風。", flush=True)
     settings = Settings.from_env()
     # round3 C7: rotating, redacted logs/desktop.log (5 MB x 5); ZEN_LOG=off disables
@@ -34,6 +35,14 @@ def main():
     from app.listen_bind import audience_hosts, open_listen_sockets
     sockets = open_listen_sockets(settings.port, audience_hosts(settings.share_host))
     server = uvicorn.Server(uvicorn.Config('app.server:app', host='127.0.0.1', port=settings.port, log_level='warning', proxy_headers=False))
+    # Windows Proactor drops HTTP if a connection arrives on a socket we already
+    # listened on. Close those probes and let uvicorn bind the same addresses.
+    if sys.platform == 'win32' and sockets:
+        hosts = [sock.getsockname()[0] for sock in sockets]
+        setattr(server.config, "host", hosts)
+        for sock in sockets:
+            sock.close()
+        sockets = None
     def control():
         sys.stdin.readline()
         server.should_exit = True
@@ -41,7 +50,7 @@ def main():
     try:
         server.run(sockets=sockets)
     finally:
-        for sock in sockets:
+        for sock in sockets or []:
             try:
                 sock.close()
             except OSError:

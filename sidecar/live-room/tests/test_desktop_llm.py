@@ -2,7 +2,15 @@ import io
 import json
 import unittest
 from unittest.mock import patch
-from app.desktop_llm import DesktopTranslator, loopback_url
+from app.desktop_llm import HYBRID_LOCAL_BUDGET_S, TRANSLATION_BUDGET_S, DesktopTranslator, loopback_url
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
 
 
 class DesktopTranslatorTests(unittest.TestCase):
@@ -14,7 +22,7 @@ class DesktopTranslatorTests(unittest.TestCase):
         })
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.client = DesktopTranslator()
+        self.client = DesktopTranslator(clock=_Clock())
 
     def test_endpoints_are_loopback_only(self):
         for url in ['https://127.0.0.1', 'http://example.com',
@@ -30,6 +38,7 @@ class DesktopTranslatorTests(unittest.TestCase):
                 self.client.translate('Translate', 'hello', 'local')
             self.assertEqual(request.call_count, 1)
             self.assertEqual(request.call_args.args[0], self.client.local)
+            self.assertEqual(request.call_args.kwargs['timeout'], TRANSLATION_BUDGET_S)
 
     def test_local_context_keeps_current_utterance_intact_and_last(self):
         current='請保持當前這一句完整。'
@@ -65,7 +74,7 @@ class DesktopTranslatorTests(unittest.TestCase):
             self.assertEqual(request.call_args.args[0], self.client.hermes)
 
     def test_cloud_provider_rejecting_tool_choice_without_tools_can_translate(self):
-        def strict_provider(base,path,payload):
+        def strict_provider(base,path,payload,authenticated=False,timeout=None):
             if 'tool_choice' in payload and not payload.get('tools'):
                 raise ValueError('HTTP 400: tool_choice requires tools')
             return {'choices':[{'message':{'content':'Bring your attention back to your breathing.'},'finish_reason':'stop'}]}
@@ -136,6 +145,71 @@ class DesktopTranslatorTests(unittest.TestCase):
         self.assertEqual(result['prompt_tokens'], 4)
         self.assertEqual(self.client.cost_status()['completion_tokens'], 2)
 
+    def test_slow_local_failure_still_tries_cloud_with_remaining_timeout(self):
+        clock = _Clock()
+        client = DesktopTranslator(clock=clock)
+        seen = []
+
+        def fake_provider(base, path, payload, authenticated=False, timeout=None):
+            seen.append((base, timeout))
+            if base == client.local:
+                clock.now += timeout
+                raise TimeoutError('slow local')
+            return {'choices': [{'message': {'content': 'from cloud'}, 'finish_reason': 'stop'}]}
+
+        with patch.object(client, '_request', side_effect=fake_provider):
+            result = client.translate('Translate', 'hello', 'hybrid')
+        self.assertEqual(result['route'], 'cloud')
+        self.assertTrue(result['fallback'])
+        self.assertEqual(seen[0], (client.local, HYBRID_LOCAL_BUDGET_S))
+        self.assertEqual(seen[1], (client.hermes, TRANSLATION_BUDGET_S - HYBRID_LOCAL_BUDGET_S))
+        self.assertEqual(len(seen), 2)
+
+    def test_hybrid_local_success_does_not_call_cloud(self):
+        clock = _Clock()
+        client = DesktopTranslator(clock=clock)
+        seen = []
+
+        def fake_provider(base, path, payload, authenticated=False, timeout=None):
+            seen.append((base, timeout))
+            clock.now += 1
+            return {'message': {'content': 'from local'}}
+
+        with patch.object(client, '_request', side_effect=fake_provider):
+            result = client.translate('Translate', 'hello', 'hybrid')
+        self.assertEqual(result['route'], 'local')
+        self.assertFalse(result['fallback'])
+        self.assertEqual(seen, [(client.local, HYBRID_LOCAL_BUDGET_S)])
+
+    def test_exhausted_budget_does_not_call_the_next_route(self):
+        clock = _Clock()
+        client = DesktopTranslator(clock=clock)
+        seen = []
+
+        def fake_provider(base, path, payload, authenticated=False, timeout=None):
+            seen.append(base)
+            clock.now += TRANSLATION_BUDGET_S
+            raise TimeoutError('budget spent')
+
+        with patch.object(client, '_request', side_effect=fake_provider), self.assertRaises(RuntimeError):
+            client.translate('Translate', 'hello', 'hybrid')
+        self.assertEqual(seen, [client.local])
+
+    def test_single_mode_keeps_the_full_budget_on_its_own_route(self):
+        clock = _Clock()
+        client = DesktopTranslator(clock=clock)
+        seen = []
+
+        def fake_provider(base, path, payload, authenticated=False, timeout=None):
+            seen.append((base, timeout))
+            if base == client.local:
+                raise TimeoutError('local down')
+            return {'choices': [{'message': {'content': 'cloud'}, 'finish_reason': 'stop'}]}
+
+        with patch.object(client, '_request', side_effect=fake_provider):
+            self.assertEqual(client.translate('Translate', 'hello', 'cloud')['route'], 'cloud')
+        self.assertEqual(seen, [(client.hermes, TRANSLATION_BUDGET_S)])
+
 
 def test_metrics_file_survives_a_new_instance(tmp_path):
     from app.agent_metrics import AgentMetrics
@@ -148,6 +222,17 @@ def test_metrics_file_survives_a_new_instance(tmp_path):
     assert snap["cost_known"] is False
     assert "不能把 0 當成免費" in snap["note"]
     assert "hello" not in path.read_text(encoding="utf-8")
+
+def test_translation_inherits_remaining_queue_budget():
+    from app.desktop_llm import TRANSLATION_DEADLINE
+    client=DesktopTranslator(clock=lambda:40)
+    token=TRANSLATION_DEADLINE.set(55)
+    try:
+        with patch.object(client,'_request',return_value={'choices':[{'message':{'content':'Hello'},'finish_reason':'stop'}]}) as request:
+            client.translate('Translate','hello','cloud')
+        assert request.call_args.kwargs['timeout']==15
+    finally:
+        TRANSLATION_DEADLINE.reset(token)
 
 
 if __name__ == '__main__':

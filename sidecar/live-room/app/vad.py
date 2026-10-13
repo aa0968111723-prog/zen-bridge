@@ -26,6 +26,11 @@ from pathlib import Path
 
 log = logging.getLogger("breeze.vad")
 
+# Loaded once, before any other thread, by the desktop service. A later import of
+# ONNX while those threads exist can stall the Windows loader and the port never opens.
+STARTUP_CHECKED = False
+STARTUP_GATE = None
+
 MODEL = Path(__file__).with_name("vendor") / "silero_vad.onnx"
 MODEL_URL = "https://raw.githubusercontent.com/snakers4/silero-vad/v6.2.3/src/silero_vad/data/silero_vad.onnx"
 MODEL_SHA256 = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
@@ -200,8 +205,17 @@ def _float(env: dict, name: str, default: float, lo: float = 0.0, hi: float = 1.
     return v
 
 
+def cache_startup_gate(gate) -> None:
+    """Remember the gate loaded before other threads exist. Do not import ONNX again."""
+    global STARTUP_CHECKED, STARTUP_GATE
+    STARTUP_CHECKED = True
+    STARTUP_GATE = gate
+
+
 def vad_from_env(env: dict | None = None, session_factory=None) -> VadGate | None:
     """Build the gate, or None (RMS path) when off or unavailable. Never raises."""
+    if session_factory is None and (env is None or env is os.environ) and STARTUP_CHECKED:
+        return STARTUP_GATE
     env = os.environ if env is None else env
     mode = (env.get("BREEZE_VAD") or "off").strip().lower()
     if mode in ("", "off", "0", "rms"):

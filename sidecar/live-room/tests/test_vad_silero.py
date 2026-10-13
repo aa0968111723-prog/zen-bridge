@@ -153,3 +153,12 @@ async def test_pipeline_skips_asr_when_vad_says_silent(monkeypatch, tmp_path):
             assert r.json().get("speech_ratio") in (None, 0.0)
     finally:
         await stop(app)
+
+def test_desktop_preloaded_gate_is_reused_without_late_onnx_import(monkeypatch):
+    import app.vad as vad
+    gate=object()
+    monkeypatch.setattr(vad, 'STARTUP_CHECKED', True)
+    monkeypatch.setattr(vad, 'STARTUP_GATE', gate)
+    assert vad.vad_from_env() is gate
+    # Explicit isolated configurations still honour their own setting.
+    assert vad.vad_from_env({'BREEZE_VAD':'off'}) is None
