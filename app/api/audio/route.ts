@@ -14,7 +14,7 @@ export async function POST(request: Request) {
   try {
     if (Number(request.headers.get('content-length') ?? 0) > 6_000_000) throw new Error('單段錄音請小於 5 MB。');
     const form = await request.formData(), file = form.get('audio');
-    const direction = z.enum(['zh-en', 'en-zh']).parse(form.get('direction') ?? 'zh-en');
+    const direction = z.enum(['zh-en', 'en-zh', 'zh-ja']).parse(form.get('direction') ?? 'zh-en');
     const sessionId = z.string().uuid().parse(form.get('sessionId'));
     const auto = form.get('auto') === 'true';
     const personId = z.string().uuid().nullable().parse(form.get('personId') || null);
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
       }
       ids.push(await saveSegment({ sessionId, personId: detected?.id ?? null,
         label: detected?.name ?? (direction === 'en-zh' ? '英文發言者' : '待確認講者'), role: currentRole,
-        direction, zh: direction === 'zh-en' ? source : translation, en: direction === 'en-zh' ? source : translation,
+        direction, zh: direction === 'en-zh' ? translation : source, en: direction === 'en-zh' ? source : translation,
         note: notes.join('。'), source: auto ? 'automatic' : 'microphone', audioKey, offset: offset + part.offset }));
     }
     if (!ids.length) throw new Error('這一段沒有辨識出文字');

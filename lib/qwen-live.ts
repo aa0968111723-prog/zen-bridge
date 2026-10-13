@@ -6,7 +6,7 @@ export type LiveSocket = {
   close(): void;
   addEventListener(type: string, listener: (event: { data?: unknown; code?: number }) => void): void;
 };
-type Options={apiKey:string;region?:string;model?:string;platform:DeployTarget;direction:'zh-en'|'en-zh';phrases:Record<string,string>};
+type Options={apiKey:string;region?:string;model?:string;platform:DeployTarget;direction:'zh-en'|'en-zh'|'zh-ja';phrases:Record<string,string>};
 
 export function qwenEndpoint(region?: string, model = QWEN_MODEL) {
   const host = region === 'cn' ? 'dashscope.aliyuncs.com' : 'dashscope-intl.aliyuncs.com';
@@ -62,7 +62,7 @@ export async function qwenLiveTranslate(file:Uint8Array,options:Options){
     });
     socket.addEventListener('error',()=>finish(connectionError()));socket.addEventListener('close',event=>{if(!settled)finish(event.code===1000&&(source||translation)?undefined:connectionError());});
     try{
-      socket.send(JSON.stringify({type:'session.update',session:{output_modalities:['text'],translation:{language:options.direction==='zh-en'?'en':'zh',corpus:{phrases:options.phrases}}}}));
+      socket.send(JSON.stringify({type:'session.update',session:{output_modalities:['text'],translation:{language:options.direction==='zh-ja'?'ja':options.direction==='zh-en'?'en':'zh',corpus:{phrases:options.phrases}}}}));
       for(let i=0;i<pcm.length;i+=1600)socket.send(JSON.stringify({type:'input_audio_buffer.append',audio:pcmBase64(pcm,i,Math.min(pcm.length,i+1600))}));
       socket.send(JSON.stringify({type:'session.finish'}));
     }catch{finish(connectionError());}
@@ -83,7 +83,7 @@ async function openStream(options:Options,key:string){
     if(body.type==='response.text.done'){session.pending.translation=body.text||session.pending.translation;const pending=session.pending;session.pending=null;clearTimeout(pending.timer);pending.resolve({source:pending.source.trim(),translation:pending.translation.trim()});}
   });
   socket.addEventListener('error',fail);socket.addEventListener('close',fail);
-  socket.send(JSON.stringify({type:'session.update',session:{output_modalities:['text'],translation:{language:options.direction==='zh-en'?'en':'zh',corpus:{phrases:options.phrases}}}}));
+  socket.send(JSON.stringify({type:'session.update',session:{output_modalities:['text'],translation:{language:options.direction==='zh-ja'?'ja':options.direction==='zh-en'?'en':'zh',corpus:{phrases:options.phrases}}}}));
   streams.set(key,session);return session;
 }
 
