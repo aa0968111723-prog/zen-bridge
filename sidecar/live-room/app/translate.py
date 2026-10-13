@@ -118,6 +118,8 @@ class Translator:
     max_backoff: float = 2.0
     sleeper: object | None = None
     tokens_used: int = 0
+    usage_reported: int = 0
+    usage_missing: int = 0
     token_budget: int = 0
     price_in_per_1m: float | None = None
     price_out_per_1m: float | None = None
@@ -192,6 +194,13 @@ class Translator:
             "date": self.price_date,
             "note": "只有同時有來源與日期才換算金額",
         }
+
+    def cost_status(self) -> dict:
+        price = self.price_note()
+        if price is None or self.usage_missing or self.usage_reported == 0:
+            return {"known": False, "price": price, "tokens_used": self.tokens_used,
+                    "note": "沒有上游用量或單價，不能把 0 當成免費"}
+        return {"known": True, "price": price, "tokens_used": self.tokens_used, "note": None}
 
     def build_messages(self, zh: str, glossary=None, context=None, examples=None) -> list[dict]:
         # Matched terms and earlier lines are data on the user message, not system instructions.
@@ -317,6 +326,10 @@ class Translator:
             usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
             prompt_tokens = usage.get("prompt_tokens")
             completion_tokens = usage.get("completion_tokens")
+            if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
+                self.usage_reported += 1
+            else:
+                self.usage_missing += 1
             if isinstance(prompt_tokens, int):
                 self._add_tokens(prompt_tokens)
             if isinstance(completion_tokens, int):

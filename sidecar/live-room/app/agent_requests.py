@@ -9,7 +9,7 @@ from app.desktop_llm import DesktopTranslator
 
 class AgentRequests:
     def __init__(self,asr,root,on_line=None):
-        self.asr=asr;self.root=root;self.on_line=on_line;self.metrics=AgentMetrics();self.translator=DesktopTranslator()
+        self.asr=asr;self.root=root;self.on_line=on_line;self.metrics=AgentMetrics(path=Path(root)/'tmp'/'agent-metrics.jsonl');self.translator=DesktopTranslator()
         import os
         if os.getenv('ZEN_AGENT_SUITE_GRAPH','0')=='1':
             from app.agent_suite import AgentSuiteTranslator
@@ -43,7 +43,7 @@ class AgentRequests:
         if kind not in ('transcribe','translate','status','preview') or not isinstance(identifier,str) or len(identifier)>80:return None
         response={'type':'result' if kind=='transcribe' else 'control_result','id':identifier,'ok':False}
         if kind=='status':return {**response,'ok':True,'result':await asyncio.to_thread(self.status)}
-        started=time.monotonic();duration=None;route=None
+        started=time.monotonic();duration=None;route=None;result=None
         try:
             if kind=='translate':
                 async with self.translation_lane:
@@ -76,5 +76,5 @@ class AgentRequests:
                                 try:self.on_line(audio,result.text,{**request,'duration_ms':int(duration*1000)})
                                 except Exception:pass
         except Exception:response['error']='Selected desktop operation failed'
-        self.metrics.record(kind,(time.monotonic()-started)*1000,response['ok'],duration,route)
+        self.metrics.record(kind,(time.monotonic()-started)*1000,response['ok'],duration,route,result.get('usage_known') if isinstance(result,dict) else None)
         return response

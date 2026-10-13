@@ -2056,6 +2056,8 @@ def create_app(settings: Settings | None = None, asr=None, translator: Translato
             "asr_gpu": asr_gpu_status(),           # opt-in GPU path: active / fell back / why
             "tokens_used": translator.tokens_used,
             "price": translator.price_note(),
+            "cost": translator.cost_status() if callable(getattr(translator, "cost_status", None)) else {
+                "known": False, "note": "沒有上游用量或單價，不能把 0 當成免費"},
             "store_errors": store.errors,
             "storage_recovered": bool(getattr(store, "recovered", False)),
             **ledger.stats(),
