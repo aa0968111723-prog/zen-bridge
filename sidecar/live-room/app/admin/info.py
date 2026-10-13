@@ -40,6 +40,28 @@ SECRET_KEY_RE = re.compile(r"(token|secret|password|passwd|key|auth|cookie|crede
 def enhancement_model() -> Path:
     local = os.getenv("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
     return Path(local) / "ZenBridge" / "models" / "enhancement" / "gtcrn_simple.onnx"
+
+
+def diarization_model() -> Path:
+    local = os.getenv("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(local) / "ZenBridge" / "models" / "diarization" / "community1"
+
+
+def diarization_ready(model: Path | None = None) -> bool:
+    folder = model or diarization_model()
+    required = (
+        "config.yaml",
+        "embedding/pytorch_model.bin",
+        "segmentation/pytorch_model.bin",
+        "plda/plda.npz",
+        "plda/xvec_transform.npz",
+    )
+    try:
+        record = json.loads((folder / "zen-model-origin.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(record, dict) and record.get("status") == "verified" and all(
+        (folder / name).is_file() for name in required)
 EXT_SQL = """
 CREATE TABLE IF NOT EXISTS admin_glossary_lang (
   glossary_id INTEGER PRIMARY KEY REFERENCES glossaries(id) ON DELETE CASCADE,
@@ -905,10 +927,38 @@ def register(app, ctx) -> int:
         })
         return {"input_name": name, "file": output.name, "model": "gtcrn", "live_path": False, "result": result}
 
+    def diarize_handler(jctx):
+        _target, params = _job_fields(jctx)
+        name = str(params.get("input_name") or "")
+        if not _WAV_NAME.fullmatch(name) or ".." in name:
+            raise ValueError("input_name 只能是 wav 檔名")
+        inbox = Path(ctx.db_path).parent / "diarize-in"
+        incoming = (inbox / name).resolve()
+        if incoming.parent != inbox.resolve() or not incoming.is_file():
+            raise ValueError("找不到這段課後音檔")
+        if incoming.stat().st_size > 700 * 1024 * 1024:
+            raise ValueError("音檔太大，講者分離只接受 1 小時以內")
+        model = diarization_model()
+        if not diarization_ready(model):
+            raise ValueError("講者分離模型尚未就緒，不會呼叫模型")
+        out_dir = Path(ctx.db_path).parent / "diarize-out"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output = out_dir / f"{incoming.stem}-{int(clock())}.json"
+        if output.exists():
+            raise ValueError("輸出檔已存在")
+        from app.agent_suite import call_worker
+        result = call_worker("diarize", {"input_wav": str(incoming), "model_dir": str(model)})
+        turns = result.get("turns") if isinstance(result, dict) else None
+        if not isinstance(turns, list):
+            raise ValueError("講者分離沒有回傳段落")
+        output.write_text(json.dumps({"turns": turns}, ensure_ascii=False), encoding="utf-8")
+        return {"input_name": name, "file": output.name, "model": "community1", "live_path": False, "turns": len(turns)}
+
     ctx.handlers["summarize"] = summarize_handler
     ctx.handlers["glossary_import"] = glossary_import_handler
     ctx.handlers["retranslate_batch"] = retranslate_batch_handler
     ctx.handlers["enhance"] = enhance_handler
+    ctx.handlers["diarize"] = diarize_handler
 
     @app.post(f"{API}/sessions/{{sid}}/exports", status_code=202)
     async def create_export(sid: str, request: Request, user=Depends(need("editor"))):

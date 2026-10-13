@@ -461,6 +461,46 @@ def test_enhance_job_stays_off_the_live_path(env, monkeypatch):
     assert calls == [("enhance", str(model))]
 
 
+def test_diarize_job_stays_off_the_live_path(env, monkeypatch):
+    import asyncio
+    import json
+    from app.admin import info as zinfo
+    model = env["tmp"] / "community1"
+    for name in ("config.yaml", "embedding/pytorch_model.bin", "segmentation/pytorch_model.bin", "plda/plda.npz", "plda/xvec_transform.npz"):
+        path = model / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+    (model / "zen-model-origin.json").write_text(json.dumps({"status": "verified"}), encoding="utf-8")
+    monkeypatch.setattr(zinfo, "diarization_model", lambda: model)
+    calls = []
+
+    def fake(operation, payload):
+        calls.append((operation, payload["model_dir"]))
+        return {"turns": [{"start": 0.0, "end": 1.2, "speaker": "SPEAKER_00"}]}
+
+    monkeypatch.setattr("app.agent_suite.call_worker", fake)
+    inbox = env["path"].parent / "diarize-in"
+    inbox.mkdir()
+    (inbox / "class.wav").write_bytes(b"RIFF")
+    queued = env["client"].post(f"{API}/jobs", json={"kind": "diarize", "params": {"input_name": "class.wav"}}, headers=BEARER)
+    assert queued.status_code == 202
+    assert calls == []
+    assert asyncio.run(env["app"].state.worker.run_once()) is True
+    done = env["client"].get(queued.headers["location"], headers=BEARER).json()
+    assert done["state"] == "succeeded"
+    assert done["result"]["live_path"] is False and done["result"]["turns"] == 1
+    written = json.loads((env["path"].parent / "diarize-out" / done["result"]["file"]).read_text(encoding="utf-8"))
+    assert written["turns"][0]["speaker"] == "SPEAKER_00"
+    assert calls == [("diarize", str(model))]
+    (model / "zen-model-origin.json").unlink()
+    missing = env["client"].post(f"{API}/jobs", json={"kind": "diarize", "params": {"input_name": "class.wav"}}, headers=BEARER)
+    assert missing.status_code == 202
+    assert asyncio.run(env["app"].state.worker.run_once()) is True
+    refused = env["client"].get(missing.headers["location"], headers=BEARER).json()
+    assert refused["state"] == "failed"
+    assert calls == [("diarize", str(model))]
+
+
 def test_job_cancel(env):
     r = env["client"].post(f"{API}/jobs", json={"kind": "backup", "params": {"n": 2}}, headers=BEARER)
     jid = r.json()["job"]["id"]

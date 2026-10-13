@@ -23,7 +23,7 @@ from pathlib import Path
 from app.admin import db as zdb
 
 log = logging.getLogger("zen.admin.jobs")
-KINDS = ("summarize", "export", "glossary_import", "embed_backfill", "backup", "retranslate_batch", "enhance")
+KINDS = ("summarize", "export", "glossary_import", "embed_backfill", "backup", "retranslate_batch", "enhance", "diarize")
 LEASE_S = 60.0
 
 
