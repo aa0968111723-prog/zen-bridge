@@ -40,3 +40,16 @@ assert.equal(partial[0].offset,8192/16000,'resume starts after dropped partial a
 assert.equal((await partial[0].audio.arrayBuffer()).byteLength,44+16384*2,'no pre-pause audio is joined');
 partialCapture.stop();
 console.log('PASS: partial audio is dropped across pause without shifting resumed captions');
+
+// The independent raw recording includes pre-pause, paused and short final audio,
+// while the ASR lane remains bounded and may skip those frames.
+let archivePause=false,raw=[],captions=[];
+const archived=await sandbox.exports.capture((audio,offset)=>captions.push(offset),()=>{},{windowSeconds:1,isPaused:()=>archivePause,onRecordingChunk:blob=>raw.push(blob)});
+node.onaudioprocess(frame);archivePause=true;
+for(let i=0;i<21;i++)node.onaudioprocess(i===10?{inputBuffer:{getChannelData:()=>new Float32Array(4096)}}:frame);
+archivePause=false;node.onaudioprocess(frame);archived.stop();archived.stop();
+assert.equal(captions.length,0,'ASR does not emit the paused and short fragments');
+assert.equal(raw.length,2,'five second checkpoint plus stop tail');
+assert.equal(raw.reduce((n,b)=>n+b.size-44,0),23*4096*2,'all captured samples survive pause');
+let testRaw=0;const privateTest=await sandbox.exports.capture(()=>{},()=>{},{monitorOnly:true,onRecordingChunk:()=>testRaw++});for(let i=0;i<25;i++)node.onaudioprocess(frame);privateTest.stop();assert.equal(testRaw,0,'microphone test never saves audio');
+console.log('PASS: raw archive retains paused, quiet and short audio; monitor-only remains private');

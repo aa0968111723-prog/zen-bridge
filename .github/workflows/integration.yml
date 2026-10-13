@@ -22,6 +22,7 @@ jobs:
       - run: pnpm exec tsc --noEmit
       - run: node tests/runtime.mjs
       - run: node tests/capture.mjs
+      - run: node tests/recording-archive.mjs
       - run: node tests/capture-endpoint.mjs
       - run: node tests/preview-client.mjs
       - run: node tests/connection-watch.mjs

@@ -33,3 +33,18 @@ def test_cancelled_translation_keeps_lane_until_inference_thread_exits(tmp_path)
         assert outcomes[1]['ok'] is True
         assert len(calls)==2 and not requests.translation_lane.locked()
     asyncio.run(exercise())
+
+def test_queued_translation_expires_without_starting_model(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.agent_requests.TRANSLATION_BUDGET_S', .05)
+    async def exercise():
+        requests=AgentRequests(None,tmp_path)
+        await requests.translation_lane.acquire()
+        calls=[]
+        requests.translator.translate=lambda *args: calls.append(args)
+        try:
+            result=await requests.handle({'type':'translate','id':'waiting','mode':'local','instructions':'Translate','input':'hello'})
+            assert result['ok'] is False
+            assert not calls
+        finally:
+            requests.translation_lane.release()
+    asyncio.run(exercise())

@@ -5,7 +5,7 @@ import time
 import wave
 from pathlib import Path
 from app.agent_metrics import AgentMetrics
-from app.desktop_llm import DesktopTranslator
+from app.desktop_llm import DesktopTranslator, TRANSLATION_BUDGET_S, TRANSLATION_DEADLINE
 
 class AgentRequests:
     def __init__(self,asr,root,on_line=None):
@@ -46,8 +46,14 @@ class AgentRequests:
         started=time.monotonic();duration=None;route=None;result=None
         try:
             if kind=='translate':
-                async with self.translation_lane:
-                    result=await self._run_blocking(self.translator.translate,request.get('instructions'),request.get('input'),request.get('mode'),kind='translate')
+                deadline=time.monotonic()+TRANSLATION_BUDGET_S
+                async with asyncio.timeout(TRANSLATION_BUDGET_S):
+                    async with self.translation_lane:
+                        token=TRANSLATION_DEADLINE.set(deadline)
+                        try:
+                            result=await self._run_blocking(self.translator.translate,request.get('instructions'),request.get('input'),request.get('mode'),kind='translate')
+                        finally:
+                            TRANSLATION_DEADLINE.reset(token)
                 route=result['route'];response.update(ok=True,result=result)
             else:
                 async with (self.preview_lane if kind=='preview' else self.asr_lane):
