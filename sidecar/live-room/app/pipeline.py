@@ -204,11 +204,14 @@ def _vad_from_env():
 
 
 class Pipeline:
-    def __init__(self, asr, translator: Translator, prompt: str, tmp: Path, settings: Settings | None = None, on_event=None):
+    def __init__(self, asr, translator: Translator, prompt: str, tmp: Path, settings: Settings | None = None, on_event=None, vad=None):
         self.asr = asr
         self.translator = translator
         # Optional Silero VAD gate (BREEZE_VAD=silero). None keeps the legacy RMS-only path.
-        self.vad = _vad_from_env()
+        # The desktop app passes a gate loaded before the native worker starts.
+        # Importing ONNX after that worker is up can stall the Windows loader,
+        # and the port never opens.
+        self.vad = vad if vad is not None else _vad_from_env()
         # Backpressure (hardware.md §5.3): the oldest waiting line older than stale_s, while
         # newer lines are queued, is skipped or merged into the next request of its session.
         from app import runtime_tuning

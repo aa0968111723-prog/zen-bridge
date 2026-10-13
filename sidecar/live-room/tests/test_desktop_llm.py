@@ -22,7 +22,7 @@ class DesktopTranslatorTests(unittest.TestCase):
         })
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.client = DesktopTranslator()
+        self.client = DesktopTranslator(clock=_Clock())
 
     def test_endpoints_are_loopback_only(self):
         for url in ['https://127.0.0.1', 'http://example.com',
