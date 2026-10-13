@@ -1,19 +1,50 @@
 """Create a relocatable, offline Windows App payload from verified inputs."""
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.package_release import source_files
-from scripts.install_runtime import download_verified, extract_binaries, verified
+from scripts.install_runtime import download_verified, extract_binaries, sha256, verified
+
+def download_python_archive(url, archive, digest, opener=None, attempts=3, pause=None):
+    """Retry a stalled NuGet Python download. Publish only after SHA256 matches."""
+    if not str(url).startswith('https://'):
+        raise ValueError('Python 下載來源必須使用 HTTPS')
+    archive = Path(archive)
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    if archive.is_file() and sha256(archive) == digest:
+        return archive
+    open_url = opener or urllib.request.urlopen
+    wait = pause if pause is not None else time.sleep
+    part = archive.with_name(archive.name + '.part')
+    last = None
+    for attempt in range(1, attempts + 1):
+        try:
+            part.unlink(missing_ok=True)
+            with open_url(url, timeout=60) as incoming, part.open('wb') as outgoing:
+                shutil.copyfileobj(incoming, outgoing)
+            if sha256(part) != digest:
+                raise RuntimeError('Python checksum mismatch')
+            part.replace(archive)
+            return archive
+        except (TimeoutError, urllib.error.URLError, OSError, RuntimeError) as exc:
+            last = exc
+            part.unlink(missing_ok=True)
+            if attempt >= attempts:
+                break
+            print(f'Python NuGet 下載未完成，重試 {attempt + 1}/{attempts}', flush=True)
+            wait(min(8, 2 * attempt))
+    raise RuntimeError('Python NuGet 下載逾時或未通過檢查，已重試仍失敗') from last
 
 def prepare(output, assets, sdk=None):
     # pip's wheel extraction can still hit MAX_PATH on standard Windows installs.
@@ -53,11 +84,7 @@ def prepare(output, assets, sdk=None):
     cache.mkdir(exist_ok=True)
     asset = json.loads((ROOT / 'bootstrap-manifest.json').read_text())['python']
     archive = cache / ('python-' + asset['version'] + '.zip')
-    if not archive.exists() or hashlib.sha256(archive.read_bytes()).hexdigest() != asset['sha256']:
-        with urllib.request.urlopen(asset['url'], timeout=60) as incoming, archive.open('wb') as outgoing:
-            shutil.copyfileobj(incoming, outgoing)
-    if hashlib.sha256(archive.read_bytes()).hexdigest() != asset['sha256']:
-        raise RuntimeError('Python checksum mismatch')
+    download_python_archive(asset['url'], archive, asset['sha256'])
     python_directory = asset.get('directory',asset['version'])
     python_root = output / '.python' / python_directory
     (output/'desktop/offline-runtime.json').write_text(json.dumps({'python_directory':python_directory}),encoding='ascii')
