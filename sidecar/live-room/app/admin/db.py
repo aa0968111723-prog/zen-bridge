@@ -28,7 +28,7 @@ log = logging.getLogger("zen.admin.db")
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 IDENTITY_SCHEMA_PATH = Path(__file__).with_name("identity_schema.sql")
 BASELINE_VERSION = 2          # schema.sql creates v2; never edit it (DBA D6) - add a migration
-SCHEMA_VERSION = 15           # 0015: jobs may queue after-class evaluate; embed stays unregistered
+SCHEMA_VERSION = 15           # 0015: jobs may queue after-class evaluate; embed runs only when ZEN_EMBED=1
 MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 IDENTITY_VERSION = 1
 MIN_SQLITE = (3, 42, 0)   # unixepoch('subsec'); FTS5 rank=1 integrity-check verified on 3.46

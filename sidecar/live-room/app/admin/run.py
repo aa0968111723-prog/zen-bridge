@@ -48,10 +48,6 @@ def main(argv: list[str] | None = None) -> None:
     from app.console import safe_console
     safe_console()
     bind, port = resolve_bind()
-    # Codex 2569a06 hold: embeddings stay off until the idle-gate fix passes on-device QA.
-    # Refuse before binding the port, so a refused start never claims 8791 or a job.
-    if (os.getenv("ZEN_EMBED") or "0").strip() == "1":
-        raise SystemExit('Embedding 暫停：閒置判斷 QA 修正與實機驗收尚未完成。')
     sock = bind_socket(bind, port)
     from app.logfile import install_file_log
     install_file_log("admin")                      # QA CTO-07: persistent rotating log
@@ -65,11 +61,19 @@ def main(argv: list[str] | None = None) -> None:
     token_file = data_dir() / "admin.token"
     digest, plain = load_or_create_token(token_file)
     live = LiveRoomClient(live_url_from_env())
-    # Codex 2569a06 hold: no embedding handler, no embed scan (ZEN_EMBED=1 is refused above).
+    embed_on = (os.getenv("ZEN_EMBED") or "0").strip() == "1"
+    embed_handler = None
+    embed_scan_s = 0.0
+    if embed_on:
+        from app.admin.db import connect as db_connect
+        from app.admin.db import default_db_path as db_path
+        from app.embed import build_embed_handler
+        embed_handler = build_embed_handler(live, lambda: db_connect(db_path()))
+        embed_scan_s = 60.0
     # CTO-03: automatic backup every ZEN_BACKUP_INTERVAL_H hours (default 24, 0 = off).
     hours = float(os.getenv("ZEN_BACKUP_INTERVAL_H") or 24)
     app = create_admin_app(default_db_path(), token_hash_hex=digest, port=port, identity_path=identity_db_path(),
-                           live_client=live, embed_handler=None, embed_scan_s=0.0,
+                           live_client=live, embed_handler=embed_handler, embed_scan_s=embed_scan_s,
                            backup_scan_s=3600.0, backup_every_s=max(hours, 1.0) * 3600 if hours > 0 else float("inf"),
                            # DBA D4: retention runs daily unless ZEN_RETENTION=0
                            metrics_sample_s=float(os.getenv("ZEN_METRICS_SAMPLE_S") or 15),
