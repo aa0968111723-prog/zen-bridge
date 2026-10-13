@@ -28,14 +28,21 @@ def main():
     from app.hermes_proxy_service import HermesProxyService
     proxy = HermesProxyService()
     proxy.start()
-    server = uvicorn.Server(uvicorn.Config('app.server:app', host='0.0.0.0', port=settings.port, log_level='warning', proxy_headers=False))
+    from app.listen_bind import audience_hosts, open_listen_sockets
+    sockets = open_listen_sockets(settings.port, audience_hosts(settings.share_host))
+    server = uvicorn.Server(uvicorn.Config('app.server:app', host='127.0.0.1', port=settings.port, log_level='warning', proxy_headers=False))
     def control():
         sys.stdin.readline()
         server.should_exit = True
     threading.Thread(target=control, daemon=True).start()
     try:
-        server.run()
+        server.run(sockets=sockets)
     finally:
+        for sock in sockets:
+            try:
+                sock.close()
+            except OSError:
+                pass
         proxy.stop()
         if maint is not None:
             maint.stop()

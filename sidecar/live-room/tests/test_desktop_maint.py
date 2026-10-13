@@ -83,7 +83,7 @@ def test_desktop_service_installs_log_and_maintenance(tmp_path, monkeypatch):
         def __init__(self, cfg):
             self.should_exit = False
 
-        def run(self):
+        def run(self, sockets=None):
             started.append("run")
 
     class FakeMaint:
@@ -98,6 +98,7 @@ def test_desktop_service_installs_log_and_maintenance(tmp_path, monkeypatch):
         def stop(self):
             started.append("stop")
     monkeypatch.setattr(desktop_service.uvicorn, "Server", FakeServer)
+    monkeypatch.setattr("app.listen_bind.open_listen_sockets", lambda port, hosts: [])
     monkeypatch.setattr(desktop_service, "cleanup_downloads", lambda: None)
     monkeypatch.setattr(desktop_service, "fill_process_environ", lambda p: None)
     monkeypatch.setattr(desktop_maint, "DesktopMaintenance", FakeMaint)

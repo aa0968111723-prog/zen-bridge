@@ -517,8 +517,8 @@ _REPLAY_OVERFLOW_PER_WINDOW = 48
 def _replay_address_key(ip: str) -> str:
     """One bucket per IPv4 address, or per IPv6 /64. Unparseable text stays as-is.
 
-    app/run.py binds 0.0.0.0 only, so this /64 grouping does nothing until the
-    process also listens on IPv6. One SLAAC /64 would then share the address
+    The process listens on 127.0.0.1 plus the audience QR address, not 0.0.0.0.
+    This /64 grouping does nothing until the process also listens on IPv6. One SLAAC /64 would then share the address
     cap the way a classroom NAT already does.
     """
     text = (ip or "").strip()

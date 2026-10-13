@@ -62,12 +62,21 @@ def main() -> None:
     stopped = threading.Event()
     if os.getenv("BREEZE_OPEN_BROWSER") == "1":
         threading.Thread(target=open_when_serving, args=(settings.port, stopped, settings.resident_startup_s + 20), daemon=True).start()
+    sockets = None
     try:
-        # Replay buckets use the TCP peer. The default proxy_headers=True would
-        # trust X-Forwarded-For from loopback and split one local client into many.
-        uvicorn.run("app.server:app", host="0.0.0.0", port=settings.port, proxy_headers=False)
+        from app.listen_bind import audience_hosts, open_listen_sockets
+        sockets = open_listen_sockets(settings.port, audience_hosts(settings.share_host))
+        bound = ", ".join(f"{sock.getsockname()[0]}:{sock.getsockname()[1]}" for sock in sockets)
+        print(f"字幕服務只聽 {bound}，不對所有網卡開放。", flush=True)
+        config = uvicorn.Config("app.server:app", host="127.0.0.1", port=settings.port, proxy_headers=False)
+        uvicorn.Server(config).run(sockets=sockets)
     finally:
         stopped.set()
+        for sock in sockets or []:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

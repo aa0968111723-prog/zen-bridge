@@ -40,8 +40,9 @@ def test_desktop_service_ignores_forged_proxy_headers(monkeypatch):
     monkeypatch.setattr(service.Settings,'from_env',lambda:Settings())
     class Server:
         def __init__(self,config):configs.append(config)
-        def run(self):pass
+        def run(self,sockets=None):pass
     monkeypatch.setattr(service.uvicorn,'Server',Server)
+    monkeypatch.setattr('app.listen_bind.open_listen_sockets',lambda port,hosts: [])
     monkeypatch.setattr(service.threading,'Thread',lambda **kwargs:SimpleNamespace(start=lambda:None))
     service.main()
     assert len(configs)==1
@@ -49,3 +50,4 @@ def test_desktop_service_ignores_forged_proxy_headers(monkeypatch):
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
     assert not isinstance(configs[0].loaded_app,ProxyHeadersMiddleware)
     assert configs[0].proxy_headers is False
+    assert configs[0].host=='127.0.0.1'
