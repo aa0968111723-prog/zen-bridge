@@ -32,8 +32,14 @@ TGT_LANGS = ("en", "ja")
 JA_GLOSSARY = "日文詞表"
 EXPORT_FORMATS = ("srt", "vtt", "md")       # python-docx is not installed in the venv -> no docx
 ROLES = ("admin", "editor", "host", "viewer")
+_WAV_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}\.wav\Z", re.I)
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 SECRET_KEY_RE = re.compile(r"(token|secret|password|passwd|key|auth|cookie|credential)", re.I)
+
+
+def enhancement_model() -> Path:
+    local = os.getenv("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(local) / "ZenBridge" / "models" / "enhancement" / "gtcrn_simple.onnx"
 EXT_SQL = """
 CREATE TABLE IF NOT EXISTS admin_glossary_lang (
   glossary_id INTEGER PRIMARY KEY REFERENCES glossaries(id) ON DELETE CASCADE,
@@ -872,9 +878,37 @@ def register(app, ctx) -> int:
             raise ConnectionError("直播服務沒有完成任何一段重翻")
         return {"session_id": sid, "done": done, "failed": failed}
 
+    def enhance_handler(jctx):
+        _target, params = _job_fields(jctx)
+        name = str(params.get("input_name") or "")
+        if not _WAV_NAME.fullmatch(name) or ".." in name:
+            raise ValueError("input_name 只能是 wav 檔名")
+        inbox = Path(ctx.db_path).parent / "enhance-in"
+        incoming = (inbox / name).resolve()
+        if incoming.parent != inbox.resolve() or not incoming.is_file():
+            raise ValueError("找不到這段課後音檔")
+        if incoming.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError("音檔太大，降噪只接受 120 秒以內")
+        model = enhancement_model()
+        if not model.is_file():
+            raise ValueError("降噪模型尚未下載，不會呼叫模型")
+        out_dir = Path(ctx.db_path).parent / "enhance-out"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output = out_dir / f"{incoming.stem}-{int(clock())}.wav"
+        if output.exists():
+            raise ValueError("輸出檔已存在")
+        from app.agent_suite import call_worker
+        result = call_worker("enhance", {
+            "input_wav": str(incoming),
+            "output_wav": str(output),
+            "model": str(model),
+        })
+        return {"input_name": name, "file": output.name, "model": "gtcrn", "live_path": False, "result": result}
+
     ctx.handlers["summarize"] = summarize_handler
     ctx.handlers["glossary_import"] = glossary_import_handler
     ctx.handlers["retranslate_batch"] = retranslate_batch_handler
+    ctx.handlers["enhance"] = enhance_handler
 
     @app.post(f"{API}/sessions/{{sid}}/exports", status_code=202)
     async def create_export(sid: str, request: Request, user=Depends(need("editor"))):

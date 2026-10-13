@@ -24,7 +24,7 @@ Zen Bridge 是主要介面。進階工具安裝在 `%LOCALAPPDATA%\ZenBridge\age
 
 先用 Ollama 安裝 `qwen3-embedding:0.6b`。課前執行 `scripts/build_agent_context.py --topic "課程主題"`，將現有中英日參考語句依主題排序。新 App 要回報桌面推論和草稿活動；舊版回報不足時拒絕建立索引。操作台原有資料庫 embedding 暫停保護仍保留。
 
-用 App Python 執行 `scripts/agent_suite_jobs.py status` 檢查狀態。`enhance` 接受不超過 120 秒的單聲道 PCM16 WAV，使用已下載的 `models\enhancement\gtcrn_simple.onnx`；`diarize` 使用 Community-1；`evaluate` 接受含 src/mt 的 JSONL（最多 64 筆）。三者都用 `--input`、`--output` 指定檔案，不覆蓋既有輸出。說話者辨識與評分是獨立工作，尚未自動掛到課堂錄音流程。
+用 App Python 執行 `scripts/agent_suite_jobs.py status` 檢查狀態。`enhance` 可從本機後台排成課後工作，音檔必須已放在資料庫旁的 `enhance-in`，模型不在就不呼叫。它不進 6 秒即時字幕。`diarize` 使用 Community-1；`evaluate` 接受含 src/mt 的 JSONL（最多 64 筆）。說話者辨識與評分仍是獨立工作，尚未自動掛到課堂錄音流程。
 
 ## 回復與驗證
 
