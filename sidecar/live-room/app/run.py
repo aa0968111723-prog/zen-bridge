@@ -42,6 +42,9 @@ def main() -> None:
     safe_console()
     os.chdir(ROOT)
     fill_process_environ()
+    from app.vad import enable_verified_silero
+    if enable_verified_silero() == "silero":
+        print("語音活動偵測：已接上 Silero。沒有開麥克風。", flush=True)
     try:
         settings = Settings.from_env()
         report = inspect(settings)

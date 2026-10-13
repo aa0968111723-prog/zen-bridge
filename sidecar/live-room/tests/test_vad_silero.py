@@ -33,6 +33,30 @@ def test_off_by_default_and_unknown_mode():
     assert vad.vad_from_env({"BREEZE_VAD": "webrtc"}) is None
 
 
+def test_verified_model_joins_the_main_path_without_loading_it(tmp_path, monkeypatch):
+    model = tmp_path / "silero_vad.onnx"
+    model.write_bytes(b"not-the-real-model")
+    monkeypatch.setattr(vad, "sha256_file", lambda path: vad.MODEL_SHA256)
+    env = {"BREEZE_VAD_MODEL": str(model)}
+    assert vad.enable_verified_silero(env) == "silero"
+    assert env["BREEZE_VAD"] == "silero"
+
+
+def test_explicit_off_and_bad_file_stay_on_rms(tmp_path, monkeypatch):
+    model = tmp_path / "silero_vad.onnx"
+    model.write_bytes(b"tampered")
+    monkeypatch.setattr(vad, "sha256_file", lambda path: "ab" * 32)
+    chosen = {"BREEZE_VAD": "off", "BREEZE_VAD_MODEL": str(model)}
+    assert vad.enable_verified_silero(chosen) == "off"
+    assert chosen["BREEZE_VAD"] == "off"
+    missing = {"BREEZE_VAD_MODEL": str(tmp_path / "missing.onnx")}
+    assert vad.enable_verified_silero(missing) == "off"
+    assert "BREEZE_VAD" not in missing
+    bad = {"BREEZE_VAD_MODEL": str(model)}
+    assert vad.enable_verified_silero(bad) == "off"
+    assert "BREEZE_VAD" not in bad
+
+
 def test_missing_model_falls_back_to_rms(tmp_path):
     assert vad.vad_from_env({"BREEZE_VAD": "silero", "BREEZE_VAD_MODEL": str(tmp_path / "none.onnx")}) is None
 

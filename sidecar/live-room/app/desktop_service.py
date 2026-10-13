@@ -16,6 +16,9 @@ def main():
     root = Path(__file__).resolve().parents[1]
     os.chdir(root)
     fill_process_environ(root / '.env')
+    from app.vad import enable_verified_silero
+    if enable_verified_silero() == "silero":
+        print("語音活動偵測：已接上 Silero。沒有開麥克風。", flush=True)
     settings = Settings.from_env()
     # round3 C7: rotating, redacted logs/desktop.log (5 MB x 5); ZEN_LOG=off disables
     from app.logfile import install_file_log
