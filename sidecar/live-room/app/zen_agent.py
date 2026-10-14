@@ -9,12 +9,17 @@ from urllib.parse import urlsplit
 from websockets.asyncio.client import connect
 from app.agent_requests import AgentRequests
 
+def validate_pairing(url,token,local_enabled=False):
+    parsed=urlsplit(url)
+    local_socket=parsed.scheme=='ws' and parsed.hostname in ('127.0.0.1','localhost','::1') and local_enabled
+    if (parsed.scheme!='wss' and not local_socket) or parsed.username or parsed.password or parsed.query or parsed.fragment or len(token)<32 or '\n' in token or '\r' in token:
+        raise ValueError('Invalid Zen Bridge pairing configuration')
+    return local_socket
+
 async def run_agent(asr,on_line=None):
     url=os.getenv('ZEN_BRIDGE_AGENT_URL','');token=os.getenv('ZEN_BRIDGE_AGENT_TOKEN','')
     if not url or not token:return
-    parsed=urlsplit(url)
-    if parsed.scheme!='wss' or parsed.username or parsed.password or parsed.query or parsed.fragment or len(token)<32 or '\n' in token or '\r' in token:
-        raise ValueError('Invalid Zen Bridge pairing configuration')
+    local_socket=validate_pairing(url,token,os.getenv('ZEN_BRIDGE_LOCAL')=='1')
     root=Path(__file__).resolve().parents[1];(root/'tmp').mkdir(exist_ok=True)
     requests=AgentRequests(asr,root,on_line=on_line);tls=ssl.create_default_context(cafile=certifi.where())
     if requests.preview.available():
@@ -23,7 +28,7 @@ async def run_agent(asr,on_line=None):
     while True:
         try:
             if not asr.health():await asyncio.sleep(2);continue
-            async with connect(url,additional_headers={'Authorization':'Bearer '+token},proxy=None,ssl=tls,max_size=12_000_000,ping_interval=20,ping_timeout=30,open_timeout=20) as socket:
+            async with connect(url,additional_headers={'Authorization':'Bearer '+token},proxy=None,ssl=None if local_socket else tls,max_size=12_000_000,ping_interval=20,ping_timeout=30,open_timeout=20) as socket:
                 capabilities=['asr','translate','metrics']+(['preview'] if requests.preview.available() else [])
                 await socket.send(json.dumps({'type':'ready','protocol':1,'engine':'breeze-native','capabilities':capabilities}))
                 jobs=set();send_lock=asyncio.Lock()

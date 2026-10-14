@@ -25,6 +25,10 @@ async function execute<T>(sql: string, args: unknown[]): Promise<T[]> {
       if (!d1) throw new DatabaseUnavailableError('D1_BINDING_MISSING');
       return (await d1.prepare(sql).bind(...args).all<T>()).results;
     }
+    if (config.DEPLOY_TARGET === 'local') {
+      const { queryLocal, localDbPath, localDataDir } = await import('@/lib/platform/local');
+      return queryLocal<T>(localDbPath(localDataDir(localEnv(config))), sql, args);
+    }
     if (!config.DATABASE_URL) throw new DatabaseUnavailableError('DATABASE_URL_MISSING');
     const { queryPostgres } = await import('@/lib/platform/node');
     return await queryPostgres<T>(config.DATABASE_URL, postgresSql(sql), args);
@@ -48,6 +52,9 @@ export async function batch(commands: Command[]) {
       const d1 = getBindings().DB;
       if (!d1) throw new DatabaseUnavailableError('D1_BINDING_MISSING');
       await d1.batch(commands.map(c => d1.prepare(c.sql).bind(...c.args)));
+    } else if (config.DEPLOY_TARGET === 'local') {
+      const { batchLocal, localDbPath, localDataDir } = await import('@/lib/platform/local');
+      batchLocal(localDbPath(localDataDir(localEnv(config))), commands);
     } else {
       if (!config.DATABASE_URL) throw new DatabaseUnavailableError('DATABASE_URL_MISSING');
       const { batchPostgres } = await import('@/lib/platform/node');
@@ -65,6 +72,16 @@ export function db() {
     batch,
   };
 }
+// Local mode keeps everything under the user data dir; AUDIO_DIR still overrides the audio folder.
+function localEnv(config: ReturnType<typeof getEnv>): Record<string, string | undefined> {
+  return { ...process.env, ZEN_UI_DATA_DIR: config.ZEN_UI_DATA_DIR ?? process.env.ZEN_UI_DATA_DIR };
+}
+async function audioDir(config: ReturnType<typeof getEnv>): Promise<string | undefined> {
+  if (config.AUDIO_DIR) return config.AUDIO_DIR;
+  if (config.DEPLOY_TARGET !== 'local') return undefined;
+  const { localAudioDir, localDataDir } = await import('@/lib/platform/local');
+  return localAudioDir(localDataDir(localEnv(config)));
+}
 export type AudioObject = {
   body: BodyInit; size: number; contentType: string; arrayBuffer(): Promise<ArrayBuffer>;
 };
@@ -75,18 +92,20 @@ export async function putAudio(key: string, bytes: Uint8Array, mime: string): Pr
     if (!bucket) return undefined;
     await bucket.put(key, bytes, { httpMetadata: { contentType: mime } });
   } else {
-    if (!config.AUDIO_DIR) return undefined;
+    const directory = await audioDir(config);
+    if (!directory) return undefined;
     const { putVolumeAudio } = await import('@/lib/platform/node');
-    await putVolumeAudio(config.AUDIO_DIR, key, bytes, mime);
+    await putVolumeAudio(directory, key, bytes, mime);
   }
   return key;
 }
 export async function getAudio(key: string): Promise<AudioObject | null> {
   const config = getEnv();
-  if (config.DEPLOY_TARGET === 'zeabur') {
-    if (!config.AUDIO_DIR) return null;
+  if (config.DEPLOY_TARGET !== 'cloudflare') {
+    const directory = await audioDir(config);
+    if (!directory) return null;
     const { getVolumeAudio } = await import('@/lib/platform/node');
-    return getVolumeAudio(config.AUDIO_DIR, key);
+    return getVolumeAudio(directory, key);
   }
   const object = await getBindings().BUCKET?.get(key);
   return object ? { body: object.body, size: object.size, contentType: object.httpMetadata?.contentType ?? 'audio/wav', arrayBuffer: () => object.arrayBuffer() } : null;
@@ -94,8 +113,10 @@ export async function getAudio(key: string): Promise<AudioObject | null> {
 export async function deleteAudio(key: string) {
   const config = getEnv();
   if (config.DEPLOY_TARGET === 'cloudflare') await getBindings().BUCKET?.delete(key);
-  else if (config.AUDIO_DIR) {
+  else {
+    const directory = await audioDir(config);
+    if (!directory) return;
     const { deleteVolumeAudio } = await import('@/lib/platform/node');
-    await deleteVolumeAudio(config.AUDIO_DIR, key);
+    await deleteVolumeAudio(directory, key);
   }
 }

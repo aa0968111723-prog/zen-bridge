@@ -31,9 +31,9 @@ def main():
         maint = DesktopMaintenance.from_env().start()
     from app.hermes_proxy_service import HermesProxyService
     proxy = HermesProxyService()
-    proxy.start()
+    if os.getenv('ZEN_BRIDGE_LOCAL')!='1':proxy.start()
     from app.listen_bind import audience_hosts, open_listen_sockets
-    sockets = open_listen_sockets(settings.port, audience_hosts(settings.share_host))
+    sockets = open_listen_sockets(settings.port, ['127.0.0.1'] if os.getenv('ZEN_BRIDGE_LOCAL')=='1' else audience_hosts(settings.share_host))
     server = uvicorn.Server(uvicorn.Config('app.server:app', host='127.0.0.1', port=settings.port, log_level='warning', proxy_headers=False))
     # Windows Proactor drops HTTP if a connection arrives on a socket we already
     # listened on. Close those probes and let uvicorn bind the same addresses.

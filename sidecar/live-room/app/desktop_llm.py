@@ -22,6 +22,7 @@ class DesktopTranslator:
         self.local=loopback_url(os.getenv('ZEN_LOCAL_LLM_URL','http://127.0.0.1:11434'))
         self.hermes=loopback_url(os.getenv('ZEN_HERMES_URL','http://127.0.0.1:8645'))
         self.local_model=os.getenv('ZEN_LOCAL_LLM_MODEL','qwen3:1.7b')
+        self.local_only=os.getenv('ZEN_BRIDGE_LOCAL')=='1'
         self.cloud_model=os.getenv('ZEN_HERMES_MODEL','grok-4.6')
         self.key=os.getenv('ZEN_HERMES_API_KEY','')
         self.last={};self.calls=0;self.known_usage=0;self.unknown_usage=0;self.prompt_tokens=0;self.completion_tokens=0
@@ -87,6 +88,7 @@ class DesktopTranslator:
         started=self._now();deadline=started+TRANSLATION_BUDGET_S
         inherited=TRANSLATION_DEADLINE.get()
         if inherited is not None:deadline=min(deadline,inherited)
+        if self.local_only:mode='local'
         routes=['local','cloud'] if mode=='hybrid' else [mode]
         for route in routes:
             remaining=deadline-self._now()
@@ -126,7 +128,7 @@ class DesktopTranslator:
         # A dummy proxy key says nothing about the upstream OAuth account.
         # Probe only loopback health; never use /models or inference for status.
         now=time.monotonic()
-        if now-self._health_at>=15:
+        if not self.local_only and now-self._health_at>=15:
             health={'reachable':False,'authenticated':False}
             try:
                 request=urllib.request.Request(self.hermes+'/health')
@@ -139,7 +141,7 @@ class DesktopTranslator:
                 pass
             self._hermes_health=health;self._health_at=now
         from app.reference_pack import pack_status
-        return {'local_model':self.local_model,'cloud_model':self.cloud_model,'reference_pack':pack_status(),
+        return {'local_model':self.local_model,'cloud_model':self.cloud_model if not self.local_only else '', 'local_only':self.local_only,'reference_pack':pack_status(),
                 'hermes_auth_configured':self._hermes_health['authenticated'],
                 'hermes_reachable':self._hermes_health['reachable'],
                 'calls':self.calls,'last':self.last,'cost':self.cost_status()}

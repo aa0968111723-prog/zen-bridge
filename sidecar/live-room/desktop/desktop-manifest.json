@@ -58,5 +58,22 @@
         "sha256": "fd1be050077fa074801059258e80dd31d14552c955e9a98077cf7179e478bd62"
       }
     }
+  },
+  "local_ui": {
+    "node_version": "22.23.3",
+    "files": {
+      "runtime/node/node.exe": {
+        "size": 86973768,
+        "sha256": "9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e"
+      },
+      "zen-ui/package.json": {
+        "size": 1042,
+        "sha256": "4725dbd3907241ba99c438dcb12372421d2933c73e20d75955976cdfa119de16"
+      },
+      "zen-ui/pnpm-lock.yaml": {
+        "size": 177178,
+        "sha256": "828a630e9f80eb2541cff7ebee2fe5bd277400aa5548b0d3b0fa9d838c054422"
+      }
+    }
   }
 }

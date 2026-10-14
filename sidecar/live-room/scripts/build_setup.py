@@ -103,6 +103,8 @@ def build(payload: Path, output: Path, assets: Path, sdk: Path | None) -> Path:
     if payload == ROOT or payload == assets or ROOT.is_relative_to(payload) or assets.is_relative_to(payload):
         raise ValueError('Payload must be a dedicated build directory, separate from source and user installation')
     prepare(payload, assets, sdk)
+    from scripts.build_local_ui import stage_local_ui
+    stage_local_ui(payload)
     stage_bootstrapper(payload)
     stage_vc_runtime(payload)
     clean_user_paths(payload)
