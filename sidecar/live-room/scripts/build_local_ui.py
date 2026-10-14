@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -12,6 +13,14 @@ from scripts.install_runtime import sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parents[1]
+
+
+def runtime_file_bytes(name: str, data: bytes) -> bytes:
+    # The pinned Windows package was serialized as CRLF JSON without a final
+    # newline. Git checkout must not change the installed runtime fingerprint.
+    if name == 'package.json':
+        return json.dumps(json.loads(data), indent=2).replace('\n', '\r\n').encode('utf-8')
+    return data.replace(b'\r\n', b'\n')
 
 
 def stage_local_ui(payload: Path) -> None:
@@ -40,9 +49,10 @@ def stage_local_ui(payload: Path) -> None:
         shutil.copy2(REPO / 'sidecar' / name, ui / 'sidecar' / name)
     for name in ('package.json', 'pnpm-lock.yaml'):
         source = REPO / 'desktop-runtime' / name
-        if sha256(source) != spec['files']['zen-ui/' + name]['sha256']:
+        data = runtime_file_bytes(name, source.read_bytes())
+        if hashlib.sha256(data).hexdigest() != spec['files']['zen-ui/' + name]['sha256']:
             raise RuntimeError('Update the desktop manifest when changing runtime dependencies: ' + name)
-        shutil.copy2(source, ui / name)
+        (ui / name).write_bytes(data)
     # Hoisted copy installation has no junctions back into a developer's pnpm store.
     with tempfile.TemporaryDirectory(prefix='zen-ui-deps-') as directory:
         temp = Path(directory)
