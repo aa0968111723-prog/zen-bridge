@@ -1,13 +1,17 @@
-import { mkdir, cp, writeFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, cp, writeFile, readFile, readdir, rm } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {assertTencentBuild} from './tencent-build.mjs';
+import {excludeIndexedDbFixture} from './tencent-test-dependencies.mjs';
 const root=process.cwd();
 const output=resolve(process.argv[2]||'work/tencent-release');
 await assertTencentBuild();
 if(output===root||root.startsWith(output+'/'))throw new Error('Use a separate artifact directory');
 await mkdir(output,{recursive:true});
 for(const name of ['dist','public','drizzle-pg','scripts','lib','app','components','db','.openai','package.json','pnpm-lock.yaml','vite.config.ts','next.config.ts','tsconfig.json'])await cp(resolve(name),join(output,name),{recursive:true});
+const runtimeDependencies=excludeIndexedDbFixture(JSON.parse(await readFile('package.json','utf8')),await readFile('pnpm-lock.yaml','utf8'));
+await writeFile(join(output,'package.json'),JSON.stringify(runtimeDependencies.manifest,null,2)+'\n');
+await writeFile(join(output,'pnpm-lock.yaml'),runtimeDependencies.lock);
 await mkdir(join(output,'sidecar'),{recursive:true});
 await cp('sidecar/breeze-gateway.mjs',join(output,'sidecar/breeze-gateway.mjs'));
 await cp('sidecar/zen-front.mjs',join(output,'sidecar/zen-front.mjs'));
