@@ -1,3 +1,5 @@
 sidecar/live-room/app/admin/static/vendor/* -text
 sidecar/live-room/app/vendor/licenses/X-ASR.txt text eol=lf
 sidecar/live-room/app/vendor/licenses/SenseVoice-MODEL-LICENSE.txt text eol=lf
+desktop-runtime/package.json text eol=lf
+desktop-runtime/pnpm-lock.yaml text eol=lf

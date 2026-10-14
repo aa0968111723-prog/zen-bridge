@@ -66,6 +66,8 @@ def probably_compatible(root: Path, value: dict) -> bool:
             return False
         if not optional_models_match(root, full=False):
             return False
+        if not local_ui_matches(root, full=False):
+            return False
         bootstrap = json.loads((root / 'bootstrap-manifest.json').read_text(encoding='utf-8-sig'))
         python = root / '.python' / bootstrap['python'].get('directory',bootstrap['python']['version']) / 'tools/python.exe'
         spec = json.loads((root / 'runtime-manifest.json').read_text(encoding='utf-8-sig'))['assets']['model']
@@ -129,12 +131,27 @@ def native_matches(root: Path, *, full: bool) -> bool:
     return True
 
 
+def local_ui_matches(root: Path, *, full: bool) -> bool:
+    try:
+        spec=json.loads((root/'desktop/desktop-manifest.json').read_text(encoding='utf-8-sig')).get('local_ui')
+        if spec is None:return True
+        for relative,info in spec['files'].items():
+            if relative not in ('runtime/node/node.exe','zen-ui/package.json','zen-ui/pnpm-lock.yaml'):return False
+            file=root/relative
+            if not file.is_file() or file.stat().st_size!=info['size']:return False
+            if full and file_digest(file)!=info['sha256']:return False
+        return (root/'zen-ui/dist/server/index.js').is_file() and (root/'zen-ui/node_modules/vinext/package.json').is_file()
+    except (OSError,ValueError,KeyError,TypeError):return False
+
+
 def verify_files(root: Path, expected: str, tools: dict | None = None) -> bool:
     if not re.fullmatch('[a-f0-9]{64}', expected) or fingerprint(root) != expected:
         return False
     if not native_matches(root, full=True):
         return False
     if not optional_models_match(root, full=True):
+        return False
+    if not local_ui_matches(root, full=True):
         return False
     spec = json.loads((root / 'runtime-manifest.json').read_text(encoding='utf-8-sig'))['assets']['model']
     name = spec['name']

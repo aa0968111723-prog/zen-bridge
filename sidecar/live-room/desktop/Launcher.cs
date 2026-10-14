@@ -26,7 +26,7 @@ internal sealed class BreezeWindow : Form {
     readonly ToolStripMenuItem fastMenu = new ToolStripMenuItem("本機快速字幕（實驗，下次啟動生效）");
     readonly ToolStripMenuItem finalMenu = new ToolStripMenuItem("本機快速定稿＋Breeze 校正（實驗）");
     readonly ToolStripMenuItem graphMenu = new ToolStripMenuItem("AI 翻譯檢查（下次啟動生效）");
-    Process service, adminService;
+    Process service, adminService, localUiService;
     IntPtr job;
     bool closing, stopped, ready, jobAssigned;
     string url, rememberedError, uiUrl, hostToken;
@@ -115,11 +115,13 @@ internal sealed class BreezeWindow : Form {
                 int equals = line.IndexOf('=');
                 if (equals > 0 && !line.StartsWith("#")) pairing[line.Substring(0,equals).Trim()] = line.Substring(equals+1).Trim().Trim('"','\'');
             }
-            uiUrl = pairing.ContainsKey("ZEN_BRIDGE_UI_URL") ? pairing["ZEN_BRIDGE_UI_URL"] : "https://vexlark.co";
+            bool localOnly = pairing.ContainsKey("ZEN_BRIDGE_LOCAL") ? pairing["ZEN_BRIDGE_LOCAL"] == "1" : File.Exists(Path.Combine(root,"runtime","node","node.exe"));
+            uiUrl = localOnly ? "http://127.0.0.1:8785" : pairing.ContainsKey("ZEN_BRIDGE_UI_URL") ? pairing["ZEN_BRIDGE_UI_URL"] : "https://vexlark.co";
             var ui = new Uri(uiUrl);
-            if (ui.Scheme != "https" || !String.IsNullOrEmpty(ui.UserInfo) || !String.IsNullOrEmpty(ui.Query) || !String.IsNullOrEmpty(ui.Fragment)) throw new Exception("禪譯主介面必須使用有效的 HTTPS 網址。");
+            if ((ui.Scheme != "https" && !(localOnly && ui.Scheme == "http" && ui.Host == "127.0.0.1")) || !String.IsNullOrEmpty(ui.UserInfo) || !String.IsNullOrEmpty(ui.Query) || !String.IsNullOrEmpty(ui.Fragment)) throw new Exception("禪譯主介面必須使用有效的 HTTPS 或本機網址。");
             uiUrl = ui.GetLeftPart(UriPartial.Authority);
             hostToken = pairing.ContainsKey("ZEN_BRIDGE_AGENT_TOKEN") ? pairing["ZEN_BRIDGE_AGENT_TOKEN"] : "";
+            if (localOnly && hostToken.Length < 32) hostToken = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
             if (hostToken.Length < 32) {
                 using (var prompt = new Form { Text="連接主持電腦", Width=460, Height=190, StartPosition=FormStartPosition.CenterParent, FormBorderStyle=FormBorderStyle.FixedDialog, MinimizeBox=false, MaximizeBox=false }) {
                     var label = new Label { Text="請貼上管理員提供的主持連線碼。\n連線碼只保存於這台電腦。", Left=18,Top=14,Width=410,Height=42 };
@@ -134,7 +136,7 @@ internal sealed class BreezeWindow : Form {
             }
             var portEnvironment = Environment.GetEnvironmentVariable("BREEZE_PORT");
             if (!String.IsNullOrWhiteSpace(portEnvironment)) port = int.Parse(portEnvironment);
-            var probe = new TcpListener(IPAddress.Any, port);
+            var probe = new TcpListener(localOnly ? IPAddress.Loopback : IPAddress.Any, port);
             try { probe.Start(); }
             catch (SocketException) { throw new Exception("連接埠 " + port + " 已被占用。請關閉另一個 Breeze 後再開。"); }
             finally { try { probe.Stop(); } catch { } }
@@ -173,7 +175,15 @@ internal sealed class BreezeWindow : Form {
             }
             info.EnvironmentVariables["BREEZE_DESKTOP_INSTANCE"] = instance;
             info.EnvironmentVariables["ZEN_BRIDGE_UI_URL"] = uiUrl;
-            info.EnvironmentVariables["ZEN_BRIDGE_AGENT_URL"] = pairing.ContainsKey("ZEN_BRIDGE_AGENT_URL") ? pairing["ZEN_BRIDGE_AGENT_URL"] : "wss://"+ui.Authority+"/asr-agent";
+            info.EnvironmentVariables["ZEN_BRIDGE_AGENT_URL"] = localOnly ? "ws://127.0.0.1:8785/asr-agent" : pairing.ContainsKey("ZEN_BRIDGE_AGENT_URL") ? pairing["ZEN_BRIDGE_AGENT_URL"] : "wss://"+ui.Authority+"/asr-agent";
+            if(localOnly) info.EnvironmentVariables["ZEN_BRIDGE_LOCAL"] = "1";
+            if(localOnly) {
+                foreach(string key in new [] {"OPENAI_API_KEY","DASHSCOPE_API_KEY","ZEN_HERMES_API_KEY"}) info.EnvironmentVariables[key]="";
+                info.EnvironmentVariables["BREEZE_TRANSLATE_ENGINE"]="local";
+                info.EnvironmentVariables["BREEZE_TRANSLATE_BASE_URL"]="http://127.0.0.1:11434/v1";
+                info.EnvironmentVariables["BREEZE_TRANSLATE_PROTOCOL"]="ollama";
+                info.EnvironmentVariables["BREEZE_TRANSLATE_MODEL"]=pairing.ContainsKey("ZEN_LOCAL_LLM_MODEL")?pairing["ZEN_LOCAL_LLM_MODEL"]:"qwen3:1.7b";
+            }
             info.EnvironmentVariables["ZEN_BRIDGE_AGENT_TOKEN"] = hostToken;
             info.EnvironmentVariables["PYTHONNOUSERSITE"] = "1";
             info.EnvironmentVariables.Remove("SSLKEYLOGFILE");
@@ -210,8 +220,39 @@ internal sealed class BreezeWindow : Form {
             }
             if (closing) return;
             if (!ready) throw new Exception(String.IsNullOrEmpty(rememberedError) ? "辨識還沒準備好。請關閉後再開一次；若仍失敗，重新執行安裝程式。" : rememberedError);
+            if (localOnly) {
+                string uiRoot = Path.Combine(root,"zen-ui"), node = Path.Combine(root,"runtime","node","node.exe");
+                if (!File.Exists(node) || !File.Exists(Path.Combine(uiRoot,"scripts","start.mjs"))) throw new Exception("本機介面尚未安裝完整，請執行本機版安裝程式。");
+                var uiInfo = new ProcessStartInfo(node,"--experimental-strip-types scripts/start.mjs --local") {WorkingDirectory=uiRoot,UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+                foreach(string key in new [] {"DATABASE_URL","OPENAI_API_KEY","DASHSCOPE_API_KEY","HERMES_API_URL","HERMES_API_KEY","TRANSLATION_PROVIDER","NODE_OPTIONS","NODE_PATH"}) uiInfo.EnvironmentVariables.Remove(key);
+                uiInfo.EnvironmentVariables["DEPLOY_TARGET"]="local";
+                uiInfo.EnvironmentVariables["ZEN_UI_PORT"]="8785";
+                uiInfo.EnvironmentVariables["ZEN_UI_HOST"]="127.0.0.1";
+                uiInfo.EnvironmentVariables["BREEZE_AGENT_PORT"]="8776";
+                uiInfo.EnvironmentVariables["BREEZE_AGENT_TOKEN"]=hostToken;
+                uiInfo.EnvironmentVariables["TRANSLATION_PROVIDER"]="ollama";
+                uiInfo.EnvironmentVariables["OLLAMA_URL"]="http://127.0.0.1:11434";
+                uiInfo.EnvironmentVariables["OLLAMA_TRANSLATION_MODEL"]=pairing.ContainsKey("ZEN_LOCAL_LLM_MODEL")?pairing["ZEN_LOCAL_LLM_MODEL"]:"qwen3:1.7b";
+                uiInfo.EnvironmentVariables["PUBLIC_BASE_URL"]=uiUrl;
+                uiInfo.EnvironmentVariables["SHARE"]="off";
+                localUiService=Process.Start(uiInfo);
+                if(localUiService==null || !AssignProcessToJobObject(job,localUiService.Handle)) {if(localUiService!=null)localUiService.Kill();throw new Exception("本機介面無法納入程序管理。");}
+                localUiService.OutputDataReceived+=(s,e)=>{};
+                localUiService.ErrorDataReceived+=(s,e)=>Log(e.Data);
+                localUiService.BeginOutputReadLine();localUiService.BeginErrorReadLine();
+                bool uiReady=false;
+                var uiDeadline=DateTime.UtcNow.AddSeconds(90);
+                while(!closing && DateTime.UtcNow<uiDeadline){
+                    if(localUiService.HasExited)throw new Exception("本機介面啟動失敗，請查看 app.log。");
+                    try {var probeUi=await http.GetAsync(uiUrl+"/");if(probeUi.IsSuccessStatusCode){uiReady=true;break;}} catch(HttpRequestException){} catch(TaskCanceledException){}
+                    await Task.Delay(350);
+                }
+                if(closing)return;
+                if(!uiReady)throw new Exception("本機介面尚未就緒。");
+            }
             var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(root,"data","WebView2"));
             await browser.EnsureCoreWebView2Async(environment);
+            if(localOnly) await browser.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("try{localStorage.setItem('zen-agent-translation-mode','local')}catch(e){}");
             browser.CoreWebView2.Settings.AreDevToolsEnabled = false;
             browser.CoreWebView2.Settings.IsStatusBarEnabled = false;
             browser.CoreWebView2.AddWebResourceRequestedFilter(uiUrl+"/api/*",CoreWebView2WebResourceContext.All);

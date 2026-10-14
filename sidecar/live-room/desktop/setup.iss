@@ -98,6 +98,7 @@ Source: "{#PayloadDir}\bootstrap-manifest.json"; DestDir: "{app}"; Flags: ignore
 Source: "{#PayloadDir}\*.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\*.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\tools\*.py"; DestDir: "{app}\tools"; Flags: ignoreversion
+Source: "{#PayloadDir}\zen-ui\*"; DestDir: "{app}\zen-ui"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "node_modules\*,.env*"; Check: DirExists(ExpandConstant('{app}\zen-ui'))
 Source: "{#PayloadDir}\scripts\update_runtime.py"; DestName: "ZenUpdateCheck.py"; Flags: dontcopy
 Source: "{#PayloadDir}\desktop\update-runtime.json"; DestName: "ZenUpdateRuntime.json"; Flags: dontcopy
 #else

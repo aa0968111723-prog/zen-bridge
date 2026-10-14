@@ -1,22 +1,25 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-export type DeployTarget = 'cloudflare' | 'zeabur';
+export type DeployTarget = 'cloudflare' | 'zeabur' | 'local';
 type RawEnv = Partial<Record<
   'DASHSCOPE_API_KEY' | 'DASHSCOPE_REGION' | 'QWEN_LIVE_MODEL' | 'SPEECH_PROVIDER' | 'SPEECH_MODE' |
   'HOTWORD_LIMIT' | 'OPENAI_API_KEY' | 'OPENAI_TRANSCRIPTION_MODEL' |
   'OPENAI_TRANSLATION_MODEL' | 'DATABASE_URL' | 'DEPLOY_TARGET' | 'AUDIO_DIR' |
   'HERMES_API_URL' | 'HERMES_API_KEY' | 'HERMES_TRANSLATION_MODEL' | 'TRANSLATION_PROVIDER' |
   'OLLAMA_URL' | 'OLLAMA_TRANSLATION_MODEL' |
-  'BREEZE_ASR_URL' | 'BREEZE_AGENT_TOKEN' | 'PUBLIC_BASE_URL' | 'SHARE', string>>;
+  'BREEZE_ASR_URL' | 'BREEZE_AGENT_TOKEN' | 'PUBLIC_BASE_URL' | 'SHARE' |
+  'ZEN_UI_DATA_DIR', string>> & { DB?: unknown };
 const context = new AsyncLocalStorage<Cloudflare.Env>();
 export const QWEN_MODEL = 'qwen3.8-livetranslate-flash-realtime';
 
 export function parseEnv(raw: RawEnv) {
   // An explicitly supplied value, including an empty string, must be valid.
-  if (raw.DEPLOY_TARGET !== undefined && raw.DEPLOY_TARGET !== 'cloudflare' && raw.DEPLOY_TARGET !== 'zeabur') {
-    throw new Error('DEPLOY_TARGET 必須為 cloudflare 或 zeabur。');
+  if (raw.DEPLOY_TARGET !== undefined && raw.DEPLOY_TARGET !== 'cloudflare' && raw.DEPLOY_TARGET !== 'zeabur' && raw.DEPLOY_TARGET !== 'local') {
+    throw new Error('DEPLOY_TARGET 必須為 local、cloudflare 或 zeabur。');
   }
-  const DEPLOY_TARGET: DeployTarget = raw.DEPLOY_TARGET ?? (raw.DATABASE_URL ? 'zeabur' : 'cloudflare');
+  // Local-first: a Postgres URL means Zeabur, a Worker D1 binding means Cloudflare, anything else
+  // runs on this machine (SQLite + files under the user data dir; no cloud service needed).
+  const DEPLOY_TARGET: DeployTarget = (raw.DEPLOY_TARGET as DeployTarget | undefined) ?? (raw.DATABASE_URL ? 'zeabur' : raw.DB ? 'cloudflare' : 'local');
   if (raw.TRANSLATION_PROVIDER !== undefined && raw.TRANSLATION_PROVIDER !== 'hermes' && raw.TRANSLATION_PROVIDER !== 'openai' && raw.TRANSLATION_PROVIDER !== 'ollama') {
     throw new Error('TRANSLATION_PROVIDER 必須為 hermes、openai 或 ollama。');
   }
@@ -73,6 +76,7 @@ export function parseEnv(raw: RawEnv) {
     BREEZE_AGENT_TOKEN: raw.BREEZE_AGENT_TOKEN,
     PUBLIC_BASE_URL: validateUrl(raw.PUBLIC_BASE_URL, 'PUBLIC_BASE_URL'),
     SHARE: (raw.SHARE ?? 'room') as 'off' | 'room',
+    ZEN_UI_DATA_DIR: raw.ZEN_UI_DATA_DIR,
   };
 }
 export type AppEnv = ReturnType<typeof parseEnv>;

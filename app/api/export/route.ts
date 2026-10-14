@@ -4,7 +4,7 @@ import type {Segment,Memory} from '@/lib/domain';
 export async function GET(r:Request){try{
  const state=await workspace(new URL(r.url).searchParams.get('session'));
  const [segments,memories,memoryHistory,segmentHistory]=await Promise.all([
- state.sessionId?rows<Segment>('SELECT * FROM segments WHERE session_id=? ORDER BY created_at,offset',state.sessionId):Promise.resolve([]),
+ state.sessionId?rows<Segment>('SELECT * FROM segments WHERE session_id=? ORDER BY created_at,"offset"',state.sessionId):Promise.resolve([]),
  rows<Memory>('SELECT * FROM memories ORDER BY updated_at DESC'),
  rows('SELECT * FROM memory_revisions ORDER BY created_at'),
  state.sessionId?rows('SELECT r.* FROM segment_revisions r JOIN segments s ON r.segment_id=s.id WHERE s.session_id=? ORDER BY r.created_at',state.sessionId):Promise.resolve([])

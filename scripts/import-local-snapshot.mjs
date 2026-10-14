@@ -1,0 +1,11 @@
+import {readFile} from 'node:fs/promises';
+import {copyTables} from './migrate-to-local.mjs';
+import {closeLocalDatabases} from '../lib/platform/local.ts';
+const path=process.argv[2];
+if(!path)throw new Error('Provide a local exported snapshot file');
+const raw=await readFile(path,'utf8');
+if(Buffer.byteLength(raw)>50*1024*1024)throw new Error('Snapshot exceeds import limit');
+const tables=JSON.parse(raw);
+const report=await copyTables(async table=>Array.isArray(tables[table])?tables[table]:[]);
+closeLocalDatabases();
+console.log(JSON.stringify(report));

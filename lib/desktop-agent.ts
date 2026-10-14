@@ -6,6 +6,7 @@ export async function desktopAgent(path:string,body?:unknown,timeoutMs?:number){
  if(!r.ok)throw Error('桌面代理目前未就緒，請檢查主持 App 與模型連線。');return r.json();
 }
 export async function desktopTranslation(instructions:string,input:string,mode:'local'|'cloud'|'hybrid'){
+ if(getEnv().DEPLOY_TARGET==='local')mode='local';
  const result=await desktopAgent('/translate',{instructions,input,mode}) as {text?:unknown};
  if(typeof result.text!=='string'||!result.text.trim()||result.text.length>16000)throw Error('桌面翻譯回傳格式不正確。');return result.text;
 }

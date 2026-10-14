@@ -16,7 +16,7 @@ function inferredTarget(variables, zeaburEntry = false) {
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }
-assert.equal(inferredTarget({}), 'cloudflare');
+assert.equal(inferredTarget({}), 'local');
 assert.equal(inferredTarget({ DATABASE_URL: 'present' }), 'zeabur');
 assert.equal(inferredTarget({ DATABASE_URL: 'present', DEPLOY_TARGET: 'cloudflare' }), 'cloudflare');
 assert.equal(inferredTarget({}, true), 'zeabur');
