@@ -514,7 +514,9 @@ def test_stdlib_only_imports():
 def test_script_is_executable_shebang():
     text = TOOL.read_text(encoding="utf-8")
     assert text.startswith("#!/usr/bin/env python3")
-    assert TOOL.stat().st_mode & 0o111  # some execute bit
+    if os.name != "nt":
+        # NTFS has no POSIX execute bits; only check them on POSIX hosts.
+        assert TOOL.stat().st_mode & 0o111  # some execute bit
 
 
 def test_session_duration_without_timestamps():
