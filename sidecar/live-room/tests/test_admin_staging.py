@@ -53,6 +53,18 @@ def approve(cl, sid, h=BEARER, **body):
     return cl.post(f"{URL}/{sid}/approve", json=body, headers={**h, "if-match": etag_of(cl, sid, h)})
 
 
+def tamper_cursor(cursor: str) -> str:
+    """Flip the last hex char of the MAC so the result always differs from the real cursor.
+
+    The old ``cursor[:-2] + "00"`` was a no-op whenever the genuine MAC already ended in
+    "00" (~1/256 runs, e.g. ``WzEwMDAuMCw1XQ.4869366682e0f700``), making the 400 check flaky.
+    """
+    last = cursor[-1]
+    tampered = cursor[:-1] + ("1" if last == "0" else "0")
+    assert tampered != cursor and len(tampered) == len(cursor)
+    return tampered
+
+
 # ------------------------------------------------------------------ migration
 def _v2(path: Path) -> Path:
     c = db.connect(path)
@@ -442,7 +454,7 @@ def test_keyset_pagination_ties_and_tamper(env, roles):
         if len(seen) == 3:                                                  # insert between pages
             new_item(cl, roles["editor"], src_text="新詞", tgt_text="new term")
     assert seen == sorted(ids, reverse=True)                                # no skip, no dup, id tie-breaker
-    bad = [cur or "", "abc", enc_cursor([1000.0, 5])[:-2] + "00", enc_cursor(["x", "y"]), enc_cursor([1000.0])]
+    bad = [cur or "", "abc", tamper_cursor(enc_cursor([1000.0, 5])), enc_cursor(["x", "y"]), enc_cursor([1000.0])]
     for b in bad[1:]:
         r = cl.get(URL, params={"cursor": b}, headers=roles["editor"])
         assert r.status_code == 400 and r.headers["content-type"].startswith(PROBLEM), b
