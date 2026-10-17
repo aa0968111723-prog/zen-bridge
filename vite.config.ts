@@ -39,9 +39,15 @@ const localBindingConfig = {
 };
 
 export default defineConfig(async ({ command }) => {
+  // The Sites (managed-linux) preview is a Cloudflare Worker; everywhere else the default is local.
+  if (managedLinux) process.env.DEPLOY_TARGET ??= 'cloudflare';
   const target = getEnv().DEPLOY_TARGET;
   if (target === 'zeabur') {
     return { plugins: [vinext()], server: { host: '0.0.0.0' }, ssr: { external: ['postgres', 'ws'] } };
+  }
+  if (target === 'local') {
+    // Plain Node server bound to loopback only; SQLite + files under the user data dir.
+    return { plugins: [vinext()], server: { host: '127.0.0.1' }, ssr: { external: ['postgres', 'ws'] } };
   }
   // Use Miniflare's local Request.cf placeholder unless fetching is requested.
   process.env.CLOUDFLARE_CF_FETCH_ENABLED ??= "false";
@@ -58,7 +64,10 @@ export default defineConfig(async ({ command }) => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
-    resolve: { alias: [{ find: '@/lib/platform/node', replacement: fileURLToPath(new URL('./lib/platform/cloudflare.ts', import.meta.url)) }] },
+    resolve: { alias: [
+      { find: '@/lib/platform/node', replacement: fileURLToPath(new URL('./lib/platform/cloudflare.ts', import.meta.url)) },
+      { find: '@/lib/platform/local', replacement: fileURLToPath(new URL('./lib/platform/cloudflare.ts', import.meta.url)) },
+    ] },
     server: {
       ...(managedLinux
         ? { host: "0.0.0.0", allowedHosts: ["terminal.local"] }

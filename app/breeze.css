@@ -1,0 +1,94 @@
+/* 禪譯 × Breeze: live room + admin inside the turtle UI. Same paper/leaf/sky palette as globals.css. */
+.club-mark{position:relative;display:inline-block;flex:none}
+.club-mark img{position:absolute;bottom:0;object-fit:contain;width:auto}
+.club-mark-girl{left:0;height:100%}
+.club-mark-turtle{right:0;height:84%}
+.nav-service .asr-chip{margin-top:6px}
+.asr-chip{display:inline-flex;align-items:center;gap:6px;font-size:.8125rem;border-radius:999px;padding:3px 10px;border:1px solid #d6d9c8;background:#f3f1e6;color:#68715c;white-space:nowrap}
+.asr-chip small{color:inherit;opacity:.8;font-size:.75rem}
+.asr-chip.tone-ready{background:#e6efd6;border-color:#bdd19f;color:#4b6f35}
+.asr-chip.tone-warn{background:#f6e7cf;border-color:#e0c08d;color:#8a5a22}
+.asr-chip.compact{padding:2px 8px;font-size:.75rem}
+.breeze-live,.breeze-admin{display:flex;flex-direction:column;gap:20px}
+.breeze-hero{min-height:0!important}
+.breeze-hero-head{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;align-items:flex-start}
+.breeze-brand{display:flex;gap:14px;align-items:center}
+.breeze-brand h2{font-family:"Noto Serif TC","Songti TC",serif;font-size:1.375rem;color:var(--ink)}
+.breeze-brand p{color:#68765a;font-size:.875rem}
+.breeze-status-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.breeze-status-row .connection-state{display:inline-flex;gap:5px;align-items:center;margin:0}
+.breeze-demo-toggle{display:inline-flex;align-items:center;gap:5px;font-size:.8125rem;color:#84603c;border:1px dashed #c2a471;border-radius:4px;padding:2px 8px;cursor:pointer}
+.breeze-demo-note{margin-top:14px;font-size:.8125rem;color:#84603c;background:#fbf3df;border:1px dashed #dcc596;border-radius:6px;padding:6px 10px}
+.breeze-offline{display:flex;gap:10px;align-items:flex-start;margin-top:14px;font-size:.875rem;color:#8a5a22;background:#fbf0e0;border:1px solid #ecd2a6;border-radius:6px;padding:8px 12px}
+.breeze-offline code,.breeze-url{font-family:var(--font-mono);font-size:.8rem;background:#f3efe2;border-radius:4px;padding:1px 5px;word-break:break-all}
+.breeze-url{display:block;padding:8px 10px;margin:8px 0;border:1px solid #e1dbc8}
+.breeze-controls{display:grid;grid-template-columns:minmax(120px,170px) minmax(0,1fr) auto;gap:18px;align-items:end;margin-top:20px;padding-top:18px;border-top:1px dashed #cad9c0}
+.breeze-input{height:38px;border:1px solid var(--input);border-radius:8px;background:#fffdf7;padding:0 10px;width:100%;color:var(--ink)}
+.breeze-lang{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.breeze-lang button,.breeze-qr-switch button,.admin-subnav button{border:1px solid #d6d9c8;background:#fffdf7;border-radius:8px;padding:6px 12px;font-size:.875rem;color:#55634f;display:inline-flex;gap:6px;align-items:center}
+.breeze-lang button.selected,.breeze-qr-switch button.selected,.admin-subnav button.selected{background:#e6efd6;border-color:#a9c48a;color:#3f6330;font-weight:600}
+.theme-wood .breeze-lang button.selected,.theme-wood .breeze-qr-switch button.selected,.theme-wood .admin-subnav button.selected{background:#eee7d6;border-color:#cdbb92;color:#555d3f}
+.breeze-lang button:disabled{opacity:.45;cursor:not-allowed}
+.breeze-lock{display:inline-flex;gap:4px;align-items:center;font-size:.8125rem;color:#84603c}
+.breeze-session-buttons{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.breeze-meter{display:inline-flex;gap:3px;align-items:flex-end;height:28px}
+.breeze-meter i{display:block;width:4px;border-radius:2px;background:#9fbf7f;transition:height .12s}
+.breeze-pending{color:#8b9a83;font-size:.8125rem}
+.breeze-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:20px;align-items:start}
+.breeze-stage{margin-bottom:0}
+.breeze-current{padding:28px 34px 18px;min-height:220px;display:flex;flex-direction:column;gap:14px;justify-content:center}
+.breeze-zh{font-size:1.25rem;color:#4b5d55;line-height:1.7}
+.breeze-zh.is-draft,.breeze-lines li.is-draft p{color:#a3aaa0;font-style:normal}
+.breeze-zh.is-draft::after{content:"草稿";margin-left:8px;font-size:.75rem;color:#a08a63;border:1px solid #d9c9a4;border-radius:3px;padding:0 5px;vertical-align:middle}
+.breeze-target{font-size:clamp(1.5rem,2.6vw,2.1rem);font-weight:650;color:var(--ink);line-height:1.55}
+.breeze-target.is-ja,.breeze-lines .is-ja{line-break:strict;word-break:keep-all;overflow-wrap:anywhere}
+.breeze-target ruby rt,.breeze-lines ruby rt{font-size:.5em;color:#7a8b6c;font-weight:500}
+.breeze-empty{display:flex;align-items:center;gap:14px;padding:40px 34px;color:#68765a}
+.breeze-empty .turtle-mood{width:64px;height:64px}
+.breeze-lines{list-style:none;margin:0;padding:0 34px 14px;display:flex;flex-direction:column}
+.breeze-lines li{display:grid;grid-template-columns:44px 1fr 1fr;gap:12px;padding:10px 0;border-top:1px dashed #dfe3d2;font-size:.9375rem}
+.breeze-seq{font-family:var(--font-mono);font-size:.75rem;color:#a3a58f;padding-top:3px}
+.breeze-dl{display:inline-flex;gap:4px;align-items:center;font-size:.8125rem;color:#55634f;padding:3px 8px;border:1px solid #d6d9c8;border-radius:6px;background:#fffdf7}
+.breeze-dl[aria-disabled=true]{opacity:.5;pointer-events:none}
+.breeze-side{display:flex;flex-direction:column;gap:14px}
+.breeze-card{margin:0}
+.breeze-card p{font-size:.875rem;color:#5f6c58;line-height:1.7;margin:6px 0 10px}
+.breeze-card .note-number{display:inline-grid;place-items:center}
+.breeze-qr-switch{display:flex;gap:6px;margin:8px 0}
+.breeze-qr-switch button{padding:4px 9px;font-size:.8125rem}
+.breeze-qr{display:block;margin:6px auto;border:6px solid #fff;border-radius:8px;box-shadow:0 0 0 1px #dcd8c4;image-rendering:pixelated;background:#fff}
+.demo-qr{display:grid;place-items:center;width:170px;height:170px;color:#55634f}
+.demo-qr small{font-size:.75rem;color:#a08a63}
+.companion-note.breeze-card{display:flex;gap:12px;align-items:flex-start}
+/* admin */
+.admin-shell{min-height:0}
+.admin-subnav{display:flex;flex-wrap:wrap;gap:6px;padding:12px 0 16px;border-bottom:1px dashed #cad9c0}
+.admin-page-head{display:flex;gap:12px;align-items:center;margin:16px 0}
+.admin-page-head p{color:#68765a;font-size:.875rem}
+.admin-overview{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.admin-card{border:1px solid #dfe3d2;border-radius:10px;background:#fffef9;padding:16px 18px;box-shadow:3px 4px 0 #e9ecdc}
+.admin-card h3{font-family:"Noto Serif TC","Songti TC",serif;font-size:1rem;margin-bottom:10px;color:var(--ink)}
+.asr-card{background:linear-gradient(160deg,#f3f9ec,#fffef9 60%);border-color:#c9dbb3}
+.asr-card p{margin-top:10px;font-size:.875rem;color:#5f6c58}
+.rtf{font-size:1.25rem;margin-left:6px}.rtf-green{color:#4b7a35}.rtf-amber,.rtf-yellow{color:#a26b1f}.rtf-red{color:#a94735}
+.admin-kv{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:.84rem}
+.admin-kv li{display:flex;justify-content:space-between;gap:12px;border-bottom:1px dotted #e3e5d6;padding:3px 0}
+.admin-kv span{color:#6e7a66}.admin-kv b{color:var(--ink);font-weight:600;text-align:right;word-break:break-all}
+.admin-kv b.ok{color:#4b6f35}.admin-kv b.warn{color:#a26b1f}
+.admin-kv.wide{max-width:640px}
+.admin-section{margin-top:10px}
+.admin-section h3{font-family:"Noto Serif TC","Songti TC",serif;margin:12px 0 8px;color:var(--ink)}
+.admin-table-wrap{overflow-x:auto;border:1px solid #dfe3d2;border-radius:10px;background:#fffef9}
+.admin-table{width:100%;border-collapse:collapse;font-size:.84rem}
+.admin-table th{text-align:left;font-weight:600;color:#55634f;background:#f2f5e9;padding:8px 10px;border-bottom:1px solid #dfe3d2;white-space:nowrap}
+.theme-wood .admin-table th{background:#f2ebdb}
+.admin-table td{padding:7px 10px;border-bottom:1px dashed #e6e8da;color:#3d4f48;max-width:320px;overflow:hidden;text-overflow:ellipsis}
+.admin-table td[lang=ja]{font-family:"Yu Gothic UI","Meiryo","Hiragino Sans","Noto Sans JP",sans-serif}
+.admin-actions{display:flex;gap:4px}
+.admin-actions button,.admin-actions a{border:1px solid #d6d9c8;border-radius:6px;background:#fffdf7;padding:2px 7px;font-size:.78rem;color:#55634f}
+.admin-search{display:flex;gap:8px;margin-bottom:14px;max-width:640px}
+.admin-search select{width:96px}
+@media (max-width: 980px){.breeze-grid{grid-template-columns:1fr}.breeze-controls{grid-template-columns:1fr}.breeze-lines li{grid-template-columns:36px 1fr}.breeze-lines li p:last-child{grid-column:2}}
+.admin-overview{align-items:start}
+.asr-card .asr-chip{white-space:normal;flex-wrap:wrap;border-radius:10px;line-height:1.5}
+.asr-card .asr-chip small{flex-basis:100%}

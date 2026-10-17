@@ -2,9 +2,21 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { initializeNodeRuntime } from '../lib/env.ts';
 
-const target = initializeNodeRuntime(process.argv.includes('--zeabur') ? 'zeabur' : undefined).DEPLOY_TARGET;
-const extra = process.argv.slice(2).filter(arg => arg !== '--zeabur');
-if (target === 'zeabur') {
+const requested = process.argv.includes('--zeabur') ? 'zeabur' : process.argv.includes('--local') ? 'local' : undefined;
+const target = initializeNodeRuntime(requested).DEPLOY_TARGET;
+const extra = process.argv.slice(2).filter(arg => arg !== '--zeabur' && arg !== '--local');
+if (target === 'local') {
+  process.chdir(fileURLToPath(new URL('..', import.meta.url))); // drizzle/ and dist/ are resolved from the app root
+  // Fully local production server: loopback only, SQLite + audio under the user data dir.
+  const { localPort, localHost } = await import('./local-config.mjs');
+  const { localDataDir, localDbPath, localDatabase } = await import('../lib/platform/local.ts');
+  const port = localPort(process.env), hostname = localHost(process.env);
+  localDatabase(localDbPath(localDataDir())); // create + migrate before the first request
+  console.log(`禪譯 local: http://${hostname === '0.0.0.0' ? '127.0.0.1' : hostname}:${port}  data=${localDataDir()}`);
+  const cli = new URL('../node_modules/vinext/dist/cli.js', import.meta.url);
+  process.argv = [process.execPath, fileURLToPath(cli), 'start', '--port', String(port), '--hostname', hostname, ...extra];
+  await import(cli.href);
+} else if (target === 'zeabur') {
   if (process.env.DATABASE_URL) {
     const { importDictionaries } = await import('./import-dictionaries.mjs');
     const { bootstrapDictionaries } = await import('./dictionary-bootstrap.mjs');

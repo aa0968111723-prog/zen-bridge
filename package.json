@@ -12,6 +12,7 @@
     "start": "node --experimental-strip-types scripts/start.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
+    "start:local": "node --experimental-strip-types scripts/start.mjs --local",
     "start:zeabur": "node --experimental-strip-types scripts/start.mjs --zeabur",
     "db:generate:zeabur": "drizzle-kit generate --config drizzle.postgres.config.ts",
     "test:runtime": "node tests/runtime.mjs"

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./breeze.css";
 
 export const metadata: Metadata = {
   title: "禪譯 Zen Bridge｜社課翻譯工作台",

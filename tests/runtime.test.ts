@@ -13,7 +13,11 @@ import { workspace, mutate, saveSegment } from '../lib/server';
 import { POST } from '../app/api/audio/route';
 
 const secret = crypto.randomUUID(); // Synthetic, generated at runtime; never a platform credential.
-assert.equal(parseEnv({}).DEPLOY_TARGET, 'cloudflare');
+// Local-first default (柏能 2026-10-11): no cloud config means this machine.
+assert.equal(parseEnv({}).DEPLOY_TARGET, 'local');
+assert.equal(parseEnv({ DB: {} }).DEPLOY_TARGET, 'cloudflare');
+assert.equal(parseEnv({ DB: {}, DEPLOY_TARGET: 'local' }).DEPLOY_TARGET, 'local');
+assert.equal(parseEnv({ DEPLOY_TARGET: 'cloudflare' }).DEPLOY_TARGET, 'cloudflare');
 assert.equal(parseEnv({ DATABASE_URL: 'present' }).DEPLOY_TARGET, 'zeabur');
 assert.equal(parseEnv({ DATABASE_URL: 'present', DEPLOY_TARGET: 'cloudflare' }).DEPLOY_TARGET, 'cloudflare');
 for (const invalid of ['', 'invalid-' + secret]) {
