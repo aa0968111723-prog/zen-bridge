@@ -145,6 +145,13 @@ class JobStore:
     def _write(self, sql: str, args: tuple) -> int:
         c = self._conn()
         try:
+            return self._write_on(c, sql, args)
+        finally:
+            c.close()
+
+    @staticmethod
+    def _write_on(c: sqlite3.Connection, sql: str, args: tuple) -> int:
+        try:
             c.execute("BEGIN IMMEDIATE")
             n = c.execute(sql, args).rowcount
             c.execute("COMMIT")
@@ -153,8 +160,17 @@ class JobStore:
             if c.in_transaction:
                 c.execute("ROLLBACK")
             raise
-        finally:
-            c.close()
+
+    def open_heartbeat(self) -> sqlite3.Connection:
+        """One connection for a running job's lease heartbeats (the caller closes it).
+
+        Every other JobStore call opens and closes its own connection. For a heartbeat that
+        is the slow path: when it is the only connection to the WAL database, each close
+        checkpoints (two fsyncs, FlushFileBuffers on Windows) and deletes the -wal file, and
+        the next open re-creates -wal/-shm. On a busy Windows disk that made a single beat
+        take longer than the lease margin. A connection kept for the job pays that once.
+        """
+        return self._conn()
 
     def cancel(self, jid: str) -> dict | None:
         now = self.clock()
@@ -175,11 +191,17 @@ class JobStore:
                          (now, err, now))
         return n
 
-    def heartbeat(self, jid: str, owner: str) -> bool:
-        """Extend the lease while the handler runs. False = this owner lost the job."""
+    def heartbeat(self, jid: str, owner: str, conn: sqlite3.Connection | None = None) -> bool:
+        """Extend the lease while the handler runs. False = this owner lost the job.
+
+        ``conn`` (from open_heartbeat) is reused instead of a new connection per beat."""
         now = self.clock()
-        return self._write("UPDATE jobs SET lease_until=?, heartbeat_at=? WHERE id=? AND lease_owner=? "
-                           "AND state IN ('running','cancel_requested')", (now + LEASE_S, now, jid, owner)) == 1
+        sql = ("UPDATE jobs SET lease_until=?, heartbeat_at=? WHERE id=? AND lease_owner=? "
+               "AND state IN ('running','cancel_requested')")
+        args = (now + LEASE_S, now, jid, owner)
+        if conn is None:
+            return self._write(sql, args) == 1
+        return self._write_on(conn, sql, args) == 1
 
     def claim(self, owner: str) -> dict | None:
         now = self.clock()
@@ -328,14 +350,48 @@ class JobWorker:
         lost = threading.Event()
 
         def beat():
-            while not stop_hb.wait(self.heartbeat_s):
+            # Fixed rate: beat k is due at start + k * heartbeat_s. Waiting heartbeat_s after each
+            # beat let every slow beat push all later ones back, so a few slow writes in a row on
+            # a Windows runner left the lease (4 beats long) without a renewal and recover()
+            # handed the job to another owner. One reused connection keeps each beat a single
+            # short write instead of open + WAL re-create + close-time checkpoint (open_heartbeat).
+            conn = None
+            period = self.heartbeat_s
+            due = time.monotonic() + period
+            try:
                 try:
-                    if not self.store.heartbeat(job["id"], self.owner):
-                        lost.set()
-                        log.warning("job %s lease lost; result will not be recorded", job["id"])
-                        return
+                    conn = self.store.open_heartbeat()   # before the first beat, not inside it
                 except Exception:
-                    log.debug("heartbeat failed", exc_info=True)
+                    log.debug("heartbeat connection failed; retrying at the next beat", exc_info=True)
+                while not stop_hb.wait(max(0.0, due - time.monotonic())):
+                    due += period
+                    late = time.monotonic()
+                    if due <= late:          # fell a whole period behind: next beat one period from now
+                        due = late + period
+                    try:
+                        if conn is None:
+                            conn = self.store.open_heartbeat()
+                        if not self.store.heartbeat(job["id"], self.owner, conn=conn):
+                            lost.set()
+                            log.warning("job %s lease lost; result will not be recorded", job["id"])
+                            return
+                    except Exception as exc:
+                        log.debug("heartbeat failed", exc_info=True)
+                        # Busy/locked is transient: keep the connection. Anything else: reopen next beat.
+                        busy = isinstance(exc, sqlite3.OperationalError) and any(
+                            w in str(exc).lower() for w in ("locked", "busy"))
+                        if conn is not None and not busy:
+                            try:
+                                conn.close()
+                            except Exception:
+                                pass
+                            conn = None
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
         hb = threading.Thread(target=beat, name=f"job-hb-{job['id']}", daemon=True)
         hb.start()
         try:
@@ -363,7 +419,9 @@ class JobWorker:
             await asyncio.to_thread(self.store.finish, job["id"], "failed", error=problem, owner=self.owner)
         finally:
             stop_hb.set()
-            hb.join(timeout=2)
+            # Off the event loop: the beat thread may be closing its connection (a close-time
+            # checkpoint when it is the last one), which must not stall the admin server's loop.
+            await asyncio.to_thread(hb.join, 2)
             self.state = "idle"
         return True
 
