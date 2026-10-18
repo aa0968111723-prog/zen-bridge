@@ -1,0 +1,35 @@
+.tr-tabs{display:flex;flex-wrap:wrap;gap:.25rem;margin:1rem 0;border-bottom:2px solid #c9a978}
+.tr-tabs button{border:1px solid #c9a978;border-bottom:none;background:#f4ead8;padding:.4rem .8rem;border-radius:.5rem .5rem 0 0;cursor:pointer}
+.tr-tabs button[aria-selected=true]{background:#fffaf0;font-weight:700}
+.tr-form{display:flex;flex-wrap:wrap;gap:.6rem 1rem;align-items:end;margin:.8rem 0}
+.tr-form label{display:flex;flex-direction:column;gap:.2rem}
+.tr-form label:has(input[type=checkbox]){flex-direction:row;align-items:center}
+.tr-prompt{font-size:1.9rem;line-height:1.5;background:#fffaf0;border:2px solid #c9a978;border-radius:.8rem;padding:1rem 1.2rem;margin:.6rem 0}
+.tr-src{color:#6b5a3e;margin:0}
+.tr-meter{height:14px;background:#e6efe8;border-radius:7px;overflow:hidden;max-width:520px}
+.tr-meter div{height:100%;width:0;background:#4f8f6a;transition:width .08s}
+.tr-meter div.hot{background:#c0392b}
+.tr-actions{display:flex;flex-wrap:wrap;gap:.5rem;margin:.6rem 0}
+.tr-actions button{font-size:1.05rem;padding:.45rem .9rem}
+#rec-btn.on{background:#c0392b;color:#fff}
+.tr-warn{color:#a3420f;font-weight:700}
+.tr-ok{color:#2f6b45}
+.tr-card{border:1px solid #d8c7a4;border-radius:.6rem;padding:.7rem .9rem;margin:.6rem 0;background:#fffdf7}
+.tr-card textarea{width:100%;min-height:3.2em;font-size:1.05rem}
+.tr-card .meta{color:#6b5a3e;font-size:.9rem}
+.tr-log{max-height:12rem;overflow:auto}
+blockquote#consent-text{background:#f4ead8;padding:.8rem 1rem;border-left:4px solid #c9a978}
+.tr-rec{color:#c0392b;font-weight:700}
+.tr-batch{list-style:none;padding:0;max-height:62vh;overflow:auto;border:1px solid #d8c7a4;border-radius:.6rem}
+.tr-row{display:grid;grid-template-columns:5.5rem 6rem 1fr;gap:.2rem .6rem;padding:.45rem .7rem;border-bottom:1px solid #eee3cc;cursor:pointer}
+.tr-row .meta{grid-column:3;color:#6b5a3e;font-size:.85rem}
+.tr-row.cur{background:#fff1c9;outline:2px solid #c9a978}
+.tr-row.ex .tr-x{color:#8a7a62;text-decoration:line-through}
+.tr-x{font-size:1.1rem}
+.tr-edit{font-size:1.1rem;width:100%}
+.tr-keys kbd,.hint kbd{border:1px solid #c9a978;border-radius:.25rem;padding:0 .3rem;background:#fffaf0}
+.tr-hours td{padding:.15rem .5rem}
+.tr-hours td:nth-child(2){width:60%}
+.tr-hours .bar{height:.55rem;border-radius:.3rem;margin:.1rem 0}
+.tr-hours .bar.c{background:#9cc3a8}
+.tr-hours .bar.a{background:#2f6b45}

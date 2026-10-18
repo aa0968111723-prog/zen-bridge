@@ -977,6 +977,11 @@ def create_admin_app(db_path: str | Path, *, token_hash_hex: str | None, port: i
     from app.admin import perf_routes
     perf_routes.register(app, SimpleNamespace(api=API, need=need, live=live, Problem=Problem, clock=clock))
 
+    # 訓練資料（docs/finetune-data.md）：講者同意、錄音室、社課收錄審核、匯出 /admin/training
+    from app.training import routes as training_routes
+    training_routes.register(app, SimpleNamespace(api=API, need=need, conn=conn, read_json=read_json, Problem=Problem,
+                                                  check_room_id=_check_room_id, db_path=db_path))
+
     # LoopbackOnly is the outermost layer (added last).
     app.add_middleware(LoopbackOnly, port=port)
     return app
