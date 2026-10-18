@@ -1,5 +1,8 @@
 // round4 #5: host-side draft stream. Mic -> 16 kHz mono PCM16, 100 ms packets -> /ws/draft.
 // Drafts are screen-only on the listener side; the real 6 s slices still go to /api/push.
+// grok/fast-draft-asr: with ``finalize`` the server (BREEZE_ENDPOINT_FINAL=1) cuts each sentence at
+// a pause and lets Breeze finalise it (~2-4 s); the host then stops uploading 6 s slices while
+// ``onFinalize(true)`` holds, and falls back to them as soon as the stream ends.
 export const DRAFT_RATE = 16000;
 export const PACKET_SAMPLES = 1600;          // 100 ms
 export const MAX_BUFFERED = 64 * 1024;       // skip packets instead of queueing on a slow link
@@ -60,32 +63,69 @@ export function createPacketizer(send, inRate) {
   };
 }
 
+export const FLUSH_WAIT_MS = 1500;
+
+export function draftHello(token, { finalize = false, t0Ms = 0 } = {}) {
+  const hello = { token };
+  if (finalize) {
+    hello.finalize = true;
+    hello.t0_ms = Math.max(0, Math.round(Number(t0Ms) || 0));
+  }
+  return JSON.stringify(hello);
+}
+
+// Control messages other than draft_on/draft_off. Returns true when the message was handled.
+export function handleControl(msg, { onFinalSeq = () => {}, onFlushed = () => {} } = {}) {
+  if (!msg || typeof msg !== "object") return false;
+  if (msg.type === "final_seq" && Number.isInteger(msg.seq)) { onFinalSeq(msg); return true; }
+  if (msg.type === "final_dropped" && Number.isInteger(msg.seq)) { onFinalSeq(msg); return true; }
+  if (msg.type === "flushed") { onFlushed(msg); return true; }
+  return false;
+}
+
 const WORKLET = `class P extends AudioWorkletProcessor{process(i){const c=i[0];if(c&&c[0])this.port.postMessage(c[0].slice(0));return true}};registerProcessor("zen-draft",P);`;
 
 export async function startDraftStream({ stream, roomId, sessionId, token, loc = location,
-  AudioContextCtor = globalThis.AudioContext, WebSocketCtor = globalThis.WebSocket, onState = () => {} }) {
+  AudioContextCtor = globalThis.AudioContext, WebSocketCtor = globalThis.WebSocket, onState = () => {},
+  finalize = false, t0Ms = 0, onFinalize = () => {}, onFinalSeq = () => {}, flushWaitMs = FLUSH_WAIT_MS }) {
   const ws = new WebSocketCtor(draftUrl(loc, roomId, sessionId));
   ws.binaryType = "arraybuffer";
   let ctx = null;
   let stopped = false;
   let node = null;
   let src = null;
+  let finalizing = false;
+  let flushedResolve = null;
   const own = stream.clone();
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
+  const teardown = () => {
     try { node && node.disconnect(); } catch { /* gone */ }
     try { src && src.disconnect(); } catch { /* gone */ }
     try { ctx && ctx.close(); } catch { /* gone */ }
     for (const t of own.getTracks()) t.stop();
+  };
+  const stop = async () => {
+    if (stopped) return;
+    stopped = true;
+    teardown();
+    if (finalizing && ws.readyState === 1) {
+      // let the server finalise the sentence still open before the session ends
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, flushWaitMs);
+        flushedResolve = () => { clearTimeout(timer); resolve(); };
+        try { ws.send(JSON.stringify({ type: "flush" })); } catch { flushedResolve(); }
+      });
+    }
     try { ws.close(); } catch { /* gone */ }
+    if (finalizing) { finalizing = false; onFinalize(false); }
     onState("off");
   };
   ws.onmessage = async (ev) => {
     let msg = null;
     try { msg = JSON.parse(ev.data); } catch { return; }
+    if (handleControl(msg, { onFinalSeq, onFlushed: () => flushedResolve && flushedResolve() })) return;
     if (msg.type === "draft_off") { stop(); return; }
     if (msg.type !== "draft_on" || stopped) return;
+    if (msg.finalize === true && finalize) { finalizing = true; onFinalize(true); }
     try {
       try { ctx = new AudioContextCtor({ sampleRate: DRAFT_RATE }); } catch { ctx = new AudioContextCtor(); }
       const pk = createPacketizer((buf) => {
@@ -101,8 +141,12 @@ export async function startDraftStream({ stream, roomId, sessionId, token, loc =
       onState("on");
     } catch { stop(); }
   };
-  ws.onopen = () => ws.send(JSON.stringify({ token }));
-  ws.onclose = () => { if (!stopped) stop(); };
+  ws.onopen = () => ws.send(draftHello(token, { finalize, t0Ms }));
+  ws.onclose = () => {
+    if (flushedResolve) flushedResolve();
+    if (finalizing) { finalizing = false; onFinalize(false); }   // fall back to 6 s uploads at once
+    if (!stopped) stop();
+  };
   ws.onerror = () => {};
   return { stop };
 }
