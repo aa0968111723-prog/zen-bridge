@@ -12,6 +12,7 @@ import {publishFinal,roomUrl} from './rooms';
 import {breezeConnected} from './breeze-host';
 export {db,rows,one,write} from './data';
 export const now=()=>new Date().toISOString();
+async function localDir(override?:string){const {localDataDir}=await import('@/lib/platform/local');return localDataDir({...process.env,ZEN_UI_DATA_DIR:override??process.env.ZEN_UI_DATA_DIR});}
 export const id=()=>crypto.randomUUID();
 const field=z.string().trim().max(8000),short=z.string().trim().min(1).max(160),personId=z.string().uuid().nullable();
 export async function workspace(sessionId?:string|null,breezeAuthorized=false):Promise<State>{
@@ -24,7 +25,7 @@ export async function workspace(sessionId?:string|null,breezeAuthorized=false):P
   {value:'breeze',available:breeze,reason:breeze?'':env.BREEZE_AGENT_TOKEN?'請開啟已配對的 Zen Bridge 主持 App':'未設定可用的本機 BREEZE_ASR_URL'},
   {value:'qwen-live',available:qwen,reason:qwen?'':'未設定 DASHSCOPE_API_KEY'},
   {value:'openai',available:openai,reason:openai?'':'未設定 OPENAI_API_KEY'},
- ],asr:providerName(env)==='breeze'?'MediaTek-Research/Breeze-ASR-25':providerName(env)==='qwen-live'?env.QWEN_LIVE_MODEL:env.OPENAI_TRANSCRIPTION_MODEL,translation:qwen?'qwen3.8-livetranslate':env.OPENAI_TRANSLATION_MODEL,hermes:hermesConfigured(env)?'已設定':'等待連接',textTranslation:!!textTranslationProvider(env),translationProvider:textTranslationProvider(env),textModel:textTranslationModel(env),deployTarget:env.DEPLOY_TARGET,share:env.SHARE,shareAvailable,shareReason:env.SHARE==='off'?'分享已由 SHARE=off 關閉':shareAvailable?'':'未設定 PUBLIC_BASE_URL，禁止產生 localhost QR',qrUrl:selected&&shareAvailable?roomUrl(env.PUBLIC_BASE_URL,selected):''}};
+ ],asr:providerName(env)==='breeze'?'MediaTek-Research/Breeze-ASR-25':providerName(env)==='qwen-live'?env.QWEN_LIVE_MODEL:env.OPENAI_TRANSCRIPTION_MODEL,translation:qwen?'qwen3.8-livetranslate':env.OPENAI_TRANSLATION_MODEL,hermes:hermesConfigured(env)?'已設定':'等待連接',textTranslation:!!textTranslationProvider(env),translationProvider:textTranslationProvider(env),textModel:textTranslationModel(env),deployTarget:env.DEPLOY_TARGET,dataDir:env.DEPLOY_TARGET==='local'?await localDir(env.ZEN_UI_DATA_DIR):undefined,share:env.SHARE,shareAvailable,shareReason:env.SHARE==='off'?'分享已由 SHARE=off 關閉':shareAvailable?'':'未設定 PUBLIC_BASE_URL，禁止產生 localhost QR',qrUrl:selected&&shareAvailable?roomUrl(env.PUBLIC_BASE_URL,selected):''}};
 }
 const mutations=z.discriminatedUnion('action',[
  z.object({action:z.literal('person'),id:z.string().uuid().optional(),name:short,role:short,notes:field.default('')}),

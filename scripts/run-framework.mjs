@@ -6,7 +6,9 @@ import { getEnv } from '../lib/env.ts';
 const [command, ...args] = process.argv.slice(2);
 if (!["dev", "build"].includes(command)) throw new Error("Expected dev or build.");
 const managedLinux = readExecutionProfile() === "managed-linux";
-const zeabur = getEnv().DEPLOY_TARGET === 'zeabur';
+// Sites (managed-linux) previews stay Cloudflare Workers; elsewhere the default target is local.
+if (managedLinux) process.env.DEPLOY_TARGET ??= 'cloudflare';
+const zeabur = getEnv().DEPLOY_TARGET !== 'cloudflare'; // zeabur or local: plain Node vinext build
 
 if (managedLinux && !zeabur && command === "build") {
   const result = spawnSync("bash", [
